@@ -1,0 +1,193 @@
+# Round 1 forest fire (Drossel and Schwabl), lowered by hand.
+# Burning neighbours = count of the 4 cells around me whose Cover is Burning;
+# Become Burning if Tree when Burning neighbours is at least 1;
+# otherwise Become Burning if Tree with chance Lightning chance; Become Empty if Burning;
+# Become Tree if Empty with chance Growth chance.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r1_forest_fire"
+name = "Forest fire (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r1_forest_fire"
+name = "Forest fire (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "cover"
+variants = [
+  { name = "Empty", label = "Empty", color = [38, 30, 24, 255] },
+  { name = "Tree", label = "Tree", color = [46, 160, 67, 255] },
+  { name = "Burning", label = "Burning", color = [255, 112, 32, 255] },
+]
+
+[[lane]]
+id = "cover"
+domain = "cells"
+type = "cat:cover"
+storage = "u8"
+initial = { cat = "cover.Empty" }
+
+[[param]]
+id = "initial_trees"
+label = "Initial trees"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[param]]
+id = "growth_chance"
+label = "Growth chance"
+kind = "f32"
+min = 0.0
+max = 0.1
+default = 0.01
+step = 0.001
+
+[[param]]
+id = "lightning_chance"
+label = "Lightning chance"
+kind = "f32"
+min = 0.0
+max = 0.001
+default = 0.00001
+step = 0.000001
+
+[[stat]]
+label = "Empty"
+from = "n31.Empty"
+color = [120, 100, 80, 255]
+
+[[stat]]
+label = "Tree"
+from = "n31.Tree"
+color = [46, 160, 67, 255]
+
+[[stat]]
+label = "Burning"
+from = "n31.Burning"
+color = [255, 112, 32, 255]
+
+[[action]]
+id = "replant"
+label = "Replant"
+runs = ["start_cells"]
+
+[[pass]]
+id = "start_cells"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "rand.chance"
+config.key = 3100000301
+in.p = { param = "initial_trees" }
+
+[[pass.node]]
+id = "n2"
+op = "logic.select"
+in.cond = "n1"
+in.if_true = { cat = "cover.Tree" }
+in.if_false = { cat = "cover.Empty" }
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "cover"
+in.value = "n2"
+
+[[pass]]
+id = "tick_cells"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "cover"
+
+[[pass.node]]
+id = "n11"
+op = "grid.count"
+config.lane = "cover"
+config.neighborhood = "von_neumann"
+config.include_center = false
+in.value = { cat = "cover.Burning" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n12"
+op = "cmp.ge"
+in.a = "n11"
+in.b = { u32 = 1 }
+
+[[pass.node]]
+id = "n13"
+op = "rand.chance"
+config.key = 3100000302
+in.p = { param = "lightning_chance" }
+
+[[pass.node]]
+id = "n14"
+op = "rand.chance"
+config.key = 3100000303
+in.p = { param = "growth_chance" }
+
+[[pass.node]]
+id = "n15"
+op = "cat.transition"
+config.category = "cover"
+config.rules = [
+  { id = "line_2", from = "Tree", to = "Burning", phase = 0 },
+  { id = "line_3", from = "Tree", to = "Burning", phase = 0 },
+  { id = "line_4", from = "Burning", to = "Empty", phase = 0 },
+  { id = "line_5", from = "Empty", to = "Tree", phase = 0 },
+]
+in.state = "n10"
+in.rule.line_2.when = "n12"
+in.rule.line_3.when = "n13"
+in.rule.line_4.when = { bool = true }
+in.rule.line_5.when = "n14"
+
+[[pass.node]]
+id = "n16"
+op = "lane.set"
+config.lane = "cover"
+in.value = "n15.next"
+
+[[pass]]
+id = "measures_cells"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "cover"
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_by"
+config.category = "cover"
+in.value = "n30"

@@ -6,7 +6,7 @@ icon: material/api
 
 # API reference
 
-Henad publishes eight crates to crates.io, all at one version.
+Henad publishes nine crates to crates.io, all at one version.
 Each crate's API documentation is on docs.rs.
 
 ## Which crate to depend on
@@ -14,18 +14,19 @@ Each crate's API documentation is on docs.rs.
 A program or a model crate depends on **`henad`**, and on **`henad-build`** as a build dependency when it registers its own models.
 Every item a model, a host or a test needs has a path in `henad`, and the guides refer to items by those paths alone.
 The code they include from the example models is the exception, since henad-models sits below the facade and refers to `henad_core` and `henad_compute`.
-The [template](../guide/your-project.md) depends on these two Henad crates and no other.
+The [template](../guide/your-project.md) depends on these two Henad crates.
 
-The other six are the crates `henad` re-exports.
+The other seven are the crates `henad` re-exports.
 A program never needs to name them, and their paths can change between releases, while the facade paths stay the same.
 
 | Crate | Documentation | Holds |
 |---|---|---|
-| `henad` | [docs.rs/henad](https://docs.rs/henad) | The facade: one module tree over the others, with the example models, the app, the command line and the testing kit behind features |
+| `henad` | [docs.rs/henad](https://docs.rs/henad) | The facade: one module tree over the others, with the example models, the app, the command line, the testing kit and the grid rules behind features |
 | `henad-build` | [docs.rs/henad-build](https://docs.rs/henad-build) | The build-script side: shader bindings and the commit stamp |
 | `henad-core` | [docs.rs/henad-core](https://docs.rs/henad-core) | The model traits, the primitives, the shared WGSL, and the parts of a sweep that need no engine |
-| `henad-compute` | [docs.rs/henad-compute](https://docs.rs/henad-compute) | The engines, the runners, model entries and sets, and `Simulation` |
-| `henad-explore` | [docs.rs/henad-explore](https://docs.rs/henad-explore) | Sweeps, searches, results folders and the testing kit |
+| `henad-compute` | [docs.rs/henad-compute](https://docs.rs/henad-compute) | The engines, the runners, model entries and sets, `Simulation`, and grid rules composed while the program runs |
+| `henad-graph` | [docs.rs/henad-graph](https://docs.rs/henad-graph) | Graph models: the node graph a model file holds, read and written in one canonical form, and sheets, which lower to it |
+| `henad-explore` | [docs.rs/henad-explore](https://docs.rs/henad-explore) | Sweeps, searches, results folders, model files and the testing kit |
 | `henad-models` | [docs.rs/henad-models](https://docs.rs/henad-models) | The ten example models |
 | `henad-cli` | [docs.rs/henad-cli](https://docs.rs/henad-cli) | The command line as a library, and the `henad-cli` binary |
 | `henad-app` | [docs.rs/henad-app](https://docs.rs/henad-app) | The app as a library, and the `henad-app` binary |
@@ -38,6 +39,7 @@ A program never needs to name them, and their paths can change between releases,
 | `app` | `henad::app`, the app over a host's own model set |
 | `cli` | `henad::cli`, the command line over a host's own model set, on native targets |
 | `testing` | `henad::testing`, the [testing kit](../authoring/testing.md) |
+| `model-files` | `henad::rules`, grid rules, the model files that hold them, graph models and sheets, and `compose_wgsl`, and `henad::graph`, graph models and sheets |
 
 No feature is on by default, and no feature changes a result.
 
@@ -45,7 +47,7 @@ No feature is on by default, and no feature changes a result.
 
 | Path | Holds |
 |---|---|
-| `henad` | `ModelEntry`, `ModelSet`, `RunSetup`, `Simulation`, `StatSample`, `Fault`, `install_panic_hook`, `BuildInfo`, `ModelSource`, `ModelMetadata`, and the macros `params!`, `actions!`, `agent_lanes!`, `for_each_chunk_mut!`, `buffers!`, `build_info!` and `include_shaders!` |
+| `henad` | `ModelEntry`, `ModelSet`, `RunSetup`, `Simulation`, `StatSample`, `Fault`, `install_panic_hook`, `BuildInfo`, `ModelSource`, `CodeOrigin`, `ModelCode`, `CodeDiagnostic`, `DiagnosticSeverity`, `ModelMetadata`, and the macros `params!`, `actions!`, `agent_lanes!`, `for_each_chunk_mut!`, `buffers!`, `build_info!` and `include_shaders!` |
 | `henad::prelude` | The names a program imports whole to build, run and sweep models |
 | `henad::authoring` | Everything a model is written against: the five model traits and their types, the `register_*` functions, the helpers, `Grid2D`, `Network`, `SpatialHash` and the engine constants |
 | `henad::authoring::prelude` | The names a model's source file imports whole |
@@ -63,5 +65,7 @@ No feature is on by default, and no feature changes a result.
 | `henad::app` | `AppOptions`, `AppOpening`, `OpenAt`, `run_native` and `start_web`, with `app` |
 | `henad::cli` | `CliOptions` and `run`, with `cli` |
 | `henad::testing` | `assert_set_conforms`, `check_model_set`, `CheckSettings`, `headless_test_device`, with `testing` |
+| `henad::rules` | `GridRule`, `RuleState`, `RuleDeclaration`, `CompiledGridRule`, `ModelFile`, `GridRuleFile`, `ModelFileError` and `compose_wgsl`, with `model-files` |
+| `henad::graph` | Graph models: `GraphFile`, its checker, host evaluator, edit commands and starters, and `KIND_SHEET` with the `sheet` module, which reads, checks and lowers sheets (`SheetFile`) and holds their starters, with `model-files` |
 
 [Using Henad from code](../guide/library.md) walks through a program over these paths, and [Releasing](../developing/releasing.md#stability) says what a release may change in them.

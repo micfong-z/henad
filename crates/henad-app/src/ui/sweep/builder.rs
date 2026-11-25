@@ -6,8 +6,7 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
 
-use egui::containers::Sides;
-use egui::{Align, Button, ComboBox, DragValue, Id, Label, Layout, RadioButton, RichText, TextEdit, TextStyle, vec2};
+use egui::{Align, Button, ComboBox, DragValue, Id, Label, RadioButton, RichText, TextEdit, TextStyle};
 use henad_compute::entry::ModelEntry;
 use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
@@ -23,24 +22,31 @@ use crate::icons::material_design_icons::{
 };
 use crate::ui::params::{display_value, draw_seed, seed_field_width};
 use crate::ui::plural;
-use crate::ui::results::store::{ResultsStore, column_output_label, reducer_label};
+use crate::ui::results::labels::{column_output_label, reducer_label};
+use crate::ui::results::store::ResultsStore;
 use crate::ui::sweep::draft::{
-    ActionDraft, DesignTableDraft, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind, LevelPreview,
-    MAX_MEMORY_SERIES_BYTES, MIN_TIMEOUT_SECONDS, StopDraft, SweepDraft, TICKS_EXAMPLE, TickSource, comparator_words,
-    written_name,
+    ActionDraft, DesignTableDraft, DraftDesign, DraftIssue, DraftSite, ExploreMode, GridAxis, IssueKind, LevelPreview,
+    MAX_MEMORY_SERIES_BYTES, MIN_TIMEOUT_SECONDS, PlanCounts, StopDraft, SweepDraft, TICKS_EXAMPLE, TickSource,
+    comparator_words, near_series_limit, written_name,
 };
 use crate::ui::sweep::layout::{
-    FormLayout, FormRows, FormState, Note, SectionHeading, SweepSection, add_button, checkbox_indent, icon_button,
-    icon_button_width, note_block, note_label, note_line, segmented, slot, text_width, widest_label,
+    FormLayout, FormRows, FormState, Note, NoteButton, SectionHeading, SweepSection, add_button, checkbox_indent,
+    icon_button, icon_button_width, note_block, note_label, note_line, note_line_with_button, segmented, slot,
+    widest_label,
 };
 use crate::ui::sweep::parameters::{
     BASELINE_HEADER, LevelNoun, SEARCH_LEVELS_TOOLTIP, levels_tooltip, parameters_section, preview_tooltip, row_note,
 };
-use crate::ui::sweep::plan::{
-    NOT_COUNTED, PlanSummary, concurrency_text, folder_name, sample_count, seconds_text, stop_text,
-};
+use crate::ui::sweep::plan::{NOT_COUNTED, PlanSummary, concurrency_text, sample_count, seconds_text, stop_text};
 use crate::ui::sweep::search::{algorithm_label, search_labels, search_section};
 use crate::ui::sweep::{CheckSummary, DraftCheck, SweepRequest};
+use crate::ui::text::{folder_name, text_width};
+
+/// Button of the Folder row's note that opens a folder of results a sweep can resume.
+const OPEN_IN_RESULTS: NoteButton<'static> = NoteButton {
+    text: "Open in Results",
+    tooltip: "Open these results. Press Resume sweep there to finish them.",
+};
 
 /// Maximum number of samples that the Samples field accepts.
 const MAX_SAMPLES: usize = 1 << 20;
@@ -118,7 +124,7 @@ impl SectionSummaries {
     pub(super) fn new(check: &DraftCheck, schema: &ModelSchema<'_>, summary: &CheckSummary) -> Self {
         let draft = &check.draft;
         Self {
-            design: design_summary(draft, summary.counts.map(|counts| counts.0)),
+            design: design_summary(draft, summary.counts.map(|counts| counts.configs)),
             search: format!(
                 "{} · {} {}",
                 algorithm_label(draft.search.algorithm),
@@ -132,7 +138,7 @@ impl SectionSummaries {
             outputs: outputs_summary(draft),
             execution: execution_summary(draft),
             plan: match summary.counts {
-                Some((_, _, runs)) => format!("{runs} {}", plural(runs, "run")),
+                Some(PlanCounts { runs, .. }) => format!("{runs} {}", plural(runs, "run")),
                 None => NOT_COUNTED.to_owned(),
             },
         }
@@ -187,8 +193,8 @@ fn parameters_summary(draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
         return "Set by design table".to_owned();
     }
     let verb = match draft.mode {
-        DraftMode::Sweep => "varied",
-        DraftMode::Search => "searched",
+        ExploreMode::Sweep => "varied",
+        ExploreMode::Search => "searched",
     };
     match draft.factors.iter().filter(|factor| factor.vary).count() {
         0 => format!("None {verb}"),
@@ -199,8 +205,8 @@ fn parameters_summary(draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
 /// Returns the Actions section's summary, as in "Seed outbreak at tick 10" or "2 actions, 1 tick varied".
 fn actions_summary(draft: &SweepDraft, schema: &ModelSchema<'_>) -> String {
     let verb = match draft.mode {
-        DraftMode::Sweep => "varied",
-        DraftMode::Search => "searched",
+        ExploreMode::Sweep => "varied",
+        ExploreMode::Search => "searched",
     };
     let varied = draft
         .actions
@@ -241,7 +247,7 @@ fn seeds_summary(draft: &SweepDraft) -> String {
         draft.root_seed_text.trim()
     );
     let design_seed = draft.design_seed_text.trim();
-    if draft.mode == DraftMode::Sweep && draft.design.is_sampled() && !design_seed.is_empty() {
+    if draft.mode == ExploreMode::Sweep && draft.design.is_sampled() && !design_seed.is_empty() {
         text.push_str(&format!(" · design seed {design_seed}"));
     }
     text
@@ -302,11 +308,11 @@ fn execution_summary(draft: &SweepDraft) -> String {
 ///
 /// Labels of collapsed sections count too, so opening a section moves no column. A design's own rows count only
 /// under that design.
-fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> Vec<(&'static str, f32)> {
+fn form_labels<'a>(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'a>) -> Vec<(&'a str, f32)> {
     let indent = checkbox_indent(ui);
-    let mut labels: Vec<(&'static str, f32)> = Vec::new();
+    let mut labels: Vec<(&'a str, f32)> = Vec::new();
     match draft.mode {
-        DraftMode::Sweep => {
+        ExploreMode::Sweep => {
             labels.push(("Design", 0.0));
             if draft.design.is_sampled() {
                 labels.extend([("Samples", 0.0), ("Design seed", 0.0)]);
@@ -315,9 +321,9 @@ fn form_labels(ui: &egui::Ui, draft: &SweepDraft, schema: &ModelSchema<'_>) -> V
                 labels.push(("Table", 0.0));
             }
         }
-        DraftMode::Search => labels.extend(search_labels(ui, draft.search.algorithm)),
+        ExploreMode::Search => labels.extend(search_labels(ui, draft.search.algorithm)),
     }
-    labels.extend(schema.params.iter().map(|descriptor| (descriptor.label, indent)));
+    labels.extend(schema.params.iter().map(|descriptor| (descriptor.label(), indent)));
     if !draft.actions.is_empty() {
         labels.extend([("Action", 0.0), ("Tick", 0.0)]);
     }
@@ -353,8 +359,8 @@ fn form_layout(ui: &egui::Ui, draft: &SweepDraft, input: &FormInput<'_>, form_wi
         .params
         .iter()
         .zip(input.panel_values)
-        .map(|(descriptor, value)| text_width(ui, &display_value(descriptor, value)))
-        .fold(text_width(ui, BASELINE_HEADER), f32::max);
+        .map(|(descriptor, value)| text_width(ui, &display_value(descriptor, value), TextStyle::Body))
+        .fold(text_width(ui, BASELINE_HEADER, TextStyle::Body), f32::max);
     FormLayout::new(
         form_width,
         widest_label(ui, form_labels(ui, draft, input.schema)),
@@ -429,10 +435,10 @@ pub fn form_ui(
             };
 
         match draft.mode {
-            DraftMode::Sweep => show(ui, SweepSection::Design, &mut |ui, rows, _| {
+            ExploreMode::Sweep => show(ui, SweepSection::Design, &mut |ui, rows, _| {
                 design_section(ui, rows, draft, input, request);
             }),
-            DraftMode::Search => show(ui, SweepSection::Search, &mut |ui, rows, _| {
+            ExploreMode::Search => show(ui, SweepSection::Search, &mut |ui, rows, _| {
                 search_section(ui, rows, draft, input);
             }),
         }
@@ -544,7 +550,7 @@ pub fn design_formula(
         .zip(&draft.factors)
         .zip(param_previews)
         .filter(|((_, factor), _)| factor.vary)
-        .map(|((descriptor, _), preview)| (descriptor.label.to_owned(), preview.as_ref()));
+        .map(|((descriptor, _), preview)| (descriptor.label().to_owned(), preview.as_ref()));
     let ticks = draft
         .actions
         .iter()
@@ -607,7 +613,7 @@ fn design_section(
     let formula = match input.summary.issues_at(DraftSite::Design).next() {
         Some(issue) if !draft.runs_table() => Note::Issue(issue.kind, issue.message.clone()),
         _ => match input.summary.counts {
-            Some((configs, _, _)) => Note::Weak(design_formula(
+            Some(PlanCounts { configs, .. }) => Note::Weak(design_formula(
                 draft,
                 input.schema,
                 &input.summary.param_previews,
@@ -670,8 +676,8 @@ pub fn table_note(table: &DesignTableDraft, draft: &SweepDraft, schema: &ModelSc
             schema
                 .params
                 .iter()
-                .find(|descriptor| descriptor.id == column)
-                .map(|descriptor| descriptor.label.to_owned())
+                .find(|descriptor| descriptor.id() == column)
+                .map(|descriptor| descriptor.label().to_owned())
         })
         .collect();
     match names.as_slice() {
@@ -739,7 +745,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
     let layout = rows.layout;
     let schema = input.schema;
     let context = TickContext {
-        search: draft.mode == DraftMode::Search,
+        search: draft.mode == ExploreMode::Search,
         runs_table: draft.runs_table(),
         draws_ranges: draft.draws_ranges(),
     };
@@ -756,7 +762,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
         let selected = schema
             .actions
             .get(action.action_index)
-            .map_or("", |declared| declared.label);
+            .map_or("", |declared| declared.label());
         let (label, combo) = layout.row(ui, "Action", |ui| {
             ui.horizontal(|ui| {
                 let mut action_index = action.action_index;
@@ -769,7 +775,7 @@ fn actions_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             for (index, declared) in schema.actions.iter().enumerate() {
-                                ui.selectable_value(&mut action_index, index, declared.label);
+                                ui.selectable_value(&mut action_index, index, declared.label());
                             }
                         })
                         .response
@@ -848,7 +854,7 @@ fn tick_row(
     let (vary_label, vary_tooltip) = if context.search {
         ("Search tick", "Search over this action's tick")
     } else {
-        ("Vary tick", "Try the action at several ticks")
+        ("Vary tick", "Vary this action's tick")
     };
     let warning = input
         .summary
@@ -929,13 +935,20 @@ fn tick_row(
 
 /// Returns the feedback of the Replicates field for a draft in `mode` with `counts` of configurations or evaluations,
 /// replicates and runs once counted, as in "15 × 3 = 45 runs".
-pub fn replicates_feedback(mode: DraftMode, counts: Option<(u64, u64, u64)>) -> String {
+pub fn replicates_feedback(mode: ExploreMode, counts: Option<PlanCounts>) -> String {
     match (counts, mode) {
-        (Some((configs, replicates, runs)), _) => {
+        (
+            Some(PlanCounts {
+                configs,
+                replicates,
+                runs,
+            }),
+            _,
+        ) => {
             format!("{configs} × {replicates} = {runs} {}", plural(runs, "run"))
         }
-        (None, DraftMode::Sweep) => "per configuration".to_owned(),
-        (None, DraftMode::Search) => "per evaluation".to_owned(),
+        (None, ExploreMode::Sweep) => "per configuration".to_owned(),
+        (None, ExploreMode::Search) => "per evaluation".to_owned(),
     }
 }
 
@@ -1001,8 +1014,8 @@ fn seeds_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
     let layout = rows.layout;
     let summary = input.summary;
     let replicates_tooltip = match draft.mode {
-        DraftMode::Sweep => "Runs per configuration, each with its own seed",
-        DraftMode::Search => "Runs per evaluation, each with its own seed",
+        ExploreMode::Sweep => "Runs per configuration, each with its own seed",
+        ExploreMode::Search => "Runs per evaluation, each with its own seed",
     };
     let feedback = site_note(
         summary,
@@ -1029,7 +1042,7 @@ fn seeds_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
         SeedField {
             label: "Root seed",
             dice_name: "Generate random root seed",
-            tooltip: "Every run's seed derives from this one",
+            tooltip: "Seed for deriving each run's seed",
             hint: "",
             site: DraftSite::Seed,
         },
@@ -1041,7 +1054,7 @@ fn seeds_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft,
                 "Use the same seed for replicate n in every configuration, to reduce seed noise in comparisons",
             );
     });
-    if draft.mode == DraftMode::Sweep && draft.design.is_sampled() {
+    if draft.mode == ExploreMode::Sweep && draft.design.is_sampled() {
         seed_row(
             ui,
             rows,
@@ -1117,7 +1130,7 @@ fn stop_rows(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraft, inp
     let entry = input.entry;
     let mut enabled = draft.stop.is_some();
     let (stop_when, ()) = layout.checkbox_row(ui, &mut enabled, "Stop when", |_| {});
-    let stop_when = stop_when.on_hover_text("End a run at the first sample where this holds");
+    let stop_when = stop_when.on_hover_text("End a run at the first sample where the condition holds");
     if enabled {
         draft.add_stop(input.schema);
     } else {
@@ -1211,7 +1224,7 @@ fn first_stat(entry: &ModelEntry) -> String {
     entry
         .stat_descriptors()
         .first()
-        .map(|stat| stat.label.to_owned())
+        .map(|stat| stat.label().to_owned())
         .unwrap_or_default()
 }
 
@@ -1222,8 +1235,8 @@ fn stat_combo(ui: &mut egui::Ui, id: Id, entry: &ModelEntry, column: &mut String
         .selected_text(column.as_str())
         .show_ui(ui, |ui| {
             for stat in entry.stat_descriptors() {
-                if ui.selectable_label(column == stat.label, stat.label).clicked() {
-                    stat.label.clone_into(column);
+                if ui.selectable_label(column == stat.label(), stat.label()).clicked() {
+                    stat.label().clone_into(column);
                 }
             }
         })
@@ -1260,7 +1273,7 @@ pub fn series_feedback(series_every: u64, bytes: Option<u64>, in_memory: bool) -
     let Some(bytes) = bytes else {
         return Note::Weak(NOT_COUNTED.to_owned());
     };
-    if in_memory && bytes >= MAX_MEMORY_SERIES_BYTES / 2 {
+    if near_series_limit(bytes, in_memory).is_some() {
         return Note::Warn(format!(
             "About {} in memory, over half the limit of {}",
             fmt_bytes(bytes),
@@ -1384,7 +1397,9 @@ fn outputs_section(ui: &mut egui::Ui, rows: &mut FormRows, draft: &mut SweepDraf
                     let spacing = ui.spacing().item_spacing.x;
                     let icon_width = icon_button_width(ui, MDI_DELETE_OUTLINE);
                     let tag = reader.map(|site| format!("Used by {}", reader_label(site)));
-                    let tag_width = tag.as_deref().map_or(0.0, |tag| text_width(ui, tag) + spacing);
+                    let tag_width = tag
+                        .as_deref()
+                        .map_or(0.0, |tag| text_width(ui, tag, TextStyle::Body) + spacing);
                     let combo_width =
                         ((layout.control_width() - icon_width - tag_width - 2.0 * spacing) / 2.0).max(40.0);
                     // A combo box grows to fit its text while the line has room. Each slot holds it to its width.
@@ -1576,7 +1591,9 @@ fn concurrency_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraf
         Backend::Gpu => {
             "Runs on the GPU at the same time. Each needs its own device memory. A large model runs fastest alone."
         }
-        Backend::Cpu => "Runs stepped at the same time. Each needs its own memory. A large model runs fastest alone.",
+        Backend::Cpu => {
+            "Runs on the CPU at the same time. Each needs its own memory. A large model runs fastest alone."
+        }
     };
     let feedback = Note::Weak(concurrency_feedback(draft.concurrency, backend, threads, browser));
     let (label, count) = layout.row(ui, "Concurrent runs", |ui| {
@@ -1585,7 +1602,7 @@ fn concurrency_row(ui: &mut egui::Ui, layout: &FormLayout, draft: &mut SweepDraf
                 let mut fixed = matches!(draft.concurrency, Concurrency::Fixed(_));
                 let choices = [
                     (false, "Auto", "Set number of runs at start from model size"),
-                    (true, "Fixed", "Step this many runs at once"),
+                    (true, "Fixed", "Use this number of concurrent runs"),
                 ];
                 if segmented(ui, &mut fixed, &choices, |_| Ok(())) {
                     draft.concurrency = if fixed {
@@ -1631,7 +1648,7 @@ fn results_rows(
     let summary = input.summary;
     let in_folder = draft.results_in_folder && !browser;
     let results_fallback = if browser {
-        Note::Weak("A browser keeps results in memory. Save them once the sweep ends.".to_owned())
+        Note::Weak("In a browser, results will be kept in memory. Press Save results once the sweep ends.".to_owned())
     } else {
         Note::Empty
     };
@@ -1686,8 +1703,9 @@ fn folder_row(
         let field = ui
             .horizontal(|ui| {
                 let choose_text = format!("{MDI_FOLDER_OUTLINE} Select");
-                let choose_width =
-                    text_width(ui, &choose_text) + 2.0 * ui.spacing().button_padding.x + ui.spacing().item_spacing.x;
+                let choose_width = text_width(ui, &choose_text, TextStyle::Body)
+                    + 2.0 * ui.spacing().button_padding.x
+                    + ui.spacing().item_spacing.x;
                 let field = ui
                     .add(
                         TextEdit::singleline(&mut draft.output_dir_text)
@@ -1714,28 +1732,9 @@ fn folder_row(
             Note::Issue(IssueKind::Invalid, _) if held_back => fallback,
             note => note,
         };
-        let height = ui.text_style_height(&TextStyle::Body);
-        ui.allocate_ui_with_layout(
-            vec2(layout.cell_width, height),
-            Layout::left_to_right(Align::Center),
-            |ui| {
-                ui.set_min_size(vec2(layout.cell_width, height));
-                let (_, open) = Sides::new().shrink_left().truncate().show(
-                    ui,
-                    |ui| note_label(ui, &note),
-                    |ui| {
-                        resumable
-                            && ui
-                                .small_button("Open in Results")
-                                .on_hover_text("Open these results. Press Resume sweep there to finish them.")
-                                .clicked()
-                    },
-                );
-                if open {
-                    *request = Some(SweepRequest::OpenFolderResults);
-                }
-            },
-        );
+        if note_line_with_button(ui, layout.cell_width, &note, resumable.then_some(OPEN_IN_RESULTS)) {
+            *request = Some(SweepRequest::OpenFolderResults);
+        }
         field
     });
     let field = field.labelled_by(label.id);
@@ -1759,7 +1758,7 @@ pub(super) fn banner_line(issue: &DraftIssue, draft: &SweepDraft, schema: &Model
         | DraftSite::Sampling
         | DraftSite::Outputs
         | DraftSite::MethodSetting(_) => None,
-        DraftSite::Factor(index) => schema.params.get(index).map(|descriptor| descriptor.label.to_owned()),
+        DraftSite::Factor(index) => schema.params.get(index).map(|descriptor| descriptor.label().to_owned()),
         DraftSite::Action(position) => draft
             .actions
             .get(position)
@@ -1797,18 +1796,19 @@ mod tests {
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::stop::Comparator;
     use henad_core::metadata::Backend;
-    use henad_core::params::ParamValue;
+
     use henad_explore::exec::Concurrency;
-    use henad_models::example_models;
 
     use super::{
         FormInput, MAX_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, SectionSummaries, SeedField, banner_line, comparator_item,
         concurrency_feedback, design_formula, form_ui, output_note, replicates_feedback, samples_feedback, seed_note,
         series_feedback, steps_feedback, stop_note, table_note,
     };
+    use crate::state::default_values;
+    use crate::tests::support::sir;
     use crate::ui::sweep::draft::{
-        COLUMNS_PENDING, DesignTableDraft, DraftDesign, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind,
-        MAX_MEMORY_SERIES_BYTES, StopDraft, SweepDraft, TickSource,
+        COLUMNS_PENDING, DesignTableDraft, DraftDesign, DraftIssue, DraftSite, ExploreMode, GridAxis, IssueKind,
+        MAX_MEMORY_SERIES_BYTES, PlanCounts, StopDraft, SweepDraft, TickSource,
     };
     use crate::ui::sweep::layout::{FormState, Note, Reveal, SweepSection};
     use crate::ui::sweep::plan::PlanSummary;
@@ -1817,18 +1817,6 @@ mod tests {
     // Indices of SIR's parameters.
     const INFECTION_RATE: usize = 2;
     const RECOVERY_RATE: usize = 3;
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
-    }
-
-    fn default_values(entry: &ModelEntry) -> Vec<ParamValue> {
-        entry
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind.default_value())
-            .collect()
-    }
 
     /// Returns the section summaries of a new SIR draft after `edit` changes it.
     fn summaries_of(edit: impl FnOnce(&mut SweepDraft)) -> SectionSummaries {
@@ -1851,7 +1839,7 @@ mod tests {
         let planned = draft
             .check(&schema, &default_values(&entry))
             .unwrap_or_else(|issues| panic!("the draft does not plan: {issues:?}"));
-        let configs = planned.counts().0;
+        let configs = planned.counts().configs;
         let (param_previews, tick_previews) = draft.level_previews(&schema);
         design_formula(&draft, &schema, &param_previews, &tick_previews, configs)
     }
@@ -1934,7 +1922,7 @@ mod tests {
         assert_eq!(table.outputs, "None · a sample every tick · no series");
 
         let search = summaries_of(|draft| {
-            draft.mode = DraftMode::Search;
+            draft.mode = ExploreMode::Search;
             draft.factors[2].vary = true;
         });
         assert_eq!(search.parameters, "1 of 5 searched");
@@ -2028,15 +2016,29 @@ mod tests {
     #[test]
     fn each_field_says_what_its_value_means_for_the_runs() {
         assert_eq!(
-            replicates_feedback(DraftMode::Sweep, Some((15, 3, 45))),
+            replicates_feedback(
+                ExploreMode::Sweep,
+                Some(PlanCounts {
+                    configs: 15,
+                    replicates: 3,
+                    runs: 45,
+                })
+            ),
             "15 × 3 = 45 runs"
         );
         assert_eq!(
-            replicates_feedback(DraftMode::Search, Some((200, 3, 600))),
+            replicates_feedback(
+                ExploreMode::Search,
+                Some(PlanCounts {
+                    configs: 200,
+                    replicates: 3,
+                    runs: 600,
+                })
+            ),
             "200 × 3 = 600 runs"
         );
-        assert_eq!(replicates_feedback(DraftMode::Sweep, None), "per configuration");
-        assert_eq!(replicates_feedback(DraftMode::Search, None), "per evaluation");
+        assert_eq!(replicates_feedback(ExploreMode::Sweep, None), "per configuration");
+        assert_eq!(replicates_feedback(ExploreMode::Search, None), "per evaluation");
         assert_eq!(steps_feedback(1000, 100), "1100 ticks per run");
         assert_eq!(steps_feedback(1, 0), "1 tick per run");
         assert_eq!(samples_feedback(1000, 1), "1001 samples per run");
@@ -2118,24 +2120,24 @@ mod tests {
         let infection = schema
             .params
             .iter()
-            .position(|descriptor| descriptor.id == "infection_rate")
+            .position(|descriptor| descriptor.id() == "infection_rate")
             .expect("SIR has an infection rate");
         let line = |draft: &SweepDraft, site, message: &str| {
             let issue = DraftIssue::new(site, message);
             banner_line(&issue, draft, &schema)
         };
         assert_eq!(
-            line(&draft, DraftSite::Factor(infection), "No values"),
-            "Infection Rate: No values"
+            line(&draft, DraftSite::Factor(infection), "Enter values"),
+            "Infection Rate: Enter values"
         );
         assert_eq!(
-            line(&draft, DraftSite::Action(0), "No values"),
-            "Seed outbreak: No values"
+            line(&draft, DraftSite::Action(0), "Enter values"),
+            "Seed outbreak: Enter values"
         );
         draft.add_action(&schema, 0, 20);
         assert_eq!(
-            line(&draft, DraftSite::Action(1), "No values"),
-            "Seed outbreak 2: No values",
+            line(&draft, DraftSite::Action(1), "Enter values"),
+            "Seed outbreak 2: Enter values",
             "a repeat of an action goes by its number"
         );
         draft.reducers.push(ReducerSpec {
@@ -2143,8 +2145,8 @@ mod tests {
             kind: ReducerKind::ArgMax,
         });
         assert_eq!(
-            line(&draft, DraftSite::Output(0), "No values"),
-            "Susceptible, tick of maximum: No values",
+            line(&draft, DraftSite::Output(0), "Enter values"),
+            "Susceptible, tick of maximum: Enter values",
             "an output goes by its stat first"
         );
         assert_eq!(
@@ -2492,7 +2494,7 @@ mod tests {
         );
         assert_eq!(
             hover(&without_table, vary_tick),
-            (true, vec!["Try the action at several ticks".to_owned()])
+            (true, vec!["Vary this action's tick".to_owned()])
         );
     }
 

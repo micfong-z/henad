@@ -299,7 +299,7 @@ fn skipped_failure(
         )),
         (SkipReason::NoDevice | SkipReason::NativeOnly, Some(message)) if check.builds() => Some(message.to_owned()),
         (SkipReason::NoDevice, _) if gpu_required => {
-            Some("HENAD_REQUIRE_GPU is set, but the settings give no GPU device.".to_owned())
+            Some("HENAD_REQUIRE_GPU is set, but the settings do not provide a GPU device.".to_owned())
         }
         _ => None,
     }
@@ -398,16 +398,16 @@ fn declared_defaults(entry: &ModelEntry) -> Vec<ParamValue> {
     entry
         .param_descriptors()
         .iter()
-        .map(|descriptor| descriptor.kind.default_value())
+        .map(|descriptor| descriptor.kind().default_value())
         .collect()
 }
 
 /// Returns the bits of every value of `entries`, each under its label.
-fn stat_bits(entries: &[StatEntry]) -> Vec<(&'static str, Vec<u64>)> {
+fn stat_bits(entries: &[StatEntry]) -> Vec<(&str, Vec<u64>)> {
     entries
         .iter()
         .map(|entry| {
-            let bits = match &entry.value {
+            let bits = match entry.value() {
                 StatValue::Scalar(value) => vec![value.to_bits()],
                 StatValue::Vector2D { x, y } => vec![x.to_bits(), y.to_bits()],
                 StatValue::Histogram { edges, counts } => edges
@@ -416,7 +416,7 @@ fn stat_bits(entries: &[StatEntry]) -> Vec<(&'static str, Vec<u64>)> {
                     .chain(counts.iter().copied())
                     .collect(),
             };
-            (entry.label, bits)
+            (entry.label(), bits)
         })
         .collect()
 }
@@ -425,7 +425,7 @@ fn stat_bits(entries: &[StatEntry]) -> Vec<(&'static str, Vec<u64>)> {
 fn first_stat_difference(first: &[StatEntry], second: &[StatEntry]) -> Option<String> {
     let (first, second) = (stat_bits(first), stat_bits(second));
     if first.len() != second.len() {
-        return Some(format!("{} stats against {}", first.len(), second.len()));
+        return Some(format!("the number of stats ({} and {})", first.len(), second.len()));
     }
     first
         .iter()

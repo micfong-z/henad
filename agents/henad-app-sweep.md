@@ -1,0 +1,176 @@
+# henad-app: the Sweep and Results tabs
+
+`ui/sweep/` is the Sweep tab. `mod.rs` holds `SweepPanel` and `sweep_ui`, which splits the tab
+into four egui panels: a header and a footer of fixed height (`header.rs`, `footer.rs`), a Plan
+panel on the right while the tab is wide enough (`PLAN_PANEL_BREAKPOINT`), and a central scroll
+area holding the form or the progress. The header and footer keep their ids and heights in every
+state, and the last slot of the footer holds Start, then Pause or Resume, then Show results. A
+press or a link sends a `SweepRequest`, applied once every panel has drawn. `dock.rs` turns off
+`egui_dock`'s scroll bars for the tab and titles it with the session's state, as in "Sweep 42%".
+The builder's header line reads `header::EDITOR_NOT_APPLIED` in the warning colour, unless a
+notification or a browser's GPU refusal takes the line, while `AppState::editor_differs_from` holds
+for the swept entry: the Editor holds a model `EditorPanel::holds_unapplied` (never applied, edited
+since Apply, or refused) that the entry was not built from: a graph whose `code_hash` differs, or a
+sheet or grid rule whose text is not the entry's author text, or else its code.
+`draft/` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
+level text read by `LevelSpec::parse` (`1%` and `1%:5%:1%` for a percentage, as `--vary`
+reads them), and converts to a `SweepSpec` (the Parameters panel values
+fill every parameter it does not vary) and back, TOML through
+`henad_explore::spec_file::SpecFile`. "One at a time" writes one factorial block per varied
+parameter or action tick, each other varied parameter pinned to its panel value as a one-value
+factor, since a spec cannot fix a parameter that any block varies. `from_spec` recognises that
+shape and refuses other multi-block specs. `SweepDraft::check` collects every issue its pre-pass
+finds before it plans, each a `DraftIssue` with the `DraftSite` of its row and an `IssueKind`:
+`Missing` for input not given yet, `Invalid` for input the plan refuses. Both block Start.
+`SweepDraft::carry_to` carries a draft to a replacement of other declarations, which
+`SweepPanel::forget_model` calls on an install: each parameter's row by id (a new parameter, or
+one whose `ParamKind` variant changed, unvaried), each action by id (one the replacement lacks
+removed), every other setting kept and `stat_columns` unknown until the next `ColumnsBuild`. The
+check then names an output or a level the replacement rejects
+(`a_draft_is_carried_to_other_declarations_by_id`).
+`draft/mod.rs` holds the draft's types, `check.rs` the check and the placing of plan errors on
+rows, `spec.rs` the conversion to and from a spec, `levels.rs` the levels, previews and estimates,
+and `messages.rs` the wording of errors.
+`ExploreMode` (`draft/`) tells a sweep from a search for a draft, a session
+(`SweepSession::mode`) and a results store (`ResultsStore::mode`), and every text that names one
+takes its word from `ExploreMode::noun` ("sweep") or `ExploreMode::title` ("Sweep").
+`SweepPanel::cached_check` plans the draft only when it or the panel values change, and caps a
+sweep at `MAX_DRAFT_RUNS`. The panel learns each model's stat columns from one build at its
+default values (`ColumnsBuild` in `mod.rs`), on a thread named `henad-stat-columns` whose report
+wakes the UI, a GPU model on a headless device of its own. A browser builds a CPU model inline
+and skips a GPU model. `SweepDraft::set_stat_columns` hands the columns to the draft, which then
+names outputs as `ReducerPlan::bind` does (a vector's `.x`, `.y` and `.magnitude`, a histogram's
+`.total`), turns a watched bare vector label into its magnitude column, and in `check` binds the
+reducers, the stop condition and a search's watched columns through `MeasurePlan::new` and
+`SearchPlan::watched_reducers`. While the build runs, `columns_pending` holds the Missing issue
+`COLUMNS_PENDING` ("Reading model outputs") at `DraftSite::Outputs` and Start stays disabled.
+After a failed build each stat counts as one column, and a watched `Label.part:kind` of a
+default kind is accepted for the sweep's own probe to check.
+`row_levels` caps at `MAX_DRAFT_LEVELS` only a range the draft lists, and a range with no step
+under a sampled design or a search can be any size. `SweepDraft::tick_source` (`TickSource`)
+gives an action's tick as fixed, varied or taken from the design table's `action.<name>` column.
+`SweepDraft::table_columns` lists the columns a design table sets, `None` for a draft that runs
+no table, and every site that tells a held parameter from a set one reads it.
+Save spec (`to_toml`) writes through `henad_explore::spec_file::LoadedSpec::to_toml`, with the
+draft's execution table. It also refuses what the loader would, a reversed window or a threshold
+that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's
+`[execution]` `memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes
+them back, Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them,
+and the Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds
+only the Timeout field, and a loaded shorter timeout, 0 included, is kept, as `henad-cli` takes it.
+`CheckSummary` turns the check into the lines the footer, its chips and the Plan panel list.
+`plan.rs` (`PlanSummary`) is the plan the panel, the narrow Plan section
+and a session draw. `layout.rs` holds `FormLayout`, the label column every section shares,
+`SIDE_BY_SIDE_BREAKPOINT`, the section headers with their issue counts, the note line a row
+reserves before any note comes, the `Reveal` that opens a section and scrolls to a row, and
+`ISSUE_DELAY`, the time a focused text field holds back the issue of its text. `builder.rs`
+draws the Design, Actions, Replicates and seeds, Run length, Outputs and Execution sections, and
+`parameters.rs` the parameter rows, the values editor and the options menu, each writing the
+row's `--vary` text, a list without spaces. The values editor reads text in percent as its
+fractions (`RangeFields::of`, `EditorSegment::of`), and a switch of form writes the fractions
+(`the_editor_reads_percent_text_as_its_fractions`). The quick fills, the switches and the fields
+work from the row's descriptor: a `u32` or an `f32` marked integer (`takes_integers`) writes whole
+numbers (`number_text`, `quarter_step`), and its fields drag in whole steps
+(`an_integer_f32_fills_whole_numbers`). `SweepSession::start` refuses a sweep of the Editor's
+sheet (`editor_sheet_of`) on native when a
+config of its plan, or a search's fixed values, is past a work budget (`sheet_capacity_refusal`):
+the
+configs whose `SheetFile::shortfalls` differ from the entry's words, as a `CapacityError` in the
+sweep's own message, so the Start line names the sheet's lines and no pass. A config refused for
+another reason is left to the sweep's check on its own device
+(`a_sweep_past_the_work_budget_on_a_sheet_names_its_lines_and_no_pass`,
+`src/tests/sheet_agents.rs`). `run_options` sets the same sheet's `SheetFile::shortfalls` as
+`SweepRunOptions::shortfall_words`, so the sweep's own check, and the note of a search candidate
+refused before its build, name the sheet's lines too.
+`session.rs` wraps `henad_explore::handle::SweepRun`
+(a thread on native, pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where
+the frame keeps repainting while it steps), pauses the live sim on start, and keeps the
+`KeptDraft` that started it for Save spec and the Plan panel. It hands `SweepRun` no device, so a
+GPU sweep steps on a device of its own and never shares the app's `FaultSink`. A fault in
+`render_ctx.faults` offloads the live model and leaves a running sweep alone, and `SessionState`
+has no fault pause.
+`progress.rs` draws the Status or Result grid, the Search grid and Runs in progress, and
+`footer.rs` Pause, Resume, Abort with its modal, and the end with
+Edit sweep, Save results and Show results. Show results sets `focus_request` to Results, as Open
+on a run sets it to Viewport. Show failed runs and Show in Results go through
+`ResultsPanel::show_failed_runs` and `ResultsPanel::select_candidate`. Events go to
+`ui/results/`, the Results tab, whose `ResultsPanel` also keeps the in-memory files of the last
+sweep for Save results. `store/` (`ResultsStore`) holds every run of the sweep, or of a folder
+read through `henad_explore::result_set::ResultSet`, the configs with their axes (the value
+columns that take more than one value, `axes.rs`), and a `SeriesCache` of series within
+`DEFAULT_SERIES_BUDGET` bytes (`series_cache.rs`). It computes the Series view's replicate bands
+(`SeriesBand`), the Response view's points and the heatmap's cells, each pooling a config's runs
+that did not fail in order of run id, and the runs table's order (`statistics.rs`). `mod.rs`
+keeps the struct, its constructors and accessors and the tests, `recorded.rs` the recorded model
+and its comparison with the entry, and `replay.rs` the replays and the command line.
+`summary.csv` pools in `runs.csv` order, which a resume can leave out of run-id order, and the
+last digits can then differ. The other views cache on `ResultsStore::revision`, and the Series
+view on the drawn configs' counts of runs and held series plus `ResultsStore::replaced_count`,
+the runs a resumed sweep's rerun replaced.
+`plot::cache_stale` paces all four: a change of settings computes at once, a change of the store
+at most once per `REFRESH_INTERVAL`.
+For a model with a time scale, `ResultsStore` keeps the entry's `TimeScale` (from the entry at
+construction and in `model_changed`, `None` for a folder whose model this device lacks), and
+`config_time` reads a config's tick length from its value column. `time_unit` and `config_time`
+are both `None` when the value columns hold no tick length, as in a folder written before the
+model declared a time scale, so such a folder reads in ticks. The Series view puts each band and
+run line at `time_axis::plot_x` of the config's own tick length, labels the x axis with
+`time_axis::axis_label`, and drops its cache when `time_unit` changes.
+`series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
+line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
+legend hides both, and `heatmap.rs` draws the grid. `labels.rs` names output kinds, output
+columns and actions for both tabs, and `ui/text.rs` holds the text helpers the app shares
+(`describe_error`, `capitalize`, `format_duration`, `folder_name`, `text_width`). `plot.rs` holds
+the palette, `decimate` (the lowest and highest point of each bucket), the heatmap scale and
+`HeatmapTiles`, the plot item the Heatmap view and the PSE grid draw through. It borrows the
+values, and a cell without a value, or an empty PSE cell, draws as `NO_DATA_COLOR`. `table.rs`
+draws the runs with `egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go
+through `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition
+can bring early. The store refuses to replay a run whose plan gives another run key than its row,
+while the model's schema matches the sweep's. A folder whose manifest records more than
+`MAX_PLANNED_CONFIGS` configs is never planned, lists its configs from `runs.csv` alone and
+refuses every replay, on native and in a browser. After a model change the replay opens under the
+table's warning, as it does when Henad's or the model's build differs from any a session recorded
+(`ResultsStore::changed_builds`). A model the entry or the manifest declares does not replay
+exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent
+`--export-stats` line of the product's `cli_command` on the clipboard, which samples from tick 0
+on the CLI's own cadence. Open results reads a folder on a thread of its own on native and the
+picked files in a browser, on the frame after the one that first shows "Reading results"
+(`hold_picked_files`, `due_picked_files`).
+`ui::results::poll` takes the `egui::Context` for it.
+Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, with the memory
+budgets its manifest records and automatic concurrency (`SessionExecution::recorded`), and the
+folder is read again once that sweep ends. Resume is disabled while `ResultsStore::code_matches`
+fails (`code_refusal`), for a folder of other code than the app's entry where either code is
+runtime code (`Manifest::code_matches`). `henad-app --open DIR` opens a folder at start.
+Open in Editor (`OPEN_IN_EDITOR`, `ResultsRequest::OpenInEditor`) shows in the toolbar while
+`ResultsStore::records_editable_code` holds, a check of the recorded formats alone. A press reads
+`ResultsStore::editable_model`, the recorded sheet (`ResultSet::author`) or else the recorded
+graph or grid rule, through the Editor's `editable_model`, and `editor::replace_model` loads it
+from no file, after the unsaved changes dialog when the Editor holds unsaved edits, and brings the
+Editor to the front. `RecordedModel` keeps the author text and the
+code: a sweep run in the app keeps those of the entry it started with, and a folder those its
+manifest holds. A text that does not read sets the status line. The Model tab's Edit model takes
+the same path over the selected entry (`edit_model`), so a model built from a sheet opens as the
+sheet. `open_in_editor_opens_the_sheet_a_sweep_recorded_or_else_its_graph`
+(`src/tests/sheet_editor.rs`) holds both, and that a folder of the Life sheet the app has not
+applied finds no entry under `sheet_game_of_life`, so its replay names the missing model.
+`ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
+PSE axes, the budget, and each method's other settings in a nested Method settings section. An
+output picked there that the runs do not record joins the Outputs section, and Use range from
+results reads `ResultsStore::output_range`. `SearchDraft` (`draft/`) keeps the settings of
+every method across a switch. `ui/results/search.rs` is the Search view: the best so
+far against evaluations for random search and hill climbing, the best, median and worst of each
+generation for the genetic algorithm, and the PSE grid, where a click selects the first run of a
+cell's exemplar. `ResultsPanel::ingest` takes a frame's events together, as `SweepSession::update`
+drains them, and `ResultsStore::push_search_updates` records each `SearchBatchTold` batch by
+batch, then adds the frame's new configs in one pass. The pass extends the configs and axes in
+place (`fits_axes`, `extend_configs`), and a level keeps its id when levels are added below it.
+Every config is built again only when a batch brings a second value to a column that is not an
+axis, a text that is not a finite number to a numeric axis, or a candidate id at or below one
+held. Runs that land before their candidate is told wait in `unassigned_runs`. A new level on a
+numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
+frame.
+The tests of both tabs take SIR (`sir`), a run outcome to update (`finished_run`) and a folder
+removed when dropped (`ScratchFolder`) from `src/tests/support.rs`, and a model's default values
+from `state::default_values`.

@@ -1,0 +1,970 @@
+//! Edit commands and the builder that applies them: one command per gesture of the node editor, and the same commands
+//! for tests and the command line.
+//!
+//! A [`GraphBuilder`] holds a document and its editor region. [`GraphBuilder::apply`] runs one [`EditCommand`], which
+//! changes the document's structure and leaves its meaning to the checker: a command refuses an id that does not
+//! exist, a name outside its grammar or a delete that other tables still name, and accepts a wire of the wrong type.
+//! A rename rewrites every reference, and a delete with references is refused with their list.
+//!
+//! A new node takes the number `max(highest id in the file + 1, [editor] next_id)`, and a node of a kind with a `key`
+//! takes a fresh random key, distinct from every key in the file. A paste mints fresh ids and fresh keys.
+
+mod clipboard;
+mod declarations;
+mod functions;
+mod regions;
+
+pub use functions::PortSide;
+
+use std::collections::BTreeSet;
+use std::fmt;
+
+use henad_core::params::ParamDescriptor;
+
+use crate::catalogue::{Effect, lookup};
+use crate::document::{
+    Action, Category, GraphDocument, Lane, Palette, Pass, PassEnabled, PassStage, Stat, Variant, World,
+};
+use crate::editor::EditorRegion;
+use crate::file::{GraphFile, GraphFileError};
+use crate::ids::{NodeId, is_port_segment};
+use crate::keys::KeyStream;
+use crate::node::{Accumulator, Node, NodeBody};
+use crate::types::ValueType;
+use crate::value::{Color, ConfigValue, InputValue, Literal, PortRef};
+
+/// A pass or a function, whose nodes form one body.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Scope {
+    /// The pass with this id.
+    Pass(String),
+    /// The function with this id.
+    Function(String),
+}
+
+impl Scope {
+    /// Returns the pass `id`.
+    pub fn pass(id: &str) -> Self {
+        Self::Pass(id.to_owned())
+    }
+
+    /// Returns the name the editor region gives the canvas of the body, such as `pass.seed`.
+    pub fn canvas(&self) -> String {
+        match self {
+            Self::Pass(id) => format!("pass.{id}"),
+            Self::Function(id) => format!("function.{id}"),
+        }
+    }
+}
+
+impl fmt::Display for Scope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Pass(id) => write!(f, "pass '{id}'"),
+            Self::Function(id) => write!(f, "function '{id}'"),
+        }
+    }
+}
+
+/// One change to a graph, as one gesture of the editor makes it.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum EditCommand {
+    /// Adds a node of kind `op` to `scope`, inside `region` when set, at `pos` on the canvas when set.
+    AddNode {
+        /// Body the node joins.
+        scope: Scope,
+        /// Kind of the node.
+        op: String,
+        /// Region the node joins, `None` for the top of the body.
+        region: Option<NodeId>,
+        /// Position on the canvas.
+        pos: Option<[f64; 2]>,
+    },
+    /// Removes a node, every wire from it in its body, and its placement. The members of a region move to the region
+    /// around it.
+    RemoveNode {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node to remove.
+        node: NodeId,
+    },
+    /// Wires the output `source` to the input `port` of `node`.
+    Connect {
+        /// Body that holds both nodes.
+        scope: Scope,
+        /// Node whose input takes the wire.
+        node: NodeId,
+        /// Input port, dotted when configuration makes it.
+        port: String,
+        /// Output the wire reads.
+        source: PortRef,
+    },
+    /// Clears the input `port` of `node`, whatever it holds.
+    Disconnect {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node whose input is cleared.
+        node: NodeId,
+        /// Input port.
+        port: String,
+    },
+    /// Sets the input `port` of `node` to a constant.
+    SetLiteral {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node whose input is set.
+        node: NodeId,
+        /// Input port.
+        port: String,
+        /// Constant, whose floats are finite.
+        literal: Literal,
+    },
+    /// Binds the input `port` of `node` to the parameter `param`.
+    BindParam {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node whose input is bound.
+        node: NodeId,
+        /// Input port.
+        port: String,
+        /// Id of a declared parameter.
+        param: String,
+    },
+    /// Sets the configuration key `key` of `node`, or removes it when `value` is `None`.
+    SetConfig {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node whose configuration changes.
+        node: NodeId,
+        /// Configuration key.
+        key: String,
+        /// New value.
+        value: Option<ConfigValue>,
+    },
+    /// Moves `node` into `region`, or out of every region when `region` is `None`. The nodes inside a region move with
+    /// it.
+    SetRegion {
+        /// Body that holds the node.
+        scope: Scope,
+        /// Node that moves.
+        node: NodeId,
+        /// Region the node joins.
+        region: Option<NodeId>,
+    },
+    /// Places `node` at `pos` on its canvas, which changes the editor region alone.
+    Move {
+        /// Node that moves.
+        node: NodeId,
+        /// Position on the canvas in points.
+        pos: [f64; 2],
+    },
+    /// Places the output half of the region `node` at `pos` on its canvas, which changes the editor region alone.
+    MoveRegionOutput {
+        /// Region whose output half moves.
+        node: NodeId,
+        /// Position on the canvas in points.
+        pos: [f64; 2],
+    },
+    /// Adds an accumulator after the accumulators of the region `node`.
+    AddAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that takes the accumulator.
+        node: NodeId,
+        /// New accumulator.
+        accumulator: Accumulator,
+    },
+    /// Replaces the type and the combine of the accumulator of the region `node` with the name `accumulator` holds.
+    SetAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Accumulator with its new type and combine.
+        accumulator: Accumulator,
+    },
+    /// Renames an accumulator of the region `node` and every reference to it.
+    RenameAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Current name.
+        from: String,
+        /// New name.
+        to: String,
+    },
+    /// Removes an accumulator that nothing names.
+    RemoveAccumulator {
+        /// Body that holds the region.
+        scope: Scope,
+        /// Region that holds the accumulator.
+        node: NodeId,
+        /// Name of the accumulator.
+        name: String,
+    },
+    /// Wraps nodes of a pass or a function in a new Repeat that runs once. Each of their outputs that a node outside
+    /// reads becomes a `carry` accumulator fed by a new put.
+    WrapInRepeat {
+        /// Body that holds the nodes.
+        scope: Scope,
+        /// Nodes to wrap. A node inside a region that is wrapped stays in that region.
+        nodes: Vec<NodeId>,
+        /// Canvas rectangle of the nodes as drawn, `[min, max]` in points, `None` to assume a size for each node.
+        bounds: Option<[[f64; 2]; 2]>,
+    },
+    /// Draws a titled frame around `members` on the canvas of `scope`.
+    Frame {
+        /// Body whose canvas holds the frame.
+        scope: Scope,
+        /// Title.
+        title: String,
+        /// MCS hue name.
+        color: String,
+        /// Nodes inside the frame.
+        members: Vec<NodeId>,
+    },
+    /// Pastes the nodes a [`GraphBuilder::copy`] text holds into `scope`, moved by `offset` on the canvas.
+    Paste {
+        /// Body the nodes join.
+        scope: Scope,
+        /// Copied text.
+        text: String,
+        /// Distance the pasted nodes move from their copied places.
+        offset: [f64; 2],
+    },
+    /// Adds a category.
+    AddCategory(Category),
+    /// Adds a palette.
+    AddPalette(Palette),
+    /// Adds a lane.
+    AddLane(Lane),
+    /// Renames a lane and every reference to it.
+    RenameLane {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes a lane that nothing reads or writes.
+    RemoveLane(String),
+    /// Adds a variant at the end of a category.
+    AddVariant {
+        /// Id of the category.
+        category: String,
+        /// New variant.
+        variant: Variant,
+    },
+    /// Renames a variant and every reference to it.
+    RenameVariant {
+        /// Id of the category.
+        category: String,
+        /// Current name.
+        from: String,
+        /// New name.
+        to: String,
+    },
+    /// Sets the colour of a variant in its category's palette.
+    SetVariantColor {
+        /// Id of the category.
+        category: String,
+        /// Name of the variant.
+        name: String,
+        /// New colour.
+        color: Color,
+    },
+    /// Removes a variant that nothing names.
+    RemoveVariant {
+        /// Id of the category.
+        category: String,
+        /// Name of the variant.
+        name: String,
+    },
+    /// Adds a parameter at the end of the schema.
+    AddParam(ParamDescriptor),
+    /// Renames a parameter and every binding of it.
+    RenameParam {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes a parameter that nothing binds.
+    RemoveParam(String),
+    /// Adds a statistic at the end of the schema.
+    AddStat(Stat),
+    /// Relabels a statistic.
+    RenameStat {
+        /// Current label.
+        from: String,
+        /// New label.
+        to: String,
+    },
+    /// Removes a statistic.
+    RemoveStat(String),
+    /// Adds an action.
+    AddAction(Action),
+    /// Renames an action and every pass of it.
+    RenameAction {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes an action that no pass belongs to.
+    RemoveAction(String),
+    /// Adds a pass at the end of its stage.
+    AddPass(Pass),
+    /// Renames a pass, every rerun of it and its canvas.
+    RenamePass {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes a pass and its nodes, when no action reruns it and no statistic reads it.
+    RemovePass(String),
+    /// Moves a pass to position `index` among the passes of its stage.
+    MovePass {
+        /// Id of the pass.
+        id: String,
+        /// New position within its stage, clamped to the last.
+        index: usize,
+    },
+    /// Sets whether a pass runs: a constant, or a binding to a `bool` parameter.
+    SetPassEnabled {
+        /// Id of the pass.
+        id: String,
+        /// New `enabled` value.
+        enabled: PassEnabled,
+    },
+    /// Replaces the parameter with the descriptor's id by the descriptor, in its place in the schema.
+    SetParam(ParamDescriptor),
+    /// Replaces the world table with another of the same topology.
+    SetWorld(World),
+    /// Adds an empty function with this id and no ports after the file's functions.
+    AddFunction(String),
+    /// Renames a function, every call of it and its canvas.
+    RenameFunction {
+        /// Current id.
+        from: String,
+        /// New id.
+        to: String,
+    },
+    /// Removes a function that no call names, with its body.
+    RemoveFunction(String),
+    /// Adds a port after the ports of one side of a function. A function that gains a second output first names the
+    /// port on every bare link to each of its calls.
+    AddFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+        /// Type of the port.
+        value_type: ValueType,
+    },
+    /// Renames a port of a function, the `fn.input` or `fn.output` nodes that name it, and each call's input or each
+    /// reader of each call's output.
+    RenameFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Current name.
+        from: String,
+        /// New name.
+        to: String,
+    },
+    /// Sets the type of a port of a function.
+    SetFunctionPortType {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+        /// New type.
+        value_type: ValueType,
+    },
+    /// Removes a port of a function that no body node names and nothing reads. A removed input leaves every call.
+    RemoveFunctionPort {
+        /// Id of the function.
+        function: String,
+        /// Side of the port.
+        side: PortSide,
+        /// Name of the port.
+        port: String,
+    },
+    /// Moves nodes of a body, with every node inside them, into a new function, and puts a call in their place. Each
+    /// value they read from outside becomes an input, and each output a node outside reads becomes an output.
+    MakeFunction {
+        /// Body that holds the nodes.
+        scope: Scope,
+        /// Nodes to move. A node inside a region that moves stays in that region.
+        nodes: Vec<NodeId>,
+        /// Id of the new function.
+        id: String,
+    },
+    /// Replaces a call with a copy of its function's body, wired to the call's inputs and readers.
+    Ungroup {
+        /// Body that holds the call.
+        scope: Scope,
+        /// The call.
+        node: NodeId,
+    },
+    /// Copies a function of another model file, and every function it calls, into the file with fresh node ids, and
+    /// records where each came from.
+    ImportFunction {
+        /// Text of the model file to import from.
+        text: String,
+        /// Name of that file, which the origin records.
+        source: String,
+        /// Id of the function in that file.
+        function: String,
+        /// Id the function takes in this file, `None` to keep its own. The functions it calls keep theirs.
+        id: Option<String>,
+    },
+}
+
+/// Reason an edit command is refused. A refused command changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EditError {
+    /// The command names something the document does not hold.
+    Missing(String),
+    /// The command breaks a rule of the document's structure, such as a duplicate id.
+    Invalid(String),
+    /// A delete of something that other tables still name.
+    Referenced {
+        /// What the command would delete.
+        subject: String,
+        /// Each place that names it.
+        references: Vec<String>,
+    },
+    /// A paste of text that is not a graph file.
+    Paste(GraphFileError),
+    /// An import from text that is not a graph file.
+    Import(GraphFileError),
+}
+
+impl fmt::Display for EditError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing(message) | Self::Invalid(message) => f.write_str(message),
+            Self::Referenced { subject, references } => {
+                write!(f, "{subject} is still referenced by {}", references.join(", "))
+            }
+            Self::Paste(error) => write!(f, "the pasted text is not a graph: {error}"),
+            Self::Import(error) => write!(f, "the file to import from is not a graph: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
+
+/// A graph under edit: its document, its editor region, and the source of the random keys it mints.
+#[derive(Clone)]
+pub struct GraphBuilder {
+    document: GraphDocument,
+    editor: EditorRegion,
+    /// Stream new keys come from.
+    keys: KeyStream,
+}
+
+/// Prints the graph's id and the number of passes.
+impl fmt::Debug for GraphBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GraphBuilder")
+            .field("id", &self.document.id)
+            .field("passes", &self.document.passes.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl GraphBuilder {
+    /// Returns a builder of an empty graph with the model id `id` over `world`.
+    pub fn new(id: &str, world: World) -> Self {
+        Self::from_document(GraphDocument::new(id, world), None)
+    }
+
+    /// Returns a builder of the graph `file` holds.
+    pub fn from_file(file: &GraphFile) -> Self {
+        Self::from_document(file.document().clone(), file.editor())
+    }
+
+    /// Returns a builder of `document` and `editor`.
+    pub fn from_document(document: GraphDocument, editor: Option<&EditorRegion>) -> Self {
+        Self {
+            document,
+            editor: editor.cloned().unwrap_or_default(),
+            keys: KeyStream::from_entropy(),
+        }
+    }
+
+    /// Returns the builder with its keys drawn from `seed`, so a test mints the same keys every run.
+    pub fn with_key_seed(mut self, seed: u64) -> Self {
+        self.keys = KeyStream::seeded(seed);
+        self
+    }
+
+    /// Document under edit.
+    pub fn document(&self) -> &GraphDocument {
+        &self.document
+    }
+
+    /// Editor region under edit.
+    pub fn editor(&self) -> &EditorRegion {
+        &self.editor
+    }
+
+    /// Returns the canonical text of the graph and its editor region.
+    pub fn to_toml(&self) -> String {
+        let mut text = crate::writer::semantic_text(&self.document);
+        text.push('\n');
+        text.push_str(&self.editor.to_text());
+        text
+    }
+
+    /// Returns the graph as a file, read back from its canonical text.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`GraphFile::parse`] for a document whose canonical text does not read back.
+    pub fn to_file(&self) -> Result<GraphFile, GraphFileError> {
+        GraphFile::from_document(&self.document, Some(&self.editor))
+    }
+
+    /// Runs `command`, and returns the ids of the nodes it makes, in id order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EditError`] for a command the document refuses. A refused command changes nothing.
+    pub fn apply(&mut self, command: EditCommand) -> Result<Vec<NodeId>, EditError> {
+        let mut draft = self.clone();
+        let made = draft.run(command)?;
+        *self = draft;
+        Ok(made)
+    }
+
+    /// Adds a node of kind `op` at the top of `scope`, sets `config` and `inputs`, and returns its id.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of the [`EditCommand::AddNode`], [`EditCommand::SetConfig`], [`EditCommand::Connect`],
+    /// [`EditCommand::SetLiteral`] and [`EditCommand::BindParam`] it runs. On an error nothing changes.
+    pub fn add_node(
+        &mut self,
+        scope: &Scope,
+        op: &str,
+        config: &[(&str, ConfigValue)],
+        inputs: &[(&str, InputValue)],
+    ) -> Result<NodeId, EditError> {
+        let mut draft = self.clone();
+        let made = draft.run(EditCommand::AddNode {
+            scope: scope.clone(),
+            op: op.to_owned(),
+            region: None,
+            pos: None,
+        })?;
+        let node = *made
+            .first()
+            .ok_or_else(|| EditError::Invalid("the node was not made".to_owned()))?;
+        for (key, value) in config {
+            draft.run(EditCommand::SetConfig {
+                scope: scope.clone(),
+                node,
+                key: (*key).to_owned(),
+                value: Some(value.clone()),
+            })?;
+        }
+        for (port, value) in inputs {
+            let port = (*port).to_owned();
+            draft.run(match value.clone() {
+                InputValue::Link(source) => EditCommand::Connect {
+                    scope: scope.clone(),
+                    node,
+                    port,
+                    source,
+                },
+                InputValue::Literal(literal) => EditCommand::SetLiteral {
+                    scope: scope.clone(),
+                    node,
+                    port,
+                    literal,
+                },
+                InputValue::Param(param) => EditCommand::BindParam {
+                    scope: scope.clone(),
+                    node,
+                    port,
+                    param,
+                },
+            })?;
+        }
+        *self = draft;
+        Ok(node)
+    }
+
+    /// Runs `command` on the builder in place. The caller keeps a copy to restore on an error.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "every command is named, so a new command is a compile error until it has an arm"
+    )]
+    fn run(&mut self, command: EditCommand) -> Result<Vec<NodeId>, EditError> {
+        match command {
+            EditCommand::AddNode { scope, op, region, pos } => self.add(&scope, &op, region, pos).map(|id| vec![id]),
+            EditCommand::RemoveNode { scope, node } => self.remove(&scope, node).map(|()| Vec::new()),
+            EditCommand::Connect {
+                scope,
+                node,
+                port,
+                source,
+            } => {
+                self.require_node(&scope, source.node)?;
+                self.set_input(&scope, node, &port, InputValue::Link(source))
+            }
+            EditCommand::Disconnect { scope, node, port } => {
+                let target = self.node_mut(&scope, node)?;
+                target
+                    .inputs
+                    .remove(&port)
+                    .map(|_| Vec::new())
+                    .ok_or_else(|| EditError::Missing(format!("node {node} has no input `{port}`")))
+            }
+            EditCommand::SetLiteral {
+                scope,
+                node,
+                port,
+                literal,
+            } => {
+                if !is_finite(&literal) {
+                    return Err(EditError::Invalid(format!("a literal of `{port}` must be finite")));
+                }
+                self.set_input(&scope, node, &port, InputValue::Literal(literal))
+            }
+            EditCommand::BindParam {
+                scope,
+                node,
+                port,
+                param,
+            } => {
+                if !self.document.params.iter().any(|known| known.id() == param) {
+                    return Err(EditError::Missing(format!("the file has no parameter '{param}'")));
+                }
+                self.set_input(&scope, node, &port, InputValue::Param(param))
+            }
+            EditCommand::SetConfig {
+                scope,
+                node,
+                key,
+                value,
+            } => {
+                if !is_port_segment(&key) {
+                    return Err(EditError::Invalid(format!("'{key}' is not a configuration key")));
+                }
+                self.require_node(&scope, node)?;
+                self.name_bare_links(&scope, node);
+                let target = self.node_mut(&scope, node)?;
+                match value {
+                    Some(value) => target.config.insert(key, value),
+                    None => target.config.remove(&key),
+                };
+                Ok(Vec::new())
+            }
+            EditCommand::SetRegion { scope, node, region } => self.set_region(&scope, node, region),
+            command @ (EditCommand::MoveRegionOutput { .. }
+            | EditCommand::AddAccumulator { .. }
+            | EditCommand::SetAccumulator { .. }
+            | EditCommand::RenameAccumulator { .. }
+            | EditCommand::RemoveAccumulator { .. }
+            | EditCommand::WrapInRepeat { .. }) => self.run_region(command),
+            EditCommand::Move { node, pos } => {
+                if !self.all_nodes().any(|known| known.id == node) {
+                    return Err(EditError::Missing(format!("the file has no node {node}")));
+                }
+                self.editor.set_node_pos(node, pos);
+                Ok(Vec::new())
+            }
+            EditCommand::Frame {
+                scope,
+                title,
+                color,
+                members,
+            } => {
+                for member in &members {
+                    self.require_node(&scope, *member)?;
+                }
+                self.editor.add_frame(&scope.canvas(), &title, &color, &members);
+                Ok(Vec::new())
+            }
+            EditCommand::Paste { scope, text, offset } => self.paste(&scope, &text, offset),
+            command @ (EditCommand::AddFunction(_)
+            | EditCommand::RenameFunction { .. }
+            | EditCommand::RemoveFunction(_)
+            | EditCommand::AddFunctionPort { .. }
+            | EditCommand::RenameFunctionPort { .. }
+            | EditCommand::SetFunctionPortType { .. }
+            | EditCommand::RemoveFunctionPort { .. }
+            | EditCommand::MakeFunction { .. }
+            | EditCommand::Ungroup { .. }
+            | EditCommand::ImportFunction { .. }) => self.run_function(command),
+            command @ (EditCommand::AddCategory(_)
+            | EditCommand::AddPalette(_)
+            | EditCommand::AddLane(_)
+            | EditCommand::RenameLane { .. }
+            | EditCommand::RemoveLane(_)
+            | EditCommand::AddVariant { .. }
+            | EditCommand::RenameVariant { .. }
+            | EditCommand::SetVariantColor { .. }
+            | EditCommand::RemoveVariant { .. }
+            | EditCommand::AddParam(_)
+            | EditCommand::RenameParam { .. }
+            | EditCommand::RemoveParam(_)
+            | EditCommand::AddStat(_)
+            | EditCommand::RenameStat { .. }
+            | EditCommand::RemoveStat(_)
+            | EditCommand::AddAction(_)
+            | EditCommand::RenameAction { .. }
+            | EditCommand::RemoveAction(_)
+            | EditCommand::AddPass(_)
+            | EditCommand::RenamePass { .. }
+            | EditCommand::RemovePass(_)
+            | EditCommand::MovePass { .. }
+            | EditCommand::SetPassEnabled { .. }
+            | EditCommand::SetParam(_)
+            | EditCommand::SetWorld(_)) => self.run_declaration(command).map(|()| Vec::new()),
+        }
+    }
+
+    /// Returns the body of `scope`.
+    fn body(&self, scope: &Scope) -> Result<&NodeBody, EditError> {
+        match scope {
+            Scope::Pass(id) => self
+                .document
+                .passes
+                .iter()
+                .find(|pass| pass.id == *id)
+                .map(|pass| &pass.body),
+            Scope::Function(id) => self
+                .document
+                .functions
+                .iter()
+                .find(|function| function.id == *id)
+                .map(|function| &function.body),
+        }
+        .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))
+    }
+
+    /// Returns the body of `scope` for writing.
+    fn body_mut(&mut self, scope: &Scope) -> Result<&mut NodeBody, EditError> {
+        match scope {
+            Scope::Pass(id) => self
+                .document
+                .passes
+                .iter_mut()
+                .find(|pass| pass.id == *id)
+                .map(|pass| &mut pass.body),
+            Scope::Function(id) => self
+                .document
+                .functions
+                .iter_mut()
+                .find(|function| function.id == *id)
+                .map(|function| &mut function.body),
+        }
+        .ok_or_else(|| EditError::Missing(format!("the file has no {scope}")))
+    }
+
+    /// Returns an error unless `scope` holds node `node`.
+    fn require_node(&self, scope: &Scope, node: NodeId) -> Result<(), EditError> {
+        self.body(scope)?
+            .node(node)
+            .map(|_| ())
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {node}")))
+    }
+
+    /// Returns node `node` of `scope` for writing.
+    fn node_mut(&mut self, scope: &Scope, node: NodeId) -> Result<&mut Node, EditError> {
+        let missing = EditError::Missing(format!("the {scope} has no node {node}"));
+        self.body_mut(scope)?
+            .nodes
+            .iter_mut()
+            .find(|known| known.id == node)
+            .ok_or(missing)
+    }
+
+    /// Returns every node of the document, in passes and functions.
+    fn all_nodes(&self) -> impl Iterator<Item = &Node> {
+        self.document
+            .passes
+            .iter()
+            .map(|pass| &pass.body)
+            .chain(self.document.functions.iter().map(|function| &function.body))
+            .flat_map(|body| body.nodes.iter())
+    }
+
+    /// Sets input `port` of `node` to `value`.
+    fn set_input(
+        &mut self,
+        scope: &Scope,
+        node: NodeId,
+        port: &str,
+        value: InputValue,
+    ) -> Result<Vec<NodeId>, EditError> {
+        if !port.split('.').all(is_port_segment) {
+            return Err(EditError::Invalid(format!("'{port}' is not a port name")));
+        }
+        self.node_mut(scope, node)?.inputs.insert(port.to_owned(), value);
+        Ok(Vec::new())
+    }
+
+    /// Returns a fresh node id, and records the next one in the editor region.
+    fn mint_id(&mut self) -> Result<NodeId, EditError> {
+        let highest = self.all_nodes().map(|node| node.id.number()).max().unwrap_or(0);
+        let next = highest
+            .checked_add(1)
+            .map(|after| after.max(self.editor.next_id().unwrap_or(0)))
+            .and_then(NodeId::new)
+            .ok_or_else(|| EditError::Invalid("the file has no node number left".to_owned()))?;
+        self.editor.ensure_version();
+        self.editor.set_next_id(next.number().saturating_add(1));
+        Ok(next)
+    }
+
+    /// Returns a fresh random key, distinct from every key in the file.
+    fn mint_key(&mut self) -> u32 {
+        let taken: BTreeSet<i64> = self
+            .all_nodes()
+            .filter_map(|node| node.config.get("key").and_then(ConfigValue::as_integer))
+            .collect();
+        self.keys.next_key_not_in(|key| taken.contains(&i64::from(key)))
+    }
+
+    /// Adds a node of kind `op` to `scope`.
+    fn add(
+        &mut self,
+        scope: &Scope,
+        op: &str,
+        region: Option<NodeId>,
+        pos: Option<[f64; 2]>,
+    ) -> Result<NodeId, EditError> {
+        let def = lookup(op, self.document.library)
+            .ok_or_else(|| EditError::Missing(format!("node library {} has no kind `{op}`", self.document.library)))?;
+        self.body(scope)?;
+        if let Some(region) = region {
+            self.require_region(scope, region)?;
+        }
+        let id = self.mint_id()?;
+        let mut node = Node::new(id, op);
+        node.region = region;
+        if def.config.iter().any(|key| key.name == "key") {
+            node.config
+                .insert("key".to_owned(), ConfigValue::Integer(i64::from(self.mint_key())));
+        }
+        self.body_mut(scope)?.nodes.push(node);
+        if def.has_effect(Effect::DrawsStream)
+            && let Scope::Pass(pass) = scope
+            && let Some(pass) = self.document.passes.iter_mut().find(|known| known.id == *pass)
+        {
+            pass.draw_order.push(id);
+        }
+        if let Some(pos) = pos {
+            self.editor.set_node_pos(id, pos);
+        }
+        Ok(id)
+    }
+
+    /// Returns an error unless `region` is a region node of `scope`.
+    fn require_region(&self, scope: &Scope, region: NodeId) -> Result<(), EditError> {
+        let node = self
+            .body(scope)?
+            .node(region)
+            .ok_or_else(|| EditError::Missing(format!("the {scope} has no node {region}")))?;
+        let is_region = lookup(&node.op, self.document.library).is_some_and(|def| def.is_region);
+        if is_region {
+            Ok(())
+        } else {
+            Err(EditError::Invalid(format!("node {region} is not a region")))
+        }
+    }
+
+    /// Removes node `node` of `scope`.
+    fn remove(&mut self, scope: &Scope, node: NodeId) -> Result<(), EditError> {
+        self.require_node(scope, node)?;
+        let readers: Vec<String> = self
+            .document
+            .stats
+            .iter()
+            .filter(|stat| stat.from.node == node && matches!(scope, Scope::Pass(_)))
+            .map(|stat| format!("the statistic '{}'", stat.label))
+            .collect();
+        if !readers.is_empty() {
+            return Err(EditError::Referenced {
+                subject: format!("node {node}"),
+                references: readers,
+            });
+        }
+        let body = self.body_mut(scope)?;
+        let parent = body.node(node).and_then(|removed| removed.region);
+        body.nodes.retain(|known| known.id != node);
+        for other in &mut body.nodes {
+            other
+                .inputs
+                .retain(|_, value| !matches!(value, InputValue::Link(link) if link.node == node));
+            if other.region == Some(node) {
+                other.region = parent;
+            }
+        }
+        if let Scope::Pass(pass) = scope
+            && let Some(pass) = self.document.passes.iter_mut().find(|known| known.id == *pass)
+        {
+            pass.draw_order.retain(|known| *known != node);
+        }
+        self.editor.remove_node(node);
+        Ok(())
+    }
+
+    /// Moves `node` of `scope` into `region`, first naming the port on each bare link from the node's subtree to a
+    /// region it moves under.
+    fn set_region(&mut self, scope: &Scope, node: NodeId, region: Option<NodeId>) -> Result<Vec<NodeId>, EditError> {
+        self.require_node(scope, node)?;
+        if let Some(region) = region {
+            self.require_region(scope, region)?;
+            let body = self.body(scope)?;
+            let mut path = body.region_path(region);
+            if region == node || path.contains(&node) {
+                return Err(EditError::Invalid(format!(
+                    "node {node} cannot be placed inside itself"
+                )));
+            }
+            path.insert(0, region);
+            self.name_links_into_path(scope, node, &path);
+        }
+        self.node_mut(scope, node)?.region = region;
+        Ok(Vec::new())
+    }
+
+    /// Adds `pass` after the last pass of its stage, which keeps the passes in stack order.
+    fn insert_pass(&mut self, pass: Pass) {
+        let stage: PassStage = pass.stage;
+        let position = self
+            .document
+            .passes
+            .iter()
+            .rposition(|known| known.stage <= stage)
+            .map_or(0, |last| last + 1);
+        self.document.passes.insert(position, pass);
+    }
+}
+
+/// Returns whether every float of `literal` is finite.
+fn is_finite(literal: &Literal) -> bool {
+    match literal {
+        Literal::F32(number) => number.is_finite(),
+        Literal::F64(number) => number.is_finite(),
+        Literal::Vec2F(pair) => pair.iter().all(|number| number.is_finite()),
+        _ => true,
+    }
+}

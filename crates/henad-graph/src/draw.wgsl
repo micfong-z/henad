@@ -1,0 +1,12 @@
+#define_import_path henad_graph::draw
+#import henad::rng::pcg4d
+
+// Counter-based draws of a graph model, the twin of draw.rs in henad-graph.
+//
+// The core is two rounds of `pcg4d` over `[k, e, t, (i << 4) | (s >> 2)]`, of which sub-draw `s` takes word `s & 3`.
+
+// Bits of sub-draw `sub_draw` at key word `key_word`, element `element`, tick `tick` and iteration word `iteration`.
+fn draw_core(key_word: u32, element: u32, tick: u32, iteration: u32, sub_draw: u32) -> u32 {
+    let words = pcg4d(pcg4d(vec4<u32>(key_word, element, tick, (iteration << 4u) | (sub_draw >> 2u))));
+    return words[sub_draw & 3u];
+}

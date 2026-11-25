@@ -1,0 +1,304 @@
+# A grid graph with every kind of declaration a pass stack reads, in the spelling a person might write by hand.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_sample"
+name = "Sample"
+description = "A graph that \"quotes\" and\nbreaks a line."
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_sample_gpu"
+
+[grid]
+width = 64
+boundary = "bounded"
+
+[[category]]
+id = "health"
+variants = [
+  { name = "S", label = "Susceptible", color = [0, 122, 245] },
+  { name = "I", color = [228, 55, 72, 200] },
+]
+
+[[palette]]
+id = "ramp"
+colors = [[0, 0, 0], [255, 255, 255, 128]]
+
+[[lane]]
+id = "health"
+domain = "cells"
+type = "cat:health"
+
+[[lane]]
+id = "age"
+domain = "cells"
+type = "u32"
+storage = "u16"
+
+[[lane]]
+id = "drift"
+domain = "cells"
+type = "vec2f"
+initial = { vec2f = [0.5, -1] }
+
+[[counter]]
+id = "born"
+
+[[param]]
+id = "trials"
+kind = "u32"
+min = 0
+max = 32
+default = 4
+
+[[param]]
+id = "rate"
+label = "Rate"
+kind = "f32"
+min = 0
+max = 1.0
+default = 0.1
+step = 0.01
+format = "percent"
+
+[[param]]
+id = "enabled_steps"
+kind = "bool"
+default = true
+
+[[param]]
+id = "mode"
+kind = "choice"
+options = ["Plain one", "Other.dotted"]
+default = "Other.dotted"
+
+[[stat]]
+label = "Susceptible"
+from = "n31.S"
+color = [0, 122, 245]
+
+[[action]]
+id = "reseed"
+label = "Reseed"
+runs = ["seed"]
+
+[[action]]
+id = "nudge"
+label = "Nudge"
+
+[[function]]
+id = "halve"
+kind = "pure"
+
+[[function.input]]
+port = "value"
+type = "f32"
+
+[[function.output]]
+port = "value"
+type = "f32"
+
+[[function.node]]
+id = "n71"
+op = "fn.output"
+config.port = "value"
+in.value = "n70"
+
+[[function.node]]
+id = "n70"
+op = "math.mul"
+in.a = "n72"
+in.b = { f32 = 0.5 }
+
+[[function.node]]
+id = "n72"
+op = "fn.input"
+config.port = "value"
+
+# The tick pass comes first on purpose: the writer orders passes by stage.
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = { param = "enabled_steps" }
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "health"
+
+# Nested regions: a Repeat around a Repeat.
+[[pass.node]]
+id = "n20"
+op = "region.repeat"
+config.max = 16
+config.acc = [
+  { name = "hit", type = "bool", combine = "or" },
+  { combine = "carry", name = "position", type = "vec2f" },
+]
+in.count = { param = "trials" }
+in.when = { bool = true }
+in.init.hit = { bool = false }
+in.init.position = "n19"
+
+[[pass.node]]
+id = "n19"
+op = "lane.get"
+config.lane = "drift"
+
+[[pass.node]]
+id = "n21"
+op = "region.repeat"
+region = "n20"
+config.max = 4
+config.acc = [{ name = "sum", type = "u32", combine = "sum" }]
+in.count = "n20.k"
+in.when = { bool = true }
+in.init.sum = { u32 = 0 }
+
+[[pass.node]]
+id = "n22"
+op = "rand.chance"
+region = "n21"
+config.key = 2134536642
+in.p = { param = "rate" }
+
+[[pass.node]]
+id = "n23"
+op = "region.put"
+region = "n21"
+config.acc = "sum"
+in.value = "n21.k"
+in.when = "n22"
+
+[[pass.node]]
+id = "n24"
+op = "region.put"
+region = "n20"
+config.acc = "hit"
+in.value = "n21.sum"
+
+[[pass.node]]
+id = "n25"
+op = "region.put"
+region = "n20"
+config.acc = "position"
+in.value = "n20.prev.position"
+
+[[pass.node]]
+id = "n26"
+op = "cat.switch"
+config.category = "health"
+in.select = "n10"
+in.case.S = "n20.hit"
+in.case.I = { cat = "health.I" }
+
+[[pass.node]]
+id = "n27"
+op = "cat.transition"
+config.category = "health"
+config.rules = [
+  { phase = 0, to = "I", from = "S", id = "infect" },
+  { id = "recover", from = "I", to = "S", phase = 1 },
+]
+in.state = "n26"
+in.rule.infect.when = { bool = true }
+in.rule.recover.when = { bool = false }
+in.rule.recover.to = { cat = "health.S" }
+
+[[pass.node]]
+id = "n28"
+op = "fn.call"
+config.function = "halve"
+config.key = 7
+in.init = { f32 = 1 }
+
+[[pass.node]]
+id = "n29"
+op = "lane.set"
+config.lane = "health"
+in.value = "n27.next"
+
+[[pass]]
+id = "seed"
+stage = "init"
+kind = "map"
+domain = "cells"
+draw_order = ["n3", "n2"]
+
+[[pass.node]]
+id = "n2"
+op = "stream.bits"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n3"
+op = "stream.bits"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n4"
+op = "rng.lane_seed"
+config.salt = "0x8040e00294134cd9"
+config.flags = [true, false]
+config.ratios = [0.5, 2.0]
+in.seed = { u64 = "0xDEADBEEFCAFE1234" }
+in.wide = { f64 = 0.407 }
+in.signed = { i32 = -1 }
+in.size = { vec2u = [1, 2] }
+in.step = { vec2i = [0, -1] }
+in.mode = { option = "mode.Other.dotted" }
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "health"
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_by"
+config.category = "health"
+in.value = "n30"
+
+[[pass]]
+id = "nudge_cells"
+stage = "action"
+action = "nudge"
+kind = "map"
+domain = "cells"
+
+[[pass.node]]
+id = "n40"
+op = "ctx.press_seed"
+
+[editor]
+version = 1
+next_id = 73
+future_key = { deep = [1, 2.5, "x"] }
+node.n10 = { pos = [40.4, 60.6], label = "This cell" }
+node.n2 = { pos = [1, -0.2], collapsed = true, unknown_key = "kept" }
+view."pass.step" = { zoom = 1.0, pan = [0.25, 0.0] }
+function.halve.origin = { name = "Halve", hash = "0x12" }
+
+[[editor.frame]]
+scope = "pass.step"
+title = "Read neighbours"
+color = "blue"
+members = ["n10", "n20"]
+
+[[editor.note]]
+scope = "pass.step"
+pos = [10.6, 20.2]
+text = "A note."

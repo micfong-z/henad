@@ -1,0 +1,418 @@
+# The exact port of the stock gpu_sir as a graph model: an `rng` lane advanced by `pcg_hash` every tick, as the stock
+# step.wgsl does, so the graph equals the stock model every tick on one device.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_gpu_sir"
+name = "SIR Epidemic (GPU)"
+description = "Classic SIR compartmental model on a toroidal grid with Moore neighborhood, stepped entirely on the GPU"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_gpu_sir"
+name = "SIR Epidemic (GPU)"
+description = "Classic SIR compartmental model on a toroidal grid with Moore neighborhood, stepped entirely on the GPU"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "health"
+variants = [
+  { name = "S", label = "Susceptible", color = [0, 122, 245, 255] },
+  { name = "I", label = "Infected", color = [228, 55, 72, 255] },
+  { name = "R", label = "Recovered", color = [128, 128, 128, 255] },
+]
+
+[[lane]]
+id = "health"
+domain = "cells"
+type = "cat:health"
+storage = "u8"
+initial = { cat = "health.S" }
+
+[[lane]]
+id = "rng"
+domain = "cells"
+type = "u32"
+storage = "u32"
+initial = { u32 = 0 }
+
+[[param]]
+id = "infection_rate"
+label = "Infection Rate"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.3
+step = 0.01
+
+[[param]]
+id = "recovery_rate"
+label = "Recovery Rate"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.05
+step = 0.01
+
+[[param]]
+id = "initial_infected_pct"
+label = "Initial Infected"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.01
+step = 0.001
+format = "percent"
+
+[[stat]]
+label = "Susceptible"
+from = "n41.S"
+color = [0, 122, 245, 255]
+
+[[stat]]
+label = "Infected"
+from = "n41.I"
+color = [228, 55, 72, 255]
+
+[[stat]]
+label = "Recovered"
+from = "n41.R"
+color = [128, 128, 128, 255]
+
+[[action]]
+id = "seed_outbreak"
+label = "Seed outbreak"
+runs = []
+
+[[pass]]
+id = "seed"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+draw_order = ["n2"]
+
+[[pass.node]]
+id = "n1"
+op = "rng.threshold"
+in.p = { param = "initial_infected_pct" }
+
+[[pass.node]]
+id = "n2"
+op = "stream.bits"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n3"
+op = "cmp.lt"
+in.a = "n2"
+in.b = "n1"
+
+[[pass.node]]
+id = "n4"
+op = "logic.select"
+in.cond = "n3"
+in.if_true = { cat = "health.I" }
+in.if_false = { cat = "health.S" }
+
+[[pass.node]]
+id = "n5"
+op = "lane.set"
+config.lane = "health"
+in.value = "n4"
+
+[[pass.node]]
+id = "n6"
+op = "rng.lane_seed"
+config.salt = "0x8040e00294134cd9"
+
+[[pass.node]]
+id = "n7"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n8"
+op = "bits.xor"
+in.a = "n6"
+in.b = "n7"
+
+[[pass.node]]
+id = "n9"
+op = "rng.hash"
+in.x = "n8"
+
+[[pass.node]]
+id = "n10"
+op = "lane.set"
+config.lane = "rng"
+in.value = "n9"
+
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "health"
+
+[[pass.node]]
+id = "n21"
+op = "grid.count"
+config.lane = "health"
+config.neighborhood = "moore"
+config.include_center = false
+in.value = { cat = "health.I" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n22"
+op = "lane.get"
+config.lane = "rng"
+
+[[pass.node]]
+id = "n23"
+op = "rng.hash"
+in.x = "n22"
+
+[[pass.node]]
+id = "n24"
+op = "lane.set"
+config.lane = "rng"
+in.value = "n23"
+
+[[pass.node]]
+id = "n25"
+op = "rng.to_float"
+in.bits = "n23"
+in.max = { f32 = 1.0 }
+
+[[pass.node]]
+id = "n26"
+op = "math.sub"
+in.a = { f32 = 1.0 }
+in.b = { param = "infection_rate" }
+
+[[pass.node]]
+id = "n27"
+op = "conv.to_f32"
+in.a = "n21"
+
+[[pass.node]]
+id = "n28"
+op = "math.pow"
+in.base = "n26"
+in.exponent = "n27"
+
+[[pass.node]]
+id = "n29"
+op = "cmp.ge"
+in.a = "n25"
+in.b = "n28"
+
+[[pass.node]]
+id = "n30"
+op = "cmp.gt"
+in.a = "n21"
+in.b = { u32 = 0 }
+
+[[pass.node]]
+id = "n31"
+op = "logic.and"
+in.a = "n30"
+in.b = "n29"
+
+[[pass.node]]
+id = "n32"
+op = "cmp.lt"
+in.a = "n25"
+in.b = { param = "recovery_rate" }
+
+[[pass.node]]
+id = "n33"
+op = "logic.select"
+in.cond = "n31"
+in.if_true = { cat = "health.I" }
+in.if_false = { cat = "health.S" }
+
+[[pass.node]]
+id = "n34"
+op = "logic.select"
+in.cond = "n32"
+in.if_true = { cat = "health.R" }
+in.if_false = { cat = "health.I" }
+
+[[pass.node]]
+id = "n35"
+op = "cat.switch"
+config.category = "health"
+in.select = "n20"
+in.case.S = "n33"
+in.case.I = "n34"
+in.case.R = "n20"
+
+[[pass.node]]
+id = "n36"
+op = "lane.set"
+config.lane = "health"
+in.value = "n35"
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n40"
+op = "lane.get"
+config.lane = "health"
+
+[[pass.node]]
+id = "n41"
+op = "stat.count_by"
+config.category = "health"
+in.value = "n40"
+
+[[pass]]
+id = "outbreak"
+stage = "action"
+action = "seed_outbreak"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n50"
+op = "lane.get"
+config.lane = "health"
+
+[[pass.node]]
+id = "n51"
+op = "cmp.eq"
+in.a = "n50"
+in.b = { cat = "health.S" }
+
+[[pass.node]]
+id = "n52"
+op = "ctx.press_seed"
+
+[[pass.node]]
+id = "n53"
+op = "ctx.index"
+
+[[pass.node]]
+id = "n54"
+op = "rng.hash"
+in.x = "n53"
+
+[[pass.node]]
+id = "n55"
+op = "bits.xor"
+in.a = "n52"
+in.b = "n54"
+
+[[pass.node]]
+id = "n56"
+op = "rng.hash"
+in.x = "n55"
+
+[[pass.node]]
+id = "n57"
+op = "rng.threshold"
+in.p = { param = "initial_infected_pct" }
+
+[[pass.node]]
+id = "n58"
+op = "rng.below"
+in.bits = "n56"
+in.threshold = "n57"
+
+[[pass.node]]
+id = "n59"
+op = "logic.and"
+in.a = "n51"
+in.b = "n58"
+
+[[pass.node]]
+id = "n60"
+op = "logic.select"
+in.cond = "n59"
+in.if_true = { cat = "health.I" }
+in.if_false = "n50"
+
+[[pass.node]]
+id = "n61"
+op = "lane.set"
+config.lane = "health"
+in.value = "n60"
+
+[editor]
+version = 1
+next_id = 62
+node.n1 = { pos = [40.0, 60.0] }
+node.n2 = { pos = [40.0, 160.0] }
+node.n3 = { pos = [260.0, 110.0] }
+node.n4 = { pos = [460.0, 110.0] }
+node.n5 = { pos = [660.0, 110.0] }
+node.n6 = { pos = [40.0, 300.0], label = "Rng lane seed" }
+node.n7 = { pos = [40.0, 400.0] }
+node.n8 = { pos = [260.0, 350.0] }
+node.n9 = { pos = [460.0, 350.0] }
+node.n10 = { pos = [660.0, 350.0] }
+node.n20 = { pos = [40.0, 40.0], label = "This cell" }
+node.n21 = { pos = [40.0, 160.0], label = "Infected neighbours" }
+node.n22 = { pos = [40.0, 300.0] }
+node.n23 = { pos = [240.0, 300.0], label = "Next word" }
+node.n24 = { pos = [440.0, 400.0] }
+node.n25 = { pos = [440.0, 300.0] }
+node.n26 = { pos = [240.0, 200.0] }
+node.n27 = { pos = [240.0, 120.0] }
+node.n28 = { pos = [440.0, 160.0], label = "Chance to stay safe" }
+node.n29 = { pos = [640.0, 220.0] }
+node.n30 = { pos = [440.0, 60.0] }
+node.n31 = { pos = [840.0, 160.0] }
+node.n32 = { pos = [640.0, 340.0] }
+node.n33 = { pos = [1040.0, 160.0] }
+node.n34 = { pos = [1040.0, 320.0] }
+node.n35 = { pos = [1240.0, 120.0] }
+node.n36 = { pos = [1440.0, 120.0] }
+node.n40 = { pos = [40.0, 40.0] }
+node.n41 = { pos = [260.0, 40.0] }
+node.n50 = { pos = [40.0, 40.0] }
+node.n51 = { pos = [260.0, 40.0] }
+node.n52 = { pos = [40.0, 160.0] }
+node.n53 = { pos = [40.0, 260.0] }
+node.n54 = { pos = [240.0, 260.0] }
+node.n55 = { pos = [440.0, 200.0] }
+node.n56 = { pos = [640.0, 200.0] }
+node.n57 = { pos = [640.0, 320.0] }
+node.n58 = { pos = [840.0, 250.0] }
+node.n59 = { pos = [1040.0, 120.0] }
+node.n60 = { pos = [1240.0, 120.0] }
+node.n61 = { pos = [1440.0, 120.0] }
+view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }
+
+[[editor.frame]]
+scope = "pass.step"
+title = "Advance the cell's stream"
+color = "purple"
+members = ["n22", "n23", "n24", "n25"]
+
+[[editor.frame]]
+scope = "pass.step"
+title = "Decide"
+color = "gray"
+members = ["n26", "n27", "n28", "n29", "n30", "n31", "n32", "n33", "n34", "n35"]

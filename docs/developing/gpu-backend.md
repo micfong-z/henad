@@ -10,8 +10,10 @@ icon: material/expansion-card
 
 ```text
 gpu/
-  grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState
-  agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState
+  grid_engine.rs    GpuGridState<M>      GpuGridModel  -> SimState + GpuSimState, over GpuGridEngine
+  grid_spec.rs      GpuGridSpec          a grid model's declarations, held as values
+  agent_engine.rs   GpuAgentState<M>     GpuAgentModel -> SimState + GpuSimState, over GpuAgentEngine
+  agent_spec.rs     GpuAgentSpec         an agent model's declarations, held as values
   primitives/       spatial_hash, prefix_scan, reduce, readback, dispatch, pipeline
   grid_dims.wgsl    an entry point that brings henad::dims into the generated bindings, for Dims
   view/             display.rs (a texture layer), agents.rs (lane buffers drawn in place)
@@ -34,22 +36,45 @@ A GPU entry builds on whatever device the host provides, and the host learns fro
 `GpuGridState<M>` and `GpuAgentState<M>` mirror their `cpu/` namesakes.
 Each derives every buffer, layout, pipeline and bind group from what its model declares, and each implements both `SimState` and `GpuSimState`.
 
+The grid engine reads its model through a value.
+`GpuGridSpec` holds what a `GpuGridModel` declares: the id, the workgroup size, the buffer labels, each shader's source and binding declarations, and the stat series.
+The sources and binding names are `Cow`s, borrowed from the model's consts.
+The model's functions sit behind the `GridHooks` trait.
+The non-generic `GpuGridEngine` builds every wgpu object from a spec and implements both traits.
+`GpuGridState<M>` reads a spec from `M` at each build and forwards every call to the engine.
+Its `demand` and `max_storage_bindings` read a spec too, and the capacity check and the device request see the declarations the build sees.
+The engine computes the workgroups of each pass and the bytes of its buffers once, at construction.
+A step calls no hook, an action press calls one for its uniform block, and `stats` calls one for the values.
+
+The agent engine has the same shape.
+`GpuAgentSpec` holds what a `GpuAgentModel` declares, with the model's functions behind `AgentHooks`, the non-generic `GpuAgentEngine` builds every wgpu object from it, and `GpuAgentState<M>` reads a spec from `M` and forwards every call.
+Each pass of a spec also holds a `SideTable`, which names for each buffer the side that its reads and its writes reach.
+`GpuAgentState<M>` fills the tables with the orientation its model's shaders assume: a pass reads each current side and writes each next side, and an action reads and writes each current side.
+A model composed at run time can point a pass after a writer at the next side, and every double buffered buffer still swaps once, at the end of the step.
+
+The specs, the hooks, `ShaderSpec`, `EntryDeclarations`, `ModelEntry::from_gpu_grid_spec` and `ModelEntry::from_gpu_agent_spec` are public behind henad-compute's `runtime-wgsl` feature, for a crate that composes models at run time.
+Hand-written models never see them.
+
 `GpuSimState` is the extra interface a GPU model needs on top of `SimState`, and `GpuSimThread` drives the state through it.
 A host refers to it as `henad::runner::GpuSimState`.
 
 | Method | Role |
 |---|---|
 | `encode_steps` | Records `count` steps into an encoder, advancing the tick counter |
+| `submission_steps` | The most steps the next submission may hold, 64 unless the state measures its work on the device |
 | `encode_action` | Records one declared action's pass, without advancing the tick counter |
 | `encode_snapshot_passes` | Records the display and reduce passes, at snapshot cadence |
 | `encode_stats_passes` | Records the reduce passes alone, for a sample that draws nothing |
 | `begin_stats_readback` | Starts the async readback, right after the submission |
 | `poll_stats_readback` | Completes a pending readback, and waits for it when `block` is set |
 | `stats_readback_pending` | Whether a readback has started and not completed |
+| `read_fault` | Reads back a fault the model's shaders recorded and reports it, blocking on the GPU |
 | `view` | The layers the UI draws, cloned into every snapshot |
+| `fire_counts` | The fire counts of the latest completed readback, with the tick they counted |
+| `read_buffer` | The current side of one buffer as raw words, for a parity test or an export |
 
-Ping-ponged buffers are handled through a parity index plus two pre-built bind groups per side, flipped per tick, so no bind group is rebuilt while stepping.
-A buffer written in place gets one side, and `sides()` returns that same buffer twice.
+Ping-ponged buffers are handled through a parity index plus a pre-built bind group per side for each pass, flipped per tick, so no bind group is rebuilt while stepping.
+A buffer written in place gets one side, and `Sides::pick` returns that side at either parity.
 
 The engines bind a pass's buffers by the names its shader declares.
 henad-build reads each entry point's `@group(0)` declarations from the shader's own lines, in `binding_lines.rs`.
@@ -76,14 +101,15 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 
 :   A multi-level float sum over a population, for stats an `atomic<u32>` cannot hold.
     The model supplies only the leaf, and every level above it belongs to this file.
-    Levels pair in fixed order, which keeps the sum reproducible.
+    Levels pair in fixed order, to keep the sum reproducible.
 
 `readback.rs`
 
 :   Async readback of a handful of `u32` counters.
     Blocking on `map_async` right after submission would stall the sim thread at the display cadence and cap throughput at roughly one in-flight batch per frame.
     The map instead starts right after submission and completes on some later loop iteration.
-    A reported stat is then a few milliseconds stale, the same staleness the display already accepts.
+    The runner publishes a snapshot once its map has landed and before the next batch steps on, so the snapshot's stats and fire counts belong to its own tick.
+    On native the map lands while the runner waits for the batch, a wait it makes anyway.
     The float sums of `reduce.rs` travel through the same readback, reinterpreted as `f32` bits.
     The staging path moves only 4-byte words, and one path serves both element types.
 
@@ -99,8 +125,10 @@ The files here are the GPU counterparts of the data structures in `henad-core`.
 Steps go out `batch_size` at a time, split across submissions of at most 64 steps each.
 Every step is still its own compute pass, because wgpu only synchronises between passes and the ping-pong needs exactly that synchronisation.
 
-Display and reduce run once `SNAPSHOT_INTERVAL` has elapsed, and nothing else gates them.
+Display and reduce run once `SNAPSHOT_INTERVAL` has elapsed.
 The number of steps per snapshot is therefore emergent, and stays independent of batch size.
+In a capped run a batch holds the steps of one interval at the target rate, at most `batch_size` of them.
+A batch that holds the whole interval always ends in display and reduce, and a run at 1 to 60 ticks per second then publishes every tick.
 
 One batch is outstanding at a time.
 Left unbounded, egui's own submissions queue up behind a dozen batches of sim work, and then every frame pays for all of them.
@@ -108,6 +136,7 @@ Left unbounded, egui's own submissions queue up behind a dozen batches of sim wo
 `batch_size` is either fixed by the UI or chosen by adaptive control.
 Adaptive mode keeps an EMA of `time_per_step` and picks a size so that `batch_size * time_per_step` tracks a user-set target, 8 ms by default, half a 60fps frame.
 It runs off wall-clock time rather than GPU timestamps, and `TimestampQuery` stays diagnostic-only.
+A capped batch is timed up to the end of its work, and the wait for the next deadline stays out of the EMA.
 `MAX_BATCH_SIZE` bounds the output, because by the time a slowdown needs reacting to, an oversized batch is already committed.
 
 Submissions go on the same queue that egui renders on, using handles cloned from egui's render state.
@@ -115,7 +144,7 @@ wgpu serialises submissions to a queue and treats each submission as atomic from
 A torn frame cannot occur.
 The cost is up to one frame of staleness, which a sim stepping far faster than the refresh rate never shows.
 
-`GpuSimThread` takes the same `SimCommand` stream as `SimThread`, and accepts the commands that have no GPU analogue, such as a target rate, without acting on them.
+`GpuSimThread` takes the same `SimCommand` stream as `SimThread`, and accepts the commands that have no GPU analogue, such as a layout budget, without acting on them.
 A host can then hold one enum over the two runners instead of special-casing the GPU.
 The numbers with no CPU counterpart, the GPU time per step and the batch size, travel apart from the snapshot in `GpuStats`.
 
@@ -153,19 +182,19 @@ Everything else the device rejects falls to the scopes below.
 
 **Error scopes, around the build.**
 Left alone, wgpu's default handler panics on any error that no scope claims, and a bad uniform layout or an allocation the device has no memory for then ends the process.
-`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under every path that no scope covers, egui's own rendering included.
+`gpu::fault::catching_on` wraps model construction in scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the fallback for every path that no scope covers, egui's own rendering included.
 
 Error scopes are **thread-local**, and a scope pushed on the UI thread never sees what a sim thread does.
 The uncaptured-error sink covers that asymmetry.
 
 **The panic catch, around the run loop.**
-The run loop is wrapped once at thread start, outside the loop, which keeps the catch off the per-tick path.
+The run loop is wrapped once at thread start, outside the loop, to keep the catch off the per-tick path.
 See [the CPU backend](cpu-backend.md#faults) for the global fallback that sits alongside the thread-local record.
 
 ## Traps already handled
 
 Each of these failed silently or misleadingly once.
-The notes record why the current shape is load-bearing.
+The notes record why the current shape has to stay.
 
 **A timestamp stamped on an empty compute pass is never written.**
 The symptom is a `start` of 0 and an absurd elapsed time, an absolute GPU tick around 4e14 ns.

@@ -1,0 +1,234 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "sheet_boids"
+name = "Boids"
+purpose = "Flocking from three local rules. Look for scattered birds forming flocks that move as one."
+next_line = 9
+
+[world]
+made_of = "agents"
+width = 1000
+height = 1000
+edges = "wrap"
+
+[[agents]]
+id = "bird"
+name = "Bird"
+count = 50000
+max_count = 1000000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 2858012190
+
+[[agents.property]]
+id = "heading"
+name = "Heading"
+type = "heading"
+
+[[agents.property]]
+id = "velocity"
+name = "Velocity"
+type = "arrow"
+
+[agents.property.starts_as]
+rule = "value"
+key = 3616018435
+
+[agents.property.starts_as.value]
+kind = "random_direction"
+
+[agents.property.starts_as.value.length]
+kind = "random_number"
+low = { param = "min_speed" }
+high = { param = "max_speed" }
+
+[[parameter]]
+id = "visual_range"
+name = "Visual range"
+type = "number"
+min = 1
+max = 200
+default = 50
+
+[[parameter]]
+id = "protected_range"
+name = "Protected range"
+type = "number"
+min = 0.5
+max = 50
+default = 8
+
+[[parameter]]
+id = "separation"
+name = "Separation"
+type = "number"
+min = 0
+max = 2
+default = 0.05
+step = 0.01
+
+[[parameter]]
+id = "alignment"
+name = "Alignment"
+type = "number"
+min = 0
+max = 2
+default = 0.05
+step = 0.01
+
+[[parameter]]
+id = "cohesion"
+name = "Cohesion"
+type = "number"
+min = 0
+max = 0.01
+default = 0.0005
+step = 0.0001
+
+[[parameter]]
+id = "max_speed"
+name = "Max speed"
+type = "number"
+min = 1
+max = 50
+default = 15
+
+[[parameter]]
+id = "min_speed"
+name = "Min speed"
+type = "number"
+min = 0.5
+max = 20
+default = 3
+
+[[measure]]
+id = "average_speed"
+name = "Average speed"
+color = "#FFC107"
+rule = "average"
+over = "bird"
+
+[measure.value]
+kind = "calculate"
+formula = "length(my.velocity)"
+
+[[measure]]
+id = "average_velocity"
+name = "Average velocity"
+color = "#007AF5"
+rule = "average"
+over = "bird"
+value = { my = "velocity" }
+
+[color.bird]
+rule = "by_heading"
+
+[[button]]
+id = "randomise_headings"
+name = "Randomise headings"
+
+[[button.does]]
+rule = "run_once"
+card = "randomise_headings"
+
+# Each tick, every bird
+[[card]]
+id = "bird_tick"
+every = "bird"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4", "l5", "l6", "l7"]
+
+# Flockmates = look at birds within Visual range: average of their Velocity (average velocity), average of offset to them (centre)
+[card.line.l1]
+kind = "look_around"
+name = "Flockmates"
+around = "agents_within"
+agent_kind = "bird"
+distance = { param = "visual_range" }
+include_me = false
+summaries = [
+  { id = "average_velocity", name = "average velocity", summary = "average", value = { their = "velocity" } },
+  { id = "centre", name = "centre", summary = "average", value = { relation = "offset_to_them" } },
+]
+
+# Too close = look at birds within Protected range: total of offset away from them (push)
+[card.line.l2]
+kind = "look_around"
+name = "Too close"
+around = "agents_within"
+agent_kind = "bird"
+distance = { param = "protected_range" }
+include_me = false
+summaries = [
+  { id = "push", name = "push", summary = "total", value = { relation = "offset_away_from_them" } },
+]
+
+# Steer Velocity by Too close's push, strength Separation
+[card.line.l3]
+kind = "steer"
+property = "velocity"
+mode = "by"
+value = { result = "l2", part = "push" }
+strength = { param = "separation" }
+
+# Steer Velocity towards Flockmates' average velocity, strength Alignment
+[card.line.l4]
+kind = "steer"
+property = "velocity"
+mode = "towards"
+value = { result = "l1", part = "average_velocity" }
+strength = { param = "alignment" }
+
+# Steer Velocity by Flockmates' centre, strength Cohesion
+[card.line.l5]
+kind = "steer"
+property = "velocity"
+mode = "by"
+value = { result = "l1", part = "centre" }
+strength = { param = "cohesion" }
+
+# Keep Velocity's length between Min speed and Max speed
+[card.line.l6]
+kind = "keep_between"
+property = "velocity"
+minimum = { param = "min_speed" }
+maximum = { param = "max_speed" }
+
+# Move by my new Velocity
+[card.line.l7]
+kind = "move"
+mode = "by"
+value = { my_new = "velocity" }
+
+# Lines of Randomise headings: run once, every bird, when pressed
+[[card]]
+id = "randomise_headings"
+every = "bird"
+runs = "once"
+lines = ["l8"]
+
+# Set Velocity to a random direction of length (length of my Velocity), always
+[card.line.l8]
+kind = "set"
+key = 3207508240
+property = "velocity"
+
+[card.line.l8.value]
+kind = "random_direction"
+
+[card.line.l8.value.length]
+kind = "calculate"
+formula = "length(my.velocity)"
+
+[card.line.l8.condition]
+kind = "always"

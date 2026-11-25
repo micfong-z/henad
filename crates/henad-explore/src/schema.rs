@@ -4,10 +4,19 @@ use serde_json::{Map, Value, json};
 
 use henad_compute::entry::ModelEntry;
 use henad_core::explore::fingerprint::schema_hash;
-use henad_core::metadata::Backend;
+use henad_core::metadata::{Backend, TimeScale};
 use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind};
+use henad_core::provenance::CodeOrigin;
 
+use crate::output::manifest::hex;
+use crate::output::series_csv::stat_column_names;
 use crate::probe::ProbeReport;
+
+/// Returns the time scale `time` as the `time` object of [`schema_json`]: its unit and the id of its tick-length
+/// parameter.
+pub(crate) fn time_json(time: &TimeScale) -> Value {
+    json!({ "unit": time.unit.as_str(), "tick_length": time.tick_length })
+}
 
 /// Version of the object [`schema_json`] returns.
 pub const SCHEMA_VERSION: u64 = 1;
@@ -15,7 +24,10 @@ pub const SCHEMA_VERSION: u64 = 1;
 /// Returns the parameters, stats and actions of `entry` as one JSON object.
 ///
 /// The object carries `stat_columns`, the columns a sweep writes, only when `probe` is given. A choice's default is
-/// its option name, with its index beside it as `default_index`.
+/// its option name, with its index beside it as `default_index`, a hidden parameter carries `"hidden": true`, and an
+/// `f32` marked [`integer`](henad_core::params::ParamDescriptor::integer) carries `"integer": true`. A model composed
+/// at run time adds its `origin` and the `code_hash` that identifies its code, and a compiled model writes neither. A
+/// model with a time scale adds `time`, the unit and the id of the tick-length parameter.
 pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let params: Vec<Value> = entry
         .param_descriptors()
@@ -26,28 +38,35 @@ pub fn schema_json(entry: &ModelEntry, probe: Option<&ProbeReport>) -> Value {
     let stats: Vec<Value> = entry
         .stat_descriptors()
         .iter()
-        .map(|stat| json!({ "label": stat.label, "color": stat.color }))
+        .map(|stat| json!({ "label": stat.label(), "color": stat.color() }))
         .collect();
     let actions: Vec<Value> = entry
         .action_descriptors()
         .iter()
         .enumerate()
-        .map(|(index, action)| json!({ "index": index, "id": action.id, "label": action.label }))
+        .map(|(index, action)| json!({ "index": index, "id": action.id(), "label": action.label() }))
         .collect();
     let mut schema = json!({
         "schema_version": SCHEMA_VERSION,
         "model": entry.id(),
         "name": entry.name(),
         "backend": backend_name(entry.metadata().backend),
-        "schema_hash": format!("{:016x}", schema_hash(&entry.schema())),
+        "schema_hash": hex(schema_hash(&entry.schema())),
         "params": params,
         "stats": stats,
         "actions": actions,
         "seed": { "type": "u64" },
     });
     if let Some(probe) = probe {
-        let columns: Vec<&str> = (0..probe.columns.len()).map(|i| probe.columns.name(i)).collect();
-        schema["stat_columns"] = json!(columns);
+        schema["stat_columns"] = json!(stat_column_names(&probe.columns));
+    }
+    if let Some(time) = &entry.metadata().time {
+        schema["time"] = time_json(time);
+    }
+    let source = entry.source();
+    if source.origin() != CodeOrigin::Compiled {
+        schema["origin"] = json!(source.origin().as_str());
+        schema["code_hash"] = json!(source.code_hash().map(hex));
     }
     schema
 }
@@ -63,19 +82,22 @@ pub fn backend_name(backend: Backend) -> &'static str {
 fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
     let mut param = Map::new();
     param.insert("index".to_owned(), json!(index));
-    param.insert("id".to_owned(), json!(descriptor.id));
-    param.insert("label".to_owned(), json!(descriptor.label));
-    let apply = match descriptor.apply {
+    param.insert("id".to_owned(), json!(descriptor.id()));
+    param.insert("label".to_owned(), json!(descriptor.label()));
+    let apply = match descriptor.apply() {
         ParamApply::Live => "live",
         ParamApply::OnReload => "reload",
     };
     param.insert("apply".to_owned(), json!(apply));
-    let format = match descriptor.format {
+    let format = match descriptor.format() {
         ParamFormat::Plain => "plain",
         ParamFormat::Percent => "percent",
     };
     param.insert("format".to_owned(), json!(format));
-    let fields = match descriptor.kind {
+    if descriptor.is_hidden() {
+        param.insert("hidden".to_owned(), json!(true));
+    }
+    let fields = match descriptor.kind() {
         ParamKind::F32 {
             min,
             max,
@@ -84,12 +106,15 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
         } => {
             let mut fields = json!({
                 "kind": "f32",
-                "min": f32_json(min),
-                "max": f32_json(max),
-                "default": f32_json(default),
+                "min": f32_json(*min),
+                "max": f32_json(*max),
+                "default": f32_json(*default),
             });
             if let Some(step) = step {
-                fields["step"] = f32_json(step);
+                fields["step"] = f32_json(*step);
+            }
+            if descriptor.is_integer() {
+                fields["integer"] = json!(true);
             }
             fields
         }
@@ -99,8 +124,8 @@ fn param_json(index: usize, descriptor: &ParamDescriptor) -> Value {
         ParamKind::Bool { default } => json!({ "kind": "bool", "default": default }),
         ParamKind::Choice { options, default } => json!({
             "kind": "choice",
-            "options": options,
-            "default": options.get(default),
+            "options": options.iter().collect::<Vec<_>>(),
+            "default": options.get(*default),
             "default_index": default,
         }),
     };
@@ -128,8 +153,9 @@ mod tests {
     use serde_json::json;
 
     use henad_core::explore::fingerprint::schema_hash;
+    use henad_core::provenance::ModelCode;
 
-    use super::{f32_json, schema_json};
+    use super::{f32_json, param_json, schema_json};
     use crate::probe::ProbeReport;
 
     /// Each example model's `schema_hash` as Henad 0.2.0 wrote it, at commit 773a7a5.
@@ -170,7 +196,7 @@ mod tests {
             assert_eq!(params.len(), entry.param_descriptors().len(), "{}", entry.id());
             for (index, param) in params.iter().enumerate() {
                 assert_eq!(param["index"], json!(index));
-                assert_eq!(param["id"], json!(entry.param_descriptors()[index].id));
+                assert_eq!(param["id"], json!(entry.param_descriptors()[index].id()));
                 assert!(param["kind"].is_string() && param["default"] != json!(null), "{param}");
             }
             assert_eq!(schema["model"], json!(entry.id()));
@@ -188,7 +214,7 @@ mod tests {
         let defaults: Vec<_> = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         let probe = ProbeReport::build(&entry, None, &defaults, None).expect("sir builds at its defaults");
         let schema = schema_json(&entry, Some(&probe));
@@ -197,6 +223,48 @@ mod tests {
         assert_eq!(grid_width["id"], json!("grid_width"));
         assert_eq!(grid_width["kind"], json!("u32"));
         assert_eq!(grid_width["apply"], json!("reload"));
+    }
+
+    #[test]
+    fn schema_json_names_code_only_for_runtime_models() {
+        let models = example_models();
+        let life = models.get("game_of_life").cloned().expect("game_of_life is registered");
+        let compiled = schema_json(&life, None);
+        assert!(
+            compiled.get("origin").is_none() && compiled.get("code_hash").is_none(),
+            "{compiled}"
+        );
+
+        let code = ModelCode::new("test-rule/1", "life");
+        let runtime = schema_json(&life.clone().__with_code(code.clone()), None);
+        assert_eq!(runtime["origin"], json!("runtime"));
+        assert_eq!(runtime["code_hash"], json!(format!("{:016x}", code.hash())));
+        assert_eq!(
+            runtime["schema_hash"], compiled["schema_hash"],
+            "the code is no part of the schema"
+        );
+    }
+
+    #[test]
+    fn param_json_marks_only_hidden_parameters() {
+        let shown = henad_core::helpers::f32_param("tick_length", "One tick is (days)", 1.0, 0.01, 30.0, None);
+        assert!(
+            param_json(0, &shown).get("hidden").is_none(),
+            "a shown parameter writes no key"
+        );
+        let hidden = param_json(0, &shown.clone().hidden());
+        assert_eq!(hidden["hidden"], json!(true));
+        let mut without = hidden.clone();
+        without.as_object_mut().expect("an object").remove("hidden");
+        assert_eq!(without, param_json(0, &shown), "the flag is the one difference");
+
+        for entry in &example_models() {
+            let schema = schema_json(entry, None);
+            assert!(schema.get("time").is_none(), "{} has no time scale", entry.id());
+            for param in schema["params"].as_array().expect("params is a list") {
+                assert!(param.get("hidden").is_none(), "{}: {param}", entry.id());
+            }
+        }
     }
 
     #[test]

@@ -1,39 +1,15 @@
 //! Checks that a run that fails, or samples a value that is not finite, is recorded and leaves the rest running.
 
-use std::num::NonZeroUsize;
-
 use henad_compute::entry::register_grid_model;
-use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
-use henad_core::explore::spec::{BlockSpec, SweepSpec};
 
 use crate::exec::Concurrency;
 use crate::output::manifest::{Manifest, ManifestStatus};
 use crate::output::{MANIFEST_FILE, SUMMARY_FILE};
 use crate::sweep::ExploreError;
 use crate::tests::broken::{DividesByParam, InverseOfCountdown};
-use crate::tests::support::{OutputTables, Recorder, ScratchDir, manifest, sweep, sweep_options, sweep_with};
-
-/// Returns a spec over `model` on an 8 by 8 grid, with one factorial block over `param` at `levels`.
-fn spec_over(model: &str, param: &str, levels: &[&str]) -> SweepSpec {
-    let mut spec = SweepSpec::new(model);
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "8".to_owned()),
-        ("grid_height".to_owned(), "8".to_owned()),
-    ];
-    spec.run.steps = 10;
-    spec.measure.stats_every = 2;
-    spec.measure.series_every = 2;
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::param(
-            param,
-            LevelSpec::Values(levels.iter().map(|&level| level.to_owned()).collect()),
-        )],
-        design_seed: None,
-    }];
-    spec
-}
+use crate::tests::support::{
+    OutputTables, Recorder, ScratchDir, lane_count, manifest, spec_over, sweep, sweep_options, sweep_with,
+};
 
 #[test]
 fn a_panicking_run_is_recorded_and_the_rest_complete() {
@@ -43,7 +19,7 @@ fn a_panicking_run_is_recorded_and_the_rest_complete() {
     let scratch = ScratchDir::new("panicking-run");
     for count in [1, 3] {
         let output_dir = scratch.path().join(format!("lanes-{count}"));
-        let lanes = Concurrency::Fixed(NonZeroUsize::new(count).expect("a test lane count is above 0"));
+        let lanes = lane_count(count);
         let report = sweep(&model, None, &spec, &output_dir, lanes);
         assert_eq!(
             (report.counts.rows, report.counts.ok, report.counts.failed),

@@ -46,33 +46,64 @@ After all the above, add a final section for human comments, and leave it empty:
 ## Manual notes (human)
 ```
 
+## Topic files
+
+This file holds what every session needs. The detail of each crate and subsystem sits in `agents/`,
+one file per area, and no tool loads those files on its own. Read the file for an area before
+changing it, and update it in the same change as the code it describes. Every rule in this file
+applies there too, and those files stay hard-wrapped like this one. Each file stays well under 40k
+characters, and a file that grows past that splits by subsystem, as henad-app's has.
+
+| Area | File |
+| --- | --- |
+| Crate dependency rule, every edge and its check | `agents/dependencies.md` |
+| henad-core: traits, primitives, shared WGSL, provenance, sweep planning, searches | `agents/henad-core.md` |
+| henad-build: shader bindings and build stamps | `agents/henad-build.md` |
+| henad-compute: engines, entries, runners, `Simulation`, runtime WGSL, grid rules | `agents/henad-compute.md` |
+| henad-models and adding a model | `agents/models.md` |
+| henad-explore: sweeps, searches, output, provenance, testing kit, model files | `agents/henad-explore.md` |
+| henad-graph: graph models, IR, checker, host evaluator, starters | `agents/henad-graph.md` |
+| henad-graph's edit commands and the `[editor]` region | `agents/henad-graph-edit.md` |
+| henad-graph's WGSL compiler of grid and agents graphs | `agents/henad-graph-wgsl.md` |
+| henad-graph's sheets: the author document, its reader and writer, relations, rates and sheet files | `agents/henad-graph-sheet.md` |
+| henad-graph's sheet checker and the sheet's limits | `agents/henad-graph-sheet-check.md` |
+| henad-graph's wording table, and the sentences of the lines with their parts and places | `agents/henad-graph-sheet-wording.md` |
+| henad-graph's sheet lowering: the builder, grid sheets, folds over the cells around, ids, keys, the line table, refusals, fire lines | `agents/henad-graph-sheet-lower.md` |
+| henad-graph's sheet lowering of agents: refusals, starts, looks at agents, motion, Repeat, the ground | `agents/henad-graph-sheet-lower-agents.md` |
+| henad-graph's sheet edit commands | `agents/henad-graph-sheet-edit.md` |
+| henad-graph's conversion of a sheet to a node graph copy, and its changes | `agents/henad-graph-sheet-convert.md` |
+| henad-app: options, state, builds, teardown, install, export | `agents/henad-app.md` |
+| henad-app's Editor tab | `agents/henad-app-editor.md` |
+| henad-app's graph editor: the canvas, its panels, regions, functions and the WGSL view | `agents/henad-app-graph-editor.md` |
+| henad-app's sheet editor: its edits, the Sheet pane's sections and forms, the toolbar, undo | `agents/henad-app-sheet.md` |
+| henad-app's sheet editor: opening a sheet, Apply of a sheet, its preview, the New model dialog | `agents/henad-app-sheet-open.md` |
+| henad-app's Sheet pane layout: sections, form rows, tables and their column order, a world of agents | `agents/henad-app-sheet-pane.md` |
+| henad-app's Card pane: lines written with blanks, pickers and chips, When blocks, moves, rates, agent lines, Repeat blocks and fire counts | `agents/henad-app-card.md` |
+| henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
+| UI text, corners and colours | `agents/ui.md` |
+| henad-cli | `agents/henad-cli.md` |
+| The facade and henad-tutorial | `agents/facade-and-tutorial.md` |
+| The template (`templates/model-project`) | `agents/template.md` |
+| Hot loops, chunking, determinism, spatial hash, scatter, benchmarking | `agents/performance.md` |
+| GPU traps that already cost real debugging | `agents/gpu-traps.md` |
+| Sim runners, the schedule rule, sweeps off the UI thread | `agents/sim-runner.md` |
+| CI jobs, releases, the licence page, toolchain pins | `agents/ci-and-release.md` |
+| The documentation site's styling and include regions | `agents/docs-site.md` |
+
 ## Documentation site
 
 `docs/` is the published documentation site, built by [Zensical](https://zensical.org) from
-`zensical.toml` at the repository root. Zensical reads MkDocs Material's configuration format and
-Material's Markdown dialect, so admonitions are `!!! note`, not GitHub's `> [!NOTE]`, which renders
-as a literal blockquote. Python dependencies are pinned in `pyproject.toml` and `uv.lock`, and CI
-builds the site on every pull request and deploys it to GitHub Pages from `master`.
+`zensical.toml` at the repository root. Zensical reads Material's Markdown dialect, so admonitions
+are `!!! note`, not GitHub's `> [!NOTE]`, which renders as a literal blockquote. Anything under
+`docs/` is published, the session records included, and notes written for nobody but the maintainer
+do not belong anywhere under `docs/`.
 
-The site's look is CSS over Zensical's modern variant, with no template override and no script.
-`docs/stylesheets/mcs.css` lists the MCS entries as `--mcs-<hue>-<step>`, equal to `ui/mcs.rs`, and
-`docs/stylesheets/henad.css` names them by role per scheme (`--hd-*`) and points Zensical's `--md-*`
-variables at the roles. A new style takes a role rather than a hex value, and corners are square
-everywhere. Code is set in subsets of Iosevka Micfong under `docs/assets/fonts`, and `theme.font =
-false` keeps Google Fonts out. A fence in a new language needs a label line in `henad.css`.
-
-Anything under `docs/` is published, the session records included. Those sit under
-`developing/agent-record/` behind a landing page that tells readers what they are. Notes written for
-nobody but the maintainer still do not belong anywhere under `docs/`.
-
-Code examples are included from real workspace files rather than retyped, so an example cannot
-drift from the code it documents. The include reads
+Code examples are included from real workspace files by named region, never retyped and never by
+line range:
 
 ```md
 --8<-- "crates/henad-models/src/game_of_life.rs:step_cell"
 ```
-
-and the named region is marked in the source with a pair of comments:
 
 ```rust
 // --8<-- [start:step_cell]
@@ -80,17 +111,9 @@ and the named region is marked in the source with a pair of comments:
 ```
 
 Those two lines are a build directive rather than a comment, and are the one exception to the
-comment rules below. Do not include by line range, which is also supported and drifts silently.
-A whole-file include strips the markers, so a page can show a file whole and in parts.
-
-The template's regions take each file's comment form, `# --8<-- [start:profile]` in TOML and
-shell and `<!-- --8<-- [start:fetch] -->` in HTML and Markdown, so a user's copy stays readable.
-Its Rust files carry no markers and are included whole. `crates/henad/examples/complete.rs` carries
-regions for `guide/library.md`, and its README copy leaves the marker lines out.
-`crates/henad/tests/facade_paths.rs` carries the page's two other regions. Every page that
-includes template or tutorial code opens with an `!!! info "Henad 0.3"` admonition naming the
-release it describes, since the site deploys from `master` and can run ahead of crates.io. An
-unused region is deleted with its include.
+comment rules below. `agents/docs-site.md` holds the styling rules, the template's region forms and
+the version admonition every page with template or tutorial code opens with. Read it before
+editing a page or a stylesheet.
 
 ## Cross-engine benchmarks
 
@@ -241,69 +264,14 @@ to the sentences that actually changed instead of reporting a whole reflowed par
 This applies to `docs/` (the session records included), `README`, and PR and issue bodies. Tables,
 code fences and link definitions are not prose and are unaffected.
 
-**`AGENTS.md` is the exception** and stays hard-wrapped, since no human reads it.
+**`AGENTS.md` and the files under `agents/` are the exception** and stay hard-wrapped, since no
+human reads them.
 
 ### UI
 
-Everything under **Sentences** applies here too. On top of it:
-
-- **Neutral tone.** No jargon unless the reader needs the precise word, and define an acronym the
-  first time a panel uses one. A term the audience debugs with counts as necessary. A model
-  author's kernel "panicked".
-- **Conventional UI wording.** Use the words desktop and technical software already uses
-  ("integer", "unavailable", "select", "default", "switch", "appear") over home-made phrasing
-  ("whole number", "fill in", "stay at their values", "not available").
-- **Sentence case.** "Model build failed", not "Model Build Failed".
-- **Name a widget exactly as the widget is labelled.** The button reads Build, so prose says
-  "press Build", and a field labelled Name is "the Name input field".
-- **Tell the user what to do. A widget is never the subject.** "Press Show results to open them",
-  not "Show results opens them". "Select another folder without results", not "Start needs a
-  folder without results".
-- **Tense follows meaning.** Present for a state ("Seed changed."), future for what will happen
-  ("The model will be rebuilt.", "Results will appear as runs finish."), imperative for an
-  instruction. Keep verbs simple, and avoid "should" and "would".
-- **Short tooltips.** Say what the control does or what the user can do next. Leave out how it
-  works inside and cross-references to the CLI unless the user needs them to act. "Seed for random
-  number generation." is a finished tooltip.
-- **No rounded corners.** `init.rs` sets every widget, window and menu radius to zero, and anything
-  drawn outside those styles keeps to it: a `ProgressBar` takes `.corner_radius(0)` (egui draws a
-  pill by default), and a chip, pill, badge or `Frame` gets `CornerRadius::ZERO`. A plot shows
-  through `ui::show_plot`, since `egui_plot` paints its background with a fixed radius. egui gives
-  the stripes of an `egui::Grid` a fixed radius of 2 as well. A key/value list goes through
-  `ui::kv_grid`, whose rows end with `KvGridRows::end_row` and get square stripes. No other grid is
-  striped. `egui_dock` draws the tab bar's scroll bar as a pill, and the dock hides it.
-- **Colours come from the Micfong Colour System (MCS).** `ui/mcs.rs` holds one constant per entry
-  (`mcs::BLUE_700`), and its module doc maps each state to entries: the state picks the hue, and
-  the element carrying the colour picks the step. A badge, a fill or a coloured text takes its
-  entry from that mapping in place of a `gamma_multiply` tint, a `Color32` literal or a theme
-  colour borrowed as a fill. The theme's warn and error colours are orange 500 and red 500, and a
-  status text reads them from the theme. The theme's neutral surfaces and strokes in `init.rs`
-  predate MCS and stay as they are. Data colours (the plot series, the heatmap scale and its
-  no-data grey) are not MCS and come from `ui/results/plot.rs`.
-- **No superfluous politeness.** No "please", no apology.
-- **"can" for ability, "might" for possibility.** Never "may".
-- **Articles are optional.** "Load model" is as good as "Load the model". Drop the article when it
-  buys nothing. In a button, a short label or a tooltip that is most of the time.
-
-```text
-The GPU reported an error while building the model.   // no, the article buys nothing
-GPU reported an error while building the model.       // yes
-
-Copy the message to the clipboard                     // no, tooltip
-Copy message to clipboard                             // yes
-
-Could not build the model                             // no, past modal
-Model build failed                                    // yes
-
-Seed changed but not applied. Press Build to apply.   // no, wordy
-Seed changed. Press Build to apply.                   // yes
-
-Results fill in as runs finish. Show results opens them.            // no, widget as subject
-Results will appear as runs finish. Press Show results to open them. // yes
-
-Varies one parameter at a time. The others stay at their Parameters tab values.    // no
-Varies one parameter at a time. Other parameters use values from the Parameters tab. // yes
-```
+Everything under **Sentences** applies to UI text too. `agents/ui.md` holds the rest: tone, wording,
+sentence case, widget names, tense, tooltips, the square corners and the Micfong Colour System
+(MCS). Read it before touching anything under `crates/henad-app/src/ui`.
 
 ## Working agreements
 
@@ -322,13 +290,17 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
   is how a UI change is confirmed to render. Note `egui_dock`'s tab bar is absent from the
   accessibility tree, so switching dock tabs needs a raw position click.
 - **A test-only module goes under a `tests/` directory in `src/`, never beside production modules.**
-  `henad-compute/src/gpu/tests/` and `henad-models/src/tests/` hold any test module too big to
-  inline, and henad-compute's holds its `support.rs` (the headless device) as well, so each `mod.rs`
-  lists exactly one `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
+  `henad-build/src/tests/`, `henad-core/src/explore/search/tests/`, `henad-compute/src/cpu/tests/`,
+  `henad-compute/src/gpu/tests/`, `henad-graph/src/tests/`, `henad-models/src/tests/`,
+  `henad-explore/src/tests/` and `henad-app/src/tests/` hold any test module too big to inline, and
+  each holds a `support.rs` of the helpers its tests share (the headless device in henad-compute's
+  `gpu/tests/` and henad-graph's), so each parent module lists exactly one
+  `#[cfg(test)] mod tests;` rather than interleaving test modules with real ones.
   An inline `#[cfg(test)] mod tests` at the bottom of the file it tests is still the default and is
   unaffected. Every other crate's tests take their device from
-  `henad_explore::testing::headless_test_device`. henad-compute keeps its own helper on purpose. It
-  sits below the kit, and raises the device limits for its spatial-hash tests. henad-models' tests
+  `henad_explore::testing::headless_test_device`. henad-compute and henad-graph keep their own
+  helpers on purpose. Both sit below the kit, and henad-compute's raises the device limits for its
+  spatial-hash tests. henad-models' tests
   ask the kit for `TestDeviceRequest::baseline()`, since the kit's `BaselineBuild` has to build
   every example GPU model on a `Limits::default()` device.
 - **Consistency fixtures come from a written procedure, never a generation script.** The procedure
@@ -345,12 +317,14 @@ Varies one parameter at a time. Other parameters use values from the Parameters 
 
 ```bash
 ./check.sh                    # all CI checks except the slow ones — run this before considering work done
+./check.sh --quick           # the same, with the tests of CI's quick tier (scripts/slow_tests.txt left out)
 cargo check --workspace --all-targets
-cargo check -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features \
+cargo check -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features \
   --lib --target wasm32-unknown-unknown    # without atomics, henad-app without its thread pool
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::all
 cargo test --workspace --all-targets --all-features
+python3 scripts/ci_tiers.py check   # every line of scripts/slow_tests.txt skips exactly one test
 cargo test --workspace --doc
 cargo check -p henad --lib --target wasm32-unknown-unknown   # the facade, without atomics
 cargo check -p henad --all-features --lib --target wasm32-unknown-unknown
@@ -367,37 +341,25 @@ rustup toolchain install "$(cat templates/model-project/scripts/web-toolchain)" 
 ```
 
 `./check.sh` runs every line above but the install, and skips `cargo deny` where cargo-deny is not
-installed. CI alone runs `cargo package --workspace --exclude henad-tutorial --no-verify --locked`
-(the `package` job, on manifest changes), `cargo +1.95 check --workspace --locked` and the facade
-with all four features on 1.95 (`msrv`), `cargo check -p henad` with no features and then with
-each feature alone (`features`), clippy on the pinned nightly for wasm32 with
-`RUSTFLAGS="-C target-feature=+atomics,+bulk-memory"` and a `CARGO_TARGET_DIR` of its own, over
-`-p henad-app` and over `-p henad --features app,example-models` (`lint`), `actionlint` over
-`templates/model-project/.github/workflows/*.yml` (`lint`), and every published crate's docs as
-docs.rs builds them, through `scripts/docs_rs.py` from each crate's `[package.metadata.docs.rs]`
-table on the pinned nightly (`docs`). `msrv`, `features` and `docs` run on a pull request and on a
-dispatch, and `package` on a pull request alone. The `downstream` job runs on `workflow_dispatch`
-alone, with `CARGO_TERM_COLOR=never`, and the release checklist starts it. It runs the verified
-packaging in two fresh target directories and deletes both builds, copies the template outside the
-checkout, pins `henad` and `henad-build` to `=<version>`, patches every crate
-it uses to the unpacked tarballs under the verify directory's `package/`, and generates a lock.
-Then, in order: both `henad` and `henad-build` resolve with a null `source`, henad-models is
-absent, strict clippy (`-D unreachable_pub -D unused_qualifications`), `scripts/ci.sh test` under
-`HENAD_REQUIRE_GPU=1`, a second `cargo build -v` with nothing `Dirty`, `Compiling` or `Running`, a
-stable wasm32 check of the library with `--no-default-features` and `RUSTFLAGS=""`, `ci.sh
-lint-web`, `build_web.sh` refusing `RUSTFLAGS`, `ci.sh web`, a comment appended to `src/vote.rs`
-recompiling no henad crate, an unreferenced shader added under `src/probe/` compiling under
-`-D warnings`, the CLI's dry run of `specs/vote.toml`, and the CPU-only crate (`gpu_vote`, its
-lines and the `ShaderBuild` line removed) sweeping and resuming with no `build_changed` warning.
-The wasm32 steps run before any step changes the copy. To run it by hand, run each step's script
-from `ci.yml` with `RUNNER_TEMP` set to a directory outside any git work tree and
-`CARGO_TERM_COLOR=never`, and pass `--allow-dirty` to `cargo package` on an uncommitted tree.
+installed. CI runs in two tiers. A push to any branch runs the quick tier, which skips the tests in
+`scripts/slow_tests.txt` and the jobs its change does not need. The nightly schedule on `master`
+and a dispatch run the full tier, every job and every test. A test that takes 20 seconds or more
+on the Windows runner goes into `scripts/slow_tests.txt`. CI runs further jobs (`package`, `msrv`,
+`features`, `lint`, `ports`, `docs` and `downstream`), which `agents/ci-and-release.md` describes
+with how to run each by hand.
 
 Run a single test: `cargo test -p henad-models sir_population_conservation`
 Run the scatter-strategy benchmark: `cargo bench -p henad-compute --bench scatter`
 Run desktop app: `cargo run -p henad-app` (`-- --open DIR` opens a folder a sweep wrote in the
 Results tab)
-Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` + `index.html`)
+Run web version locally: `./scripts/build_web.sh serve` (from repo root, uses `Trunk.toml` +
+`index.html`)
+Run a graph model file: `cargo run --release -p henad-cli -- --model-file
+crates/henad-graph/starters/sir.toml --steps 100` (prints its warnings and errors at their lines,
+and runs a graph on a grid or of agents)
+Run a sheet: `cargo run --release -p henad-cli -- --model-file
+crates/henad-graph/sheets/game_of_life.toml --steps 100` (prints its warnings and errors at the
+sheet's lines, and `--print-lowered` in place of `--steps 100` prints the graph it lowers to)
 Benchmark a model headlessly: `cargo run --release -p henad-cli -- boids --steps 100 --reps 3`
 (`--list` for ids, `--params` for a model's param ids and defaults, `--set id=value` to override
 one, `--export-stats` for the time series)
@@ -418,44 +380,22 @@ skipped unless named with `--models`; `--dry-run` to see the matrix)
 Sweep every installed engine across the cross-engine ladder: `uv run --project scripts
 scripts/compare_bench.py` (`--dry-run` for the matrix, `--smoke` for one small point each); gate the
 ports first with `scripts/validate_ports.py`, plot with `scripts/plot_compare.py`
-Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without serving)
+Serve the docs site: `uv run zensical serve` (from repo root; `zensical build` builds without
+serving)
 Build the docs as docs.rs does: `python3 scripts/docs_rs.py` (crate names to narrow it, `--host` on
 a machine that is no x86_64 Linux)
 Preview a release's notes: `python3 scripts/changelog_section.py 0.1.0` (what the tag build puts in
 the release body; it refuses a section with no date)
-Cut a release: `docs/developing/releasing.md` holds the order (bump the version, every requirement
-and the template's three, and on a breaking release the facade README's line, the guide's
-admonitions and its typed dependency snippets, regenerate `docs/license.html`, `cargo update
---workspace`, date the CHANGELOG, commit and push, run the checklist on that commit, then tag), the
-checklist the maintainer copies into an issue per release (both verified packaging passes in a fresh
-`CARGO_TARGET_DIR`, `gh workflow run ci.yml --ref <branch>` for the `downstream`, `msrv`, `features`
-and `docs` jobs, a native check on the pinned nightly, `cargo semver-checks`, a WGSL diff and a
-review of the hidden items another crate calls on a patch release, `cargo publish --workspace
---dry-run --locked` in a fresh `CARGO_TARGET_DIR`),
-the paced publish and the stability policy. The maintainer runs every publish by hand. Never tag,
-publish or bump the version unasked.
+Cut a release: `docs/developing/releasing.md` holds the order and the checklist, and
+`agents/ci-and-release.md` a summary. The maintainer runs every publish by hand. Never tag, publish
+or bump the version unasked.
 Regenerate the third-party licence page: `cargo about generate about.hbs -o docs/license.html`
-(needs `cargo-about`, pinned to 0.9.1 in CI; the `lint` job fails when the committed page and the
-dependency tree disagree). A crate shipping two files under one licence gets a `clarify` entry in
-`about.toml`, as `rfd` and `miniz_oxide` have. Left alone, cargo-about keeps whichever file its
-directory walk finds first, and walk order depends on the filesystem. A page generated on macOS can
-then fail the check on Linux, or pass it by luck, as `miniz_oxide` did. The app's four fonts are no
-crates, and their section of the page is static HTML in `about.hbs`. Their sources, licences and the
-procedure that rebuilds Henad Sans and Henad Mono from IBM Plex are in
-`crates/henad-app/assets/fonts/SOURCES.md`.
+(needs `cargo-about` 0.9.1, and `agents/ci-and-release.md` before adding a `clarify` entry)
 
 Toolchain is pinned via `rust-toolchain` (1.97, with rustfmt/clippy/wasm32-unknown-unknown target).
-The web build is the exception and runs on one dated nightly, named in
-`templates/model-project/scripts/web-toolchain` and selected by `scripts/build_web.sh`, which prints
-the install line above when the toolchain or its `rust-src` is missing. The Trunk release sits beside
-it in `templates/model-project/scripts/trunk-version`. CI, vercel.json and the docs read both files,
-and the repository holds one pin. `trunk-sha256` beside them holds the SHA-256 of that release's Linux
-x86_64 tarball, which Henad's CI and the template's both check before extracting it, so a Trunk bump
-changes both files. Threads on wasm need
-`-C target-feature=+atomics,+bulk-memory,+mutable-globals` and a std rebuilt to match, so the nightly
-needs `rust-src`. That script is the only supported way to build for the web; a bare `trunk build`
-produces a binary whose thread pool cannot start. It also unsets `CARGO_ENCODED_RUSTFLAGS`, which
-would otherwise outrank the `RUSTFLAGS` it sets.
+The web build runs on one dated nightly, named in `templates/model-project/scripts/web-toolchain`.
+`scripts/build_web.sh` is the only supported way to build for the web. A bare `trunk build`
+produces a binary whose thread pool cannot start.
 
 ### Environment variables
 
@@ -476,13 +416,13 @@ flat `Vec`s, rayon), not from unsafe tricks. The workspace `Cargo.toml` also ena
 `clippy::` lint set (`unwrap_used`, `indexing_slicing = "allow"` is a deliberate exception,
 `missing_errors_doc`, etc.) — run `./check.sh` rather than guessing whether something will pass CI.
 
-The eight published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
+The nine published crates set `#![warn(missing_docs)]` at the top of `lib.rs`, after the `doc_cfg`
 attribute, and clippy's `-D warnings` makes it an error. Every public item of a published crate
 takes a doc comment, fields and enum variants included. The tutorial, the template and the binaries
 are outside the lint. On wasm32 only CI's clippy over henad-app and the facade fails on it, and the
 wasm32 typecheck of `./check.sh` prints a web-only item of another crate as a warning.
 
-henad-compute, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
+henad-compute, henad-graph, henad-explore, henad-app, henad-models, the tutorial (its `lib.rs` and
 `tests/parity.rs`), the template's `src/lib.rs` and the facade's `tests/facade_paths.rs` set
 `#![recursion_limit = "256"]`. Proving a type that holds wgpu handles `Send` there overflows the
 default 128, which the pinned nightly reports as the future-incompatible
@@ -491,32 +431,33 @@ the same line. The release checklist's native check on that nightly finds one th
 the tutorial's `tests/snippets.rs` holds the template's line to the tutorial's.
 
 Two rules no lint enforces. Every public type of henad-core, henad-compute, henad-models,
-henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait object, a
-model's associated types or a whole graph writes its own impl ending in `finish_non_exhaustive`, as
-`ModelEntry`, `Network` and the engine states do. So does a type holding a payload, such as cells,
-lanes, positions or a shader's source, and it prints sizes and labels in their place, as `Grid2D`,
-`PassSpec` and `PointSnapshot` do. `cargo clippy -- -W missing_debug_implementations`
-lists the types that lack one. henad-app's `state` and `ui` modules are private, and their types
-are left out. And an exported macro names its support items through its crate's `#[doc(hidden)]`
-`__macro_support` module, never through an internal path such as `$crate::cpu::primitives`, and
-names prelude items by their `::core` or `::std` path, as `agent_lanes!` does, so it expands in a
-crate that has shadowed them.
+henad-graph, henad-explore and henad-app implements `Debug`. A type that holds a closure, a trait
+object, a model's associated types or a whole graph writes its own impl ending in
+`finish_non_exhaustive`, as `ModelEntry`, `Network` and the engine states do. So does a type holding
+a payload, such as cells, lanes, positions or a shader's source, and it prints sizes and labels in
+their place, as `Grid2D`, `PassSpec` and `PointSnapshot` do. `cargo clippy -- -W
+missing_debug_implementations` lists the types that lack one. henad-app's `state` and `ui` modules
+are private, and their types are left out. And an exported macro names its support items through its
+crate's `#[doc(hidden)]` `__macro_support` module, never through an internal path such as
+`$crate::cpu::primitives`, and names prelude items by their `::core` or `::std` path, as
+`agent_lanes!` does, so it expands in a crate that has shadowed them.
 
 ## Architecture
 
-The workspace has 8 crates, and the tutorial crate beside them:
+The workspace has 9 crates, and the tutorial crate beside them:
 
 ```
-henad-core ─┬─ henad-build      (build dependency of every crate with WGSL or a stamp)
+henad-core ─┬─ henad-build      (build dependency of every crate with shader bindings or a stamp)
             └─ henad-compute ─┬─ henad-models
-                              └─ henad-explore ─┬─ henad-cli
-                                                └─ henad-app
-henad (facade): core, compute and explore, plus models, app and cli behind features
+                              └─ henad-graph ── henad-explore ─┬─ henad-cli
+                                                               └─ henad-app
+henad (facade): core, compute and explore, plus models, app, cli, testing, rules, graph by feature
 henad-core     traits, types, provenance and the shared WGSL as text
 henad-build    the shader bindings and the build stamps a build script generates
-henad-compute  engines, runners, model entries and sets, include_shaders!
+henad-compute  engines, runners, model entries and sets, include_shaders!, grid rules
 henad-models   the ten example models, and a path dev-dependency of henad-explore
-henad-explore  sweeps, searches and the testing kit
+henad-graph    graph models and sheets: IR, checker, host evaluator, WGSL compiler, edits, starters
+henad-explore  sweeps, searches, the testing kit and model files
 henad-cli      headless bench and sweeps as a library, its binary on henad-models
 henad-app      egui UI as a library, its binary on henad-models
 henad          the facade, one module tree over the others, the crate a program depends on
@@ -524,1260 +465,34 @@ henad-tutorial the first-model guide's finished code, in examples/tutorial, on t
 ```
 
 The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
-Every other normal or build dependency runs from a crate to one drawn above it: henad-explore and
-henad-models onto henad-compute, the hosts onto henad-explore, henad-compute and, for
-`example_models()`, henad-models, and any crate with WGSL or a build stamp onto henad-build.
-henad-cli and henad-app take henad-models only behind their default `example-models` feature, and
-`cargo tree -p henad-cli --no-default-features -e normal -i henad-models` prints nothing, as does
-the same line for henad-app. The facade takes henad-models, henad-app and henad-cli only behind its
-features, and the two hosts with `default-features = false`, so
-`cargo tree -p henad --features app,cli -e normal -i henad-models` reports that no package matches
-`henad-models` and exits 101, since that resolve holds no henad-models. henad-models and
-henad-explore take no normal dependency on each other,
-and `cargo tree -p henad-explore -e normal -i henad-models` prints nothing. Every dev-dependency
-between Henad crates that the normal graph does not hold is named here: today the one from
-henad-explore to henad-models, for its tests, the one from henad-models to henad-explore with its
-`testing` feature, for the kit over the example models, and the ones from henad-cli and henad-app
-to henad-models, for their unit tests without the feature. The pair between henad-models and
-henad-explore is the one dev-only edge against the dependency direction. Neither normal graph
-reaches the other, each crate compiles once, and packaging strips both edges. Neither package's
-own tests then build from its tarball. henad-explore reaching
-an example model outside its tests needs the maintainer's approval as a new edge. henad-tutorial
-depends on the facade and, to build, on henad-build. Its tests take the facade again with
-`example-models` and `testing`, and it names no other Henad crate.
+Every other normal or build dependency runs from a crate to one drawn above it. henad-cli and
+henad-app take henad-models only behind their default `example-models` feature, and the facade
+takes henad-models, henad-app, henad-cli and henad-graph only behind its features. henad-explore
+takes henad-graph only behind its `model-files` feature. henad-models and
+henad-explore take no normal dependency on each other. `agents/dependencies.md` names every
+dev-dependency between Henad crates that the normal graph does not hold, and the `cargo tree` lines
+that check the rule. A new edge is added there, and henad-explore reaching an example model outside
+its tests needs the maintainer's approval.
 
-- **henad-core**: no dependencies on other crates — not even wgpu or bytemuck, which is why the two
-  GPU traits describe their shaders as `&'static str` and their buffers as plain bytes. Defines the
-  abstractions everything else builds on. `authoring/` is the model authoring API and splits in two.
-  `authoring/model/` holds the five traits a model implements,
-  one per (topology × backend): `GridModel` (`authoring/model/grid_model.rs`) for cellular automata,
-  `AgentModel` (`authoring/model/agent_model.rs`) for agent populations, `NetworkModel`
-  (`authoring/model/network_model.rs`) for nodes joined by edges, `GpuGridModel`
-  (`authoring/model/gpu_grid_model.rs`) for shader-resident grids and `GpuAgentModel`
-  (`authoring/model/gpu_agent_model.rs`) for shader-resident populations, plus `FieldLayer`
-  (`authoring/model/field.rs`),
-  the grid slot an `AgentModel` sits over. `authoring/primitives/` is the primitive vocabulary those
-  kernels call — wrapping, neighbourhoods, distances, random draws — most paired with a WGSL twin
-  under `authoring/primitives/wgsl/`, and each pure one pinned to its twin by a parity test.
-  `wgsl/` holds the five shared modules a shader imports as `henad::dispatch`, `henad::dims`,
-  `henad::rng`, `henad::space` and `henad::reduce_tree`, as text in `SHARED_WGSL_MODULES`, with
-  their `SHARED_WGSL_FNV1A64` computed by a `const` FNV-1a (`Fnv1a64`'s writes are `const fn`).
-  An interface change to one ships only in a breaking release. User shaders import these paths.
-  `space::offsets`, `space::for_each_neighbor`, `rng::mix_seed` and `rng::next_index` are Rust
-  only. `next_index`'s redraw needs a 64-bit product, and WGSL has no 64-bit integers.
-  `docs/reference/primitives.md` is the index, marks each Rust-only and WGSL-only entry, and
-  records what is deliberately absent.
-  `SimState` (`model.rs`) is the _runner_
-  interface the sim thread drives, not an authoring API — that split is why the traits live under
-  `authoring/model/` and this one does not. `provenance.rs` holds `BuildInfo`, the identity of one
-  compiled crate that `build_info!` returns for the crate it expands in, and `ModelSource`, an
-  entry's type path and the build of the crate that registered it. A build script stamps the
-  commit, the dirty flag and the source hash through henad-build, and they read as unknown in a
-  crate whose script does not. `__VERSION` is henad-core's version, which has no build script.
-  Also the `Grid2D<T>`
-  double-buffered SoA grid (`grid.rs`),
-  the counting-sort `SpatialHash` and the `HashGrid` cell geometry both backends share
-  (`spatial_hash.rs`), the `Network` graph a `NetworkModel` works on (`network.rs`), param
-  descriptors and `ParamStore` (`params.rs`), `ActionDescriptor`, the `actions!` macro,
-  `action_seed` and the `Schedule` of `--act` entries with its `Fire` rule (`action.rs`),
-  stat/view types consumed by the UI (`view.rs`), and small shared
-  helpers such as the param and stat builders (`helpers.rs`). `xorshift64` sits with the random
-  draws in `authoring/primitives/rng.rs`. `Extent` is re-exported at the crate root.
-  `Network` keeps its adjacency rows in compressed sparse row (CSR) form with slack, beside an edge
-  list the view draws. A full row relocates to the end, the engine repacks after a tick once
-  `should_repack()` finds too much stale space, and a full `rebuild()` runs only when the graph
-  changes direction. `version()` goes up whenever the edges, their colours or their direction
-  change. `repack`, `should_repack`, `rebuild`, `set_directed` and the raw `spawn` and `retire` are
-  `#[doc(hidden)]`, since the engine calls them and a model goes through `Nodes`.
-  `explore/` holds the parts of a sweep that need no engine, and builds on wasm like the rest of the
-  crate. `value.rs` reads a param value written as text and checks it against its descriptor
-  (`parse_value`, `resolve_params`, `parse_overrides`), and `format_value` writes one back. `--set`
-  goes through it. A choice reads an option's name before its index, and `helpers::choice_param`
-  panics on an option name that reads as an unsigned integer or appears twice. `spec.rs` is a
-  sweep as written, a `SweepSpec` of `BlockSpec`s with its
-  `RunSettings`, `MeasureSettings`, `SeedSettings` and `ActionSpec`s. `SweepSpec::plan` (`plan.rs`)
-  checks it against a `ModelSchema` and lists every `Config`, its param values and one tick per
-  action, into a `Plan`, where run `run_id` is replicate `run_id % replicates` of config
-  `run_id / replicates`. It refuses an unknown id, a value out of bounds, a param both fixed and
-  varied or varied twice in a block, a zip of unequal lengths, an `F32` range with no step outside
-  a sampled design, a factor with no levels (`DesignError::NoLevels`), an undeclared action, a
-  name two actions share, a stop or `first` threshold that is not finite (`MeasurePlan::check`,
-  through `StopSpec::check_threshold` and `Comparison::check`), and more than `MAX_RUNS` runs
-  (2^24, equal to `MAX_CONFIGS`, `PlanError::TooManyRuns`), all before any run. An action due
-  past the last tick is only a `PlanWarning`. `Plan::schedule` orders a config's actions
-  by tick, then by spec order, and a `Shard` (`I/N`) takes the runs with `run_id % N == I`.
-  `factor.rs` resolves a factor over a param or an action's tick (`FactorTarget`) from a list, an
-  inclusive range or `all`, and `LevelSpec::parse` reads the level text of `--vary`. It and a plan
-  ignore the spaces around each listed value.
-  `inclusive_steps` computes value `i` as `min + i * step` and never accumulates, and a sampled
-  design takes a range with no step as a whole `FactorDomain`. `design.rs` combines a block's
-  factors under a `DesignKind`: `Factorial` (the first factor slowest, the last fastest), `Zip`,
-  `Random`, `LatinHypercube` or `Table`. A Latin hypercube gives each factor its own Fisher-Yates
-  permutation of the strata. A continuous factor takes one jittered point per stratum, computed in
-  `f64` and clamped after the cast, and a factor of `m` levels takes level `stratum * m / N` in
-  `u128`, the lowest level its stratum covers, so each level lands in `N / m` configs, rounded down
-  or up. That lattice is deliberate. It balances the levels exactly, and the design seed decides
-  only which config takes each level. `design_rng.rs` (`DesignRng`)
-  draws both sampled designs from a design seed through `xorshift64` and `next_index` in integer
-  arithmetic, with a `u64` path for a full `u32` span, and a seed gives the same design on every
-  platform. `design_csv.rs` reads a design table, one column per param id or `action.<name>`,
-  through `parse_records`. `seed.rs` derives each run's seed from one root through `mix_seed`, and
-  `design_seed` a sampled block's when the spec gives none. Under `SeedScheme::Common`, replicate
-  `r` of every config shares a seed (common random numbers), and `independent_run_seed` mixes the
-  config in. `measure.rs` fixes the sampled ticks, `warmup + j * stats_every` plus the total
-  (`MeasurePlan`), and folds each sample into the reducers and a `SeriesBuffer` (`Sampler`),
-  skipping and flagging a value that is not finite. `Sampler::push` reports whether the
-  `StopCondition` holds at that sample. `stop.rs` reads a condition such as `Infected <= 0`, split
-  at the last run of comparator characters so a label can hold spaces and comparators, and NaN
-  never meets one. `reducer.rs` binds
-  the `ReducerKind`s to `StatColumns` indices: final, min, max and mean by default, and argmax,
-  argmin, `first<=10` (`FirstCrossing`) and `mean@200..600` (`WindowMean`) on request. `outcome.rs`
-  holds `PlannedRun`, `RunStatus` (`timed_out` among the failures), `StopReason` and `RunOutcome`,
-  `summary.rs` the replicate statistics of `summary.csv` (`RunningMoments`, `student_t_975`,
-  `SummaryAccumulator`), and `fingerprint.rs` the FNV-1a hashes naming a schema, a plan and a run.
-  `schema_hashes_are_unchanged_since_0_2_0` (henad-explore's `schema.rs`) pins every example
-  model's schema hash to the value 0.2.0 recorded, through the procedure in
-  `crates/henad-models/tests/fixtures/docs/schema-hashes-0.2.0.md`. Keep it.
-  `replay.rs` holds `Replay`, the model, params, seed, schedule and ticks of one run as a live
-  simulation rebuilds it, and `Plan::replay(run_id)` builds one from a plan. `plan_hash` leaves out
-  the replicate count and the timeout, and a resume can change both. Unlike `DefaultHasher`,
-  FNV-1a is stable across Rust releases. `export/csv.rs` formats and escapes CSV fields and reads
-  RFC 4180 records back, and `StatColumns` (`export/stats_csv.rs`) is the column layout
-  `StatsWriter` fixes from the first sample. A sweep fixes its `series.csv` columns, reducer
-  bindings and stop column with the same type.
-  `explore/search/` holds the searches, pure and seeded like the designs. `mod.rs` is the ask/tell
-  `Searcher` trait. `ask(max)` returns up to `max` `Candidate`s, each an id, a `Genome`, a
-  `replicate_offset` and a `CandidateOrigin`, and `tell` takes their `Evaluation`s sorted by
-  candidate id, one row of watched column values per replicate. `SearchSpec` holds the algorithm,
-  `max_evaluations`, `batch_size`, an optional `Objective` (`column`, `Goal`, `Aggregate`) and the
-  space as `FactorSpec`s, and `SearchSpec::searcher` builds the searcher from `search_seed(root)`.
-  `CandidateTracker` numbers the candidates and holds the budget, a count of evaluations with the
-  re-evaluations among them. `genome.rs` (`SearchSpace`, `Genome`) resolves the space as a sampled
-  design does, keeps a repeated listed level once at its first place (0.0 and -0.0 as one level),
-  and decodes a gene `u` in `[0, 1]`: linearly for an `f32` range, and as
-  `floor(u * m)` for whole numbers and listed levels. A mutation of an ordered gene is the
-  triangular step `u + scale * (r1 + r2 - 1)` reflected at the bounds, a listed-level gene is drawn
-  again, and crossover is uniform. No draw goes through libm, and a trajectory is the same on every
-  platform. `evaluation_log.rs` (`EvaluationLog`) files every replicate value under its candidate,
-  a re-evaluation's under the candidate it repeats, and scores a failed replicate as `Goal::worst`.
-  Among equal scores the lower id ranks first. The four searchers are `random.rs`, `hill_climb.rs`
-  ((1 + lambda) with lambda the batch size, a restart after `patience` batches without a strict
-  improvement, an optional re-evaluation of the incumbent, and starting points drawn through
-  `draw_config` as neighbours are, so no two first evaluations share a config), `genetic.rs`
-  (generational, tournament selection, uniform crossover, per-gene mutation, children bred as a
-  generation starts from the fitness before its re-evaluations, `elite_count` survivors chosen after
-  `ceil(reevaluate_fraction * population)` re-evaluations of the best members, fitness pooled over
-  every replicate a member has, no batch spanning two generations, and `MAX_POPULATION` and
-  `MAX_TOURNAMENT_SIZE` of `1 << 16`) and `pse.rs` (Pattern Space
-  Exploration over two `PatternAxis` outputs, with a `BTreeMap` archive keyed by `PatternCell`
-  holding the hits and the first candidate to land, and parents taken from a two-way tournament on
-  fewest hits after `initial_samples` random candidates). The initial samples fill batches of their
-  own, and without any the first candidate is alone in its batch. After them, an ask on an empty
-  archive draws a whole random batch. `PatternSpaceSettings::batch_count` gives the number of
-  batches, and `PatternAxis::cell_index` puts NaN in cell 0, outside. An axis with neither `min` nor
-  `max` has an automatic range: the searcher holds every evaluation until the initial samples are
-  told, takes the range from their outputs (`automatic_range`, 5% margin), then files the held ones
-  in candidate order. `Searcher::pattern_settings` returns the settings once both axes have a range,
-  and `SearchUpdate`, `SearchHistory` and the manifest's `axis_ranges` carry them.
-  `SearchHistory::read` takes the range again from the initial samples' rows of `evaluations.csv`
-  and places the rows written before it. `search/tests/` holds the driver the searcher tests share
-  (`support.rs`) and the protocol tests every searcher passes.
-- **henad-build**: a build dependency, on henad-core, `wgsl_bindgen` and `heck` alone, the last
-  naming a `ShaderEntry` variant as `wgsl_bindgen` does. `lib.rs` holds `ShaderBuild` and
-  `ShaderBuildError`, `paths.rs` the walk of a shader root and the Rust names a path becomes
-  (`check_components`, `check_reserved`, `check_collisions`, `check_module_name`),
-  `binding_lines.rs` the private reader of `@group(0)` lines, and `output.rs` the shared-module
-  copies, the files the entry points import (`imported_files`, through `wgsl_bindgen`'s
-  `DependencyTree`), the stamp and the two generated files. `stamp/` holds the build stamps:
-  `stamp_commit` for a host or model crate, and the hidden `stamp_engine_commit` (henad-explore)
-  and `stamp_source_hash` (henad-compute, henad-models). `stamp/mod.rs` picks the source of a
-  stamp by `StampScope`: a package's `.cargo_vcs_info.json` first, then git when
-  `git ls-files --error-unmatch Cargo.toml` succeeds, and for the engine only when `--show-prefix`
-  is `crates/henad-explore/`. `stamp/files.rs` lists and hashes the files under `src` and the
-  manifest (`Cargo.toml.orig` in a package, which holds a `.cargo_vcs_info.json` or a `Cargo.toml`
-  Cargo generated), with the nearest `Cargo.lock` outside a package, CRLF read as LF, and a file
-  that vanishes mid-read skipped. Dotfiles, `~`, `.swp`, `.orig` and `.rej` files, `#name#`
-  autosaves (`is_excluded`) and symlinks to a directory or to nothing (`is_link_to_no_file`) are
-  left out of the hash and the dirty flag alike. `stamp/git.rs` asks git, with
-  `GIT_OPTIONAL_LOCKS=0`, for the commit (the full hash cut to eight characters), its date
-  (`log.showSignature` off, and empty unless it reads `YYYY-MM-DD`), the dirty flag
-  (`status --porcelain -z --untracked-files=all`, over pathspecs built from `--show-prefix`, and
-  unknown in place of clean when git does not track the lockfile) and the paths a commit changes,
-  resolved through `--git-path` and `--git-common-dir`, so packed refs and a linked worktree stay
-  watched. A crate in a repository that does not track its manifest yet watches those paths too,
-  and its first commit reruns the stamp. A git before 2.31 echoes `--path-format=absolute` back,
-  and the paths are then joined onto the crate's directory (`echoes_path_format`). In Henad's
-  checkout the engine's hash covers henad-core, henad-build, henad-compute and henad-explore with
-  the lockfile, and `HENAD_BUILD_CRATE_HASH` covers henad-explore alone.
-  `scripts/check_packaging.sh` refuses a `"../` path in `stamp/`. Its tests sit in `src/tests/`:
-  the path checks, the reader against the layout `wgsl_bindgen` generates, whole generations
-  (`a_second_build_reruns_nothing`,
-  `an_edited_shader_or_module_is_generated_again`, `a_shader_added_between_builds_is_generated`,
-  `a_crate_without_shaders_builds`), and the stamps in scratch repositories (`stamp.rs`), with
-  `a_commit_changes_a_watched_path_under_packed_refs_and_in_a_worktree` and
-  `the_engine_stamp_reads_cargo_vcs_info`, which runs `cargo package --no-verify` on the engine's
-  crates and henad-models, and compares henad-explore's crate hash and the source hashes of
-  henad-compute and henad-models with the checkout's. Keep them.
-- **henad-compute**: the engine machinery that turns an authoring impl into something runnable.
-  `cpu/` and `gpu/` are **siblings**, not a base and a specialisation, and mirror each other:
-  each has its own `sim_thread.rs` (runner), its `*_engine.rs` (authoring trait → runnable state)
-  and `primitives/` (shared building blocks). `snapshot.rs`, `runtime_info.rs` and
-  `display_scale.rs` sit above both, since either backend publishes through them. So does `runner/`,
-  which owns how a sim loop gets driven and the one place the two ways of driving one differ:
-  `runner/mod.rs` holds the `SimLoop` trait, `Pace` and the `SnapshotSlot`, with `runner/thread.rs`
-  the native driver and `runner/frame.rs` the wasm one. `entry/` type-erases a model for a host:
-  `ModelEntry` (declarations behind accessors and an `Arc`, and a factory that takes the device at
-  `build`), `ModelState`, the five `register_*` generics, and `ModelSet` (`entry/set.rs`). An entry
-  holds no device from its registration. A set refuses a duplicate id or one outside the grammar,
-  records its `BuildInfo` on an entry that has none, and merges the entries' `GpuNeeds` for the
-  device request. The `register_*` functions are generic, and the engines and kernels monomorphise
-  in the crate that calls them. henad-compute instantiates none outside its own tests.
-  `wrap_factory` and `Factory` are `#[doc(hidden)]` and public for henad-explore's test harnesses
-  alone. `grid_init_rng` and `agent_init_rng` hold the default-seed rule the CPU engines and the GPU
-  ports share. `simulation.rs` is the programmatic API over an entry. `RunSetup`
-  (`ModelEntry::setup`) holds values by id, a seed and scheduled actions, each checked when set
-  (`set` through `check_value`, `set_text` through `parse_value`, `from_parts` and `from_replay`
-  for positional values). `RunSetup::build` fires tick 0's actions before it returns, and a
-  `Simulation` fires each later tick's after the step that reaches it (`Fire::AfterStep`), testing
-  the schedule once per stretch. On native a CPU `Simulation` runs each call's model code inside
-  one `rayon::scope` (`run_sampled` once for the whole call, its callback inside it, hence the
-  `WasmNotSend` bounds), and a GPU one runs on the calling thread inside `catching_on`. A refused
-  scheduled action is a `Fault`. A `Simulation` keeps the message of the first fault a call
-  returned, and every later call that runs model code returns it as `FaultKind::Refused`, or
-  `FaultKind::DeviceLost` once the device is lost. A fault can leave a step half done, and a later
-  call would step on from it. `StatSample` reads stats by label, `views` prepares at the read,
-  and `write_state` is `--export`'s writer. `ParamValue` has exactly three `From` impls (`f32`,
-  `u32`, `bool`). `an_unsuffixed_literal_sets_a_parameter` fails to compile on a fourth for an
-  integer type other than `i32`, and a static check beside it on `From<i32>` or `From<f64>`, the
-  types an unsuffixed literal falls back to.
-  - `cpu/grid_engine.rs` (`GridModelState`), `cpu/agent_engine.rs` (`AgentModelState`) and
-    `cpu/network_engine.rs` (`NetworkModelState`) each implement the whole `SimState` for their
-    trait. `cpu/field/ca.rs` (`CaField`, a `GridModel` as
-    a field layer) and `cpu/field/scalar.rs` (`ScalarField`, scatter-plus-decay `f32` layers) are
-    the two `FieldLayer` impls. `cpu/layout.rs` is the spring layout for a network's node
-    positions, NetLogo's `layout-spring` with three changes. An edge's pull levels off as it
-    stretches, repulsion is cut off at a radius found through a `SpatialHash`, and a node slows
-    down while its force keeps swinging, as in `ForceAtlas2`. Every `SpringParams` constant is in
-    units of the mean spacing between nodes. `cpu/primitives/` holds `lanes_macro.rs`
-    (`agent_lanes!`, for node lanes too), `chunked.rs` (chunk drivers and RNG seeding), `scatter.rs`
-    (the many-agents-one-cell write path) and `components.rs` (connected components by min-label
-    propagation). `AgentModelState` counts its model's own params once at construction, and a step
-    builds no descriptor list. `cpu/sim_thread.rs` is the sim runner, a `SimLoop` with play/pause/TPS-capping,
-    driven by whichever `runner::Driver` the target has.
-  - `gpu/grid_engine.rs` (`GpuGridState`) and `gpu/agent_engine.rs` (`GpuAgentState`) are the
-    engines for the two GPU traits, mirroring their `cpu/` namesakes. `gpu/sim_thread.rs` is the
-    batching GPU runner and `gpu/timing.rs` its adaptive-batch controller. `gpu/view/` is what a
-    model hands the UI (`display.rs` for a texture layer, `agents.rs` for lane buffers drawn in
-    place). `gpu/primitives/` holds the GPU counterparts of henad-core's data structures —
-    `spatial_hash.rs`, `prefix_scan.rs`, `reduce.rs`, `readback.rs` — plus `dispatch.rs` and
-    `pipeline.rs`. The `henad::dispatch` module a pass imports and the `reduce_tree` fold a reduce
-    leaf repeats are WGSL in henad-core's `authoring/primitives/wgsl/`. `gpu/grid_dims.wgsl` is an
-    entry point that is never dispatched. It brings `henad::dims::Dims` into the generated
-    bindings, and `grid_engine.rs`'s `Dims` is a `pub(crate)` alias of that struct.
-    `gpu/tests/parity.wgsl` is the parity test's shader, with a `CODES` array that references
-    each boundary and table code the test reads.
-    `gpu/limits.rs` is what raises the device past the WebGPU baseline, and `gpu/capacity.rs`
-    is what asks whether a model fits the device before anything is allocated.
-    `gpu/contracts.rs` holds the asserts both engines make first: each shader's `main` declares the
-    `@workgroup_size` its pass dispatches (read from the literal naga writes, skipped for anything
-    else), and no buffer label is reserved or ends in `_in` or `_out`. Either mismatch validates
-    and runs wrong.
-    `gpu/stepping.rs` steps a `GpuSimState` from a host with no sim thread, native only. It submits
-    at most `MAX_STEPS_PER_SUBMISSION` steps per command buffer, fires a `Schedule` under either
-    `Fire` rule, waits once at the end of a run, and blocks on a stats readback. `submit_slice`
-    submits one command buffer of steps, with the stats passes when sampling, and returns its
-    `SubmissionIndex` without waiting. Its stats passes are `GpuSimState::encode_stats_passes`, the
-    snapshot passes without the display pass. `await_submission` waits for one submission and those
-    before it.
-    A shared file name always means _counterpart_, never coincidence: `cpu/sim_thread.rs` and
-    `gpu/sim_thread.rs`, `cpu/agent_engine.rs` and `gpu/agent_engine.rs`, `ants/step.rs`,
-    `boids/step.rs` and `virus_network/step.rs`, `henad-core/src/spatial_hash.rs` and its
-    GPU twin. Two unrelated things must not share a basename.
-    The one name carrying three meanings is `primitives`, so keep them straight: `cpu/primitives/`
-    and `gpu/primitives/` are engine internals and are counterparts of each other, while
-    `henad-core/src/authoring/primitives/` is the model-author-facing vocabulary and is a
-    counterpart of its own `wgsl/` directory instead.
+Invariants that span crates. Each topic file has the measurements behind them.
 
-- **henad-models**: concrete simulations — `sir.rs` and `game_of_life.rs` (`GridModel`), `boids/`
-  (`AgentModel` over `NoField`), `ants/` (`AgentModel` over `ScalarField`, the one composite
-  model), `virus_network/` and `team_assembly/` (`NetworkModel`), `gpu_game_of_life/` and
-  `gpu_sir/` (`GpuGridModel`), `gpu_boids/` and `gpu_ants/`
-  (`GpuAgentModel`). A CPU agent model is split into
-  `lanes.rs` (the `agent_lanes!` declaration), `mod.rs` (metadata, params, stats) and `step.rs`
-  (the kernels); ants adds `field.rs` for its pheromone layer. A network model has the same
-  `lanes.rs` and `mod.rs`. `virus_network/` adds `step.rs` (the node pass) and `wiring.rs` (the
-  initial edges and the rewire). `team_assembly/` has no node pass and no `step.rs`. It adds
-  `assembly.rs` (the global pass and the setup teams), `ring.rs` (`RetirementRing`, a bucket queue
-  that finds the nodes due to retire without a scan) and `live.rs` (`LiveSet`, a dense list of the
-  live nodes for uniform draws). A GPU model is one `mod.rs` of
-  declarations next to its `.wgsl` files. Each GPU port starts from its CPU counterpart's tick 0
-  bit for bit, which keeps the two backends fair to compare, and seeds only in `seed_buffers`. The
-  agent ports call the CPU `init`. The grid ports repeat its draws (`gpu_game_of_life` bit-packed),
-  and a device-free test per port compares the seeded buffer with the CPU grid.
-  `example_models()` (`lib.rs`) registers all ten into one `ModelSet` with henad-models' own
-  `build_info!()`. The registry tests sit in `src/tests/registry.rs`. They run the testing kit
-  over `example_models()` on a baseline device, check each model's skipped checks, and keep the
-  guards for the example models alone: no GPU entry builds without a device, `gpu_sir`'s refusal
-  at 6000 by 6000, each GPU entry's `GpuNeeds` against its widest pass, and the set's coverage.
-  `gpu_boids` declares `REPLAYS_EXACTLY = false`, and its entry's `metadata().replays_exactly`
-  reads it.
-- **henad-explore**: sweeps and searches, a sibling of henad-models over henad-compute, below the
-  two front ends. `sweep.rs` holds `run_spec`, which runs a sweep, or a search for a spec with a
-  `[search]` table, into a `SweepOutput`, and `plan_spec`, the dry run, which reads a folder as a
-  resume would. Both acquire a device for a GPU model handed none (`sweep_device`), and the
-  manifest records the adapter of the context the sweep steps on. `SweepOptions::new(provenance)`
-  gives the defaults, and `apply_execution` copies a spec's `[execution]` table, which a host
-  applies before its own settings. A sweep plans a `SweepSpec`, checks every config of a GPU model
-  against the device (`probe.rs`, `check_capacity`), and builds the first config without a fault
-  (`ProbeReport`) to fix the stat columns and bind the reducers and the stop condition. It builds
-  the last config as well, and the larger of the two sizes the lanes or tracks and the projected
-  memory. A config that faults is left for its runs to record. A scatter grid sizes its scratch to
-  the pool. Lanes narrower than the global pool get the probe rebuilt on a pool of their width, and
-  the memory cap reads that build. It then writes the manifest, runs every pending run, rebuilds the
-  summary and replaces the manifest. A sweep that fails after the manifest exists marks it `failed`
-  when it can. A dry run stops after the probes. `spec_file.rs` is the TOML form of a spec
-  (`SpecFile`), and `LoadedSpec` a spec file read whole, with its `SpecSource` and
-  `ExecutionTable`. A sweep, a search and a pumped sweep install no panic hook. A host's `main`
-  does, as do `henad_cli::run`, the app's entry points and `assert_set_conforms`, and the test
-  helpers `support::sweep` and `sweep_with` install it before each sweep. Every table is
-  `deny_unknown_fields`. A param value stays the text `--set` takes, and a spec file and a command
-  line hand `parse_value` the same text. A `table` block's `file` is
-  read relative to the spec file, and only a table design's. A path that is absolute or holds `.` or
-  `..` is refused (`SpecFileError::TablePath`). The manifest's copy of the spec carries the table
-  inline as `table_text`, and the writer emits `design_seed` for a sampled design alone. `specs/`
-  holds real spec files and a design table. The docs include each spec by `--8<--` region and the
-  table whole, and a test plans the specs. `schema.rs` (`schema_json`) is the `--params --json`
-  object, also embedded in the manifest. `cursor.rs` (`RunCursor`) owns one CPU run from its build
-  to its `RunOutcome`. `advance(max_steps)` steps it a slice at a time and takes every sample due on
-  the way, `prepare_view` then `stats()`. It fires tick 0's actions before the first step and each
-  later tick's after the step that reaches it (`Fire::AfterStep`), through `Schedule::run_due`. The
-  stepper tests for an empty schedule once per slice, and a run with no actions steps with nothing
-  else in its loop. A refused action goes in the note and leaves the status alone. The run ends on
-  the first sample where its stop condition holds, or after the first slice past its timeout
-  (`timed_out`, checked by wall clock between slices). A fault ends the run with its status, and the
-  samples before it are kept. A cursor refuses a GPU model. A GPU run steps on a track of
-  `exec/gpu.rs` under the same rules, and both end a run through `run_outcome`. `exec/mod.rs` holds
-  `Concurrency`, `choose_layout` (the auto rule), `ExecutionLayout`, `GpuTrackDepth`, `SweepControl`
-  (pause and abort, one atomic load per slice), `Executor` and the reorder buffer that commits
-  outcomes to a `RunSink` in request order. `choose_layout` sizes CPU lanes from the probe's
-  `parallel_jobs`, and GPU tracks as `gpu_memory_budget` over the probe's `Demand`, at most
-  `MAX_AUTO_GPU_TRACKS`, with a single track from a population of `LARGE_GPU_POPULATION`. Each run
-  starts its slices at one step. A slice carried over from a lighter run once held off a pause for
-  minutes. `exec/cpu.rs` runs one `thread::scope` lane per rayon pool, each pool built once in
-  `Executor::new` with `threads_per_lane` workers, and each run built and stepped inside
-  `pool.install`. A single lane gets a pool of its own as well, even at the global width, so a
-  paused run waits on a worker of its lane's pool and never on one of the global pool. Other hosts'
-  passes share the global pool. A target that cannot spawn threads builds no pool and drives each
-  run on the calling thread.
-  A panic on a lane's thread or in the sink aborts the `SweepControl` (`AbortOnPanic`). The other
-  lanes then stop within a slice instead of stepping runs nobody commits. `exec/gpu.rs`
-  (`run_on_tracks`) is the counterpart of `exec/cpu.rs` for a GPU model. Error scopes are
-  thread-local, and every `GpuTrack` lives on the calling thread. The `Interleaver` builds a queued
-  run once a track is free and the summed `entry.demand()` bytes of the live runs and its own fit
-  the budget (`--gpu-memory`, else the device's `max_buffer_size`). A run that fits beside none runs
-  alone. An out-of-memory build beside live runs goes back to the head of the queue, drops the track
-  cap by one and holds admission until a live run ends. Each round reads the `SweepControl` once and
-  visits every track once. A visit takes a landed sample through `poll_stats_readback(false)`,
-  submits the actions due at the track's tick, each on its own, then one `stepping::submit_slice` of
-  at most `steps_per_submission` steps, cut at the next tick a sample or an action is due at. A
-  track keeps at most `submissions_per_track` buffers on the device, and records the interval after
-  a sample while that sample reads back. The sample's tick is kept at encode time. By the time the
-  readback lands, `state.tick()` has moved on. A round in which no track moved waits for the oldest
-  submission through `stepping::await_submission`. A blocking readback poll would drain the whole
-  device and stall every track. Each action and slice runs inside `catching_on`, and its fault ends
-  its own track. A fault left in `ctx.faults` ends every live track, and a run that ended earlier in
-  the round keeps its end. A run ends at its last landed sample, and the steps recorded past a
-  sample that stops it are dropped with the state. Each round's time is split evenly between the
-  live tracks, and a track's clock counts its share, builds and pauses aside. The timeout, `wall_ms`
-  and `steps_per_s` read that clock. A lost device ends the batch as `BatchEnd::DeviceLost`, the
-  manifest reads `incomplete`, and `--resume` runs the rest. `output/`
-  writes `runs.csv` (an `action.<name>` column per action after the params), `series.csv`,
-  `summary.csv` (rebuilt at the end of a sweep, a resume or a merge by `write_summary`, which
-  streams `runs.csv` one record at a time and holds one cell string per config) and
-  `manifest.json` (written `running`, then replaced by a rename). `OutputDir` refuses a directory
-  that holds any of the four, a search table or any `*.staged` file unless the sweep resumes, and
-  `OutputWriter` writes and flushes a run's series before its row. An `OutputDir` holds the
-  operating system's advisory lock on `.lock` (`DirLock`, `File::try_lock`) while it lives, and a
-  second writer gets `OutputError::Locked`. The file stays when the writer ends, and the next writer
-  locks it again. The lock goes with a killed process. A resume, of a sweep or a search, opens the
-  directory in `SweepPreparation::new` or `SearchPreparation::new`, before its scan reads the
-  tables, and holds the lock through its last write. A writer creates afresh each file it replaces
-  (`create_fresh`), appends to and cuts `runs.csv` and `series.csv` only after `open` refuses a
-  symbolic link in place of either, and `check_free` counts a dangling link as a result file.
-  `output/read.rs` reads the tables
-  back, keeping complete records only (`RunsCsv`, `SeriesScan`), and `merge_series` interleaves
-  series segments by run id. `record_ends` follows the CSV grammar (`RecordScan`), and a quote
-  inside an unquoted field fails its record instead of hiding the records after it.
-  `output/resume.rs` (`ResumeScan`) accepts a directory only with the same model id, plan hash,
-  schema hash and shard, and no more replicates than the sweep runs. It keeps `ok`, `non_finite`
-  and, without `--retry-failed`, failed runs, always reruns a `timed_out` one, renumbers kept runs when the
-  replicate count rises, and repairs the tables by truncation or by a rewrite. A rewrite stages both
-  tables as `*.staged`, marks them complete with `tables.staged`, then renames both, and
-  `OutputDir::open` finishes a rename a process left part done. `merge.rs` joins shard directories
-  of one plan, replicate count and shard count, merges both tables by run id, rebuilds the summary
-  and records the inputs in `merged_shards`. It credits the last session of a `running` or `failed`
-  shard as a resume would, and `replays_exactly` reads `true` only when every shard's does. Missing
-  runs are a warning and an `incomplete` manifest. A resume of the merged directory fills them in.
-  Provenance: `ENGINE_BUILD` (`lib.rs`) is
-  Henad's build, stamped by henad-explore's `build.rs`, and `RecordedBuild::engine()` records it
-  under the name `henad` with `crate_versions` and `crate_hashes` (henad-compute's from the hidden
-  `__COMPUTE_BUILD`). `Provenance::new(host, arguments)` holds it beside the host's build. Every
-  manifest session records `engine`, `host` and `model_source` as `RecordedBuild`s, and
-  `model.replays_exactly` reads `true` when absent. `RecordedBuild::same_build` compares package,
-  version, the engine crates' versions and hashes, then the commits of two clean builds, then the
-  source hashes, and two unidentified builds are never the same. A commit with `dirty: null` counts
-  as clean only without a source hash, as in a 0.2 session. A resume, a search resume and a
-  merge warn `SweepWarning::BuildChanged` for each differing build of `BuildRole::Engine` or `Model`
-  (`build_warnings`, `Manifest::recorded_builds`), a merge's with `between_shards` set. A merge
-  compares each other shard's builds with those of the lowest shard that records any.
-  `recorded_builds` leaves out a 0.3 session that ran nothing (`ran` 0, unless it is the last
-  session of a `running` or `failed` manifest) and lists unidentified builds alike once
-  (`RecordedBuild::reads_as`). The host is never compared. A 0.2 session reads
-  as the engine build of its commit and the folder's version, and a resume or a merge writes that
-  build into it (`record_session_engines`). `ResultSet::recorded_builds` reads them.
-  `a_0_2_0_manifest_still_resumes` resumes the 0.2.0 folder in `tests/fixtures/`, recorded by the
-  procedure in its `README.md`, and `a_0_2_0_manifest_still_replays_and_merges` replays and merges
-  it. Both fail when the folder is missing. `src/tests/provenance.rs` holds the comparisons. Keep
-  them.
-  `progress.rs` is the `Progress` trait the host renders. The library never prints. `device.rs`
-  (`acquire_headless`) acquires a GPU device with no window or surface, at the WebGPU baseline
-  raised by `gpu::limits::raise`. An adapter below the baseline, as a GL adapter can be, gets
-  `DeviceError::BelowBaseline`, and the CLI then runs CPU models only. It is native only. `pollster`
-  blocks on the request, and a browser cannot block. The crate is in the wasm typecheck with
-  henad-core, henad-compute and henad-models.
-  Native-only code sits behind `#[cfg(not(target_arch = "wasm32"))]`. `handle.rs` (`SweepRun`) is a
-  host's handle on a sweep, with one API on native and in a browser, described under "Sim runs off
-  the UI thread". `SweepRun::start` plans the spec before it returns, and a browser refuses a GPU
-  model with `SweepStartError::GpuNeedsNative`. The `gpu` a host passes to `start` or
-  `resume_directory` is a device it shares with the sweep, `FaultSink` included. Handed none for a
-  GPU model, the sweep thread acquires a device sized to the entry's `GpuNeeds` through
-  `acquire_headless`, builds the entry it was handed on it (`sweep_device`), and records that device
-  in the manifest. `SweepRunOptions::new(provenance)` gives the defaults, and its `spec_source`
-  goes into the manifest. A device it cannot acquire fails the sweep with `SweepEvent::Failed`.
-  `acquire_headless` returns the `GpuContext` alone, with its `RuntimeInfo` attached and read back
-  through `runtime_info()`.
-  `SweepOutput::Memory` writes the four files through the same writers over `Vec<u8>`
-  (`output/memory.rs`, `SweepFiles`) and hands them over in the `SweepRecord`.
-  `SweepOutput::Directory` is native only. `SweepRunOptions::memory_budget` and `gpu_memory_budget`
-  are the budgets of `--memory` and `--gpu-memory`. `SweepRunOptions::series_budget` caps the bytes of
-  series the `RunFinished` events carry. From the first run past it, every run arrives without its
-  series, and the files keep them all. `SweepRun::resume_directory` resumes a folder with the spec
-  its manifest records, along the path `--resume` takes. `pumped.rs` (`PumpedSweep`) is the
-  browser's executor, a `runner::SimLoop` that makes one probe build per pump (`PlanProbe`),
-  prepares the sweep in a pump of its own, then builds and steps one CPU `RunCursor` at a time
-  into memory, a slice of about half `PUMP_BUDGET_MS` per pump. A pause holds only the runs, and a
-  sweep or search paused after its last run still ends. It compiles for wasm32 and for tests, and
-  the tests pump it on native. `result_set.rs` (`ResultSet`) reads an output directory back, through
-  `open_dir` on native or `from_files` over the bytes of picked files. It needs `manifest.json` and
-  `runs.csv`, reads complete records only, and holds `series.csv` run by run in file order while a
-  byte budget lasts. A run the budget cuts holds none of its rows. A `runs.csv` with no complete
-  header, as a sweep stopped before its first run leaves it, opens with no runs and no value or
-  reducer columns. `series.csv`'s header has to name `run_id`, `tick` and the manifest's stat
-  columns. `summary.csv` is left unread. `ResultSet::replay` plans the recorded spec and returns a
-  run's `Replay`, refusing a run whose config, replicate, seed or run key differ from its row. The
-  run key hashes the model's declarations too, and is compared only while `schema_matches` holds.
-  `read_directory_series` reads the series of chosen runs later, given the stat column names.
-  `testing/`, behind the `testing` feature and always built for henad-explore's own tests, is the
-  kit a model's tests run. `check_model` runs every `ModelCheck` that applies and returns a
-  `ModelReport` of `CheckFailure`s and `SkippedCheck`s. It never panics on a model's behalf: a
-  panic, a device error or a broken contract is a failure of its check, and a GPU check waits for
-  the device before it ends, so no fault outlives the check that raised it. `check_model_set`
-  returns a `SetReport`, which also names every model id an override or an exemption names and the
-  set lacks. `assert_set_conforms` installs the panic hook, panics with every failure of a set, and
-  prints the report of a set that passes, skipped checks included. An exemption of a check that
-  does not apply fails that check, and under `HENAD_REQUIRE_GPU` a check a missing device would
-  skip fails. An override the model refuses fails every check that builds it, one a missing device
-  skips included. `declared.rs` reads the
-  declarations and builds nothing, `DefaultSetup` among them, the `RunSetup::from_parts` check the
-  app's Build makes. `built.rs` builds once per check, `determinism.rs` compares two runs, and
-  `gpu.rs` (native only) steps a GPU model on the settings' device. A check that builds takes the
-  five size parameters at 128, or 256 agents, never above the default. `ThreadCount` sets the size
-  so a step splits into twice the high thread count in jobs: `num_agents` at that many chunks, or
-  the largest `grid_height` that splits into no more, found by building. One job at every size
-  within bounds skips it as `OneJob`, one job at a size an override sets as `OneJobAtOverride`,
-  and wasm32 skips it as `NativeOnly`. The GPU checks and a GPU
-  model's `Actions` build at the declared defaults. A watchdog trips on time, and a small model
-  never trips it. `FullSubmission` runs `MAX_STEPS_PER_SUBMISSION` single steps first and reads
-  their stats, then one full submission, and compares the two. A device the full submission
-  poisons reads zeros in every later run, and the other order compares zeros with zeros. A model
-  that does not replay exactly runs the full submission alone, and fails when it declares stats and
-  every one reads zero. A lost device fails it. A GPU model skips `ThreadCount` (`OtherBackend`),
-  and one that does not replay exactly skips `SameSeed`, `SeedSensitivity` and `SamplingCadence`
-  (`InexactReplay`).
-  `SeedSensitivity` compares the stats and the exported state. `CheckSettings::ticks` refuses fewer
-  than `MIN_TICKS`. `CheckSettings::set_text` overrides a value in every check that builds, and
-  `exempt` skips a check with a reason. `headless_test_device` (native only) acquires a device for
-  a `TestDeviceRequest`, the baseline or `raised(needs)`, with optional features, and a missing
-  feature returns `None` even under `HENAD_REQUIRE_GPU`. An adapter below the baseline gives no
-  device for either request, as `acquire_headless` refuses it.
-  `src/tests/` holds `support.rs` (the headless device, scratch directories, a sweep helper,
-  `OutputTables`, `CommitLimit`, and `ticks_seen` with `HOLD_WINDOW` for pause checks), `broken.rs`
-  (`GridModel`s that panic or report a value that is not finite, registered through the public
-  `register_grid_model`, the `grid_model!` models with one broken declaration or build each,
-  `SharedAccumulator`, whose kernel shares a counter across chunks, `DeclaresNumAgents`,
-  `CountsViews`, a network model whose `prepare_view` writes a lane, `DefaultOutOfBounds`, whose
-  default lies outside its bounds, `OversizedGpuSir`, whose defaults pass the WebGPU baseline,
-  `BuggyState`, which adds one `Bug` to a CPU state, `BuggyGpuState`, which adds one `GpuBug` to a
-  GPU state, such as reading zeros on every state of its entry after a full submission, and the
-  sound `PlacesCellBySeed` and `StatlessGpuBoids`, which the kit passes), `kit.rs` (each broken
-  model fails exactly the checks its bug breaks), and the
-  determinism, failure, run control, resume, shard, GPU sweep, GPU
-  track (`tracks.rs`), handle, result set and replay tests. For a model that replays exactly (every
-  model but `gpu_boids`), the three CSVs are byte-identical apart from `TIMING_COLUMNS` at any lane
-  or track count, for merged shards against an unsharded sweep, and for a resumed sweep against a
-  fresh one, timed-out runs aside. A sweep held in memory, on a thread or pumped, writes the bytes a
-  directory sweep writes. `OutputTables` compares `series.csv` and `summary.csv` byte for byte, and
-  `runs.csv` with its timing fields emptied.
-  `a_sweep_writes_the_same_files_at_any_concurrency`, `interleaved_gpu_runs_match_sequential_ones`,
-  `ants_results_do_not_depend_on_lane_width`, `merged_shards_equal_an_unsharded_sweep`,
-  `a_resumed_sweep_skips_finished_runs_and_matches_a_fresh_one`,
-  `memory_output_equals_directory_output` and
-  `the_pumped_sweep_writes_what_a_directory_sweep_writes` hold that line.
-  `a_pipelined_gpu_sample_matches_a_blocking_one` pins a track's pipelined sample to
-  `stepping::sample_stats`. `gpu_boids` matches only in the parts the engine owns, every `runs.csv`
-  field up to `population` and the run and tick of each series row, and
-  `interleaved_gpu_boids_runs_commit_in_plan_order` pins them.
-  `every_gpu_model_that_replays_has_a_track_case` holds the cases of the two GPU tests above to
-  every GPU model that replays exactly. Keep them.
-  `search_run.rs` runs a spec with a `[search]` table, behind `run_spec`. `SearchPlan` plans the fixed
-  values and actions as a one-config `Plan`, and a search spec with blocks is refused, as is a batch
-  of more than `MAX_RUNS` runs (`SearchPlanError::BatchTooLarge`). It resolves
-  the space, checks that every watched column is a reducer column, and hashes the settings that fix
-  the trajectory with `search_hash`. Unlike `plan_hash`, that hash covers the replicate count, and
-  it covers the budget. The loop asks the searcher for a batch, runs it through the sweep's
-  `Executor::run_batch` on lanes or tracks, and tells the searcher the watched reducer values. Run
-  `r` of candidate `c` has run id `c * replicates + r`, config id `c`, and replicate index
-  `replicate_offset + r`, seeded by the spec's scheme. Common random numbers then hold across
-  candidates, and a re-evaluation runs on fresh seeds. `SearchSession::tell` turns each batch into
-  a `SearchUpdate`, reported as `ProgressEvent::SearchBatchTold`. `output/search_tables.rs` writes
-  `evaluations.csv`, `batches.csv` and, for a genetic algorithm, `generations.csv` batch by batch,
-  then `best.csv` or `archive.csv` at the end, and `SearchHistory` reads them back for the app. It
-  finds the columns after a config by their place from the end of the header, since a param id can
-  share their names, tells a PSE table by its last column, and checks the trailing cells of a
-  scored `evaluations.csv`. A
-  resume replays the searcher from its seed and reads every recorded run's values back from
-  `runs.csv` (`RecordedSearch`) in place of running it, failed and timed-out runs included. It
-  refuses a run whose `run_key` differs from the run asked for, and replays every recorded batch
-  once in `SearchPreparation::new` to check them all before a table is written. A search refuses
-  `--shard` and `--retry-failed`. The manifest reads `mode` `search`, holds the hash of the fixed
-  values and actions as `plan_hash` and `null` as `plan.configs`, and adds a `ManifestSearch` with
-  the search hash. A search that fails records its standing at the failure there. `SweepRun` and
-  `PumpedSweep` run searches as well, and `ResultSet` reads
-  a search folder back with its tables. `specs/sir_search_genetic.toml` and
-  `specs/sir_search_pse.toml` are the example searches the docs include. `src/tests/search.rs` holds
-  `every_example_search_spec_parses`, `a_search_writes_the_same_tables_at_any_concurrency`,
-  `a_resumed_search_follows_the_same_trajectory`,
-  `a_resume_that_meets_a_changed_run_leaves_the_directory_alone` and
-  `a_gpu_search_writes_the_same_tables_on_any_track_count`. Keep them. A resume plans the spec its
-  manifest records, and the workspace turns on serde_json's `float_roundtrip` so that a bound or a
-  rate reads back bit for bit. `a_search_resumes_from_a_manifest_holding_a_seventeen_digit_axis_bound`
-  (`src/tests/manifest_floats.rs`) holds it. Keep it.
-- **henad-app**: eframe/egui desktop+web GUI, as a library with the official binary over it. The
-  public API is `options.rs` and the two entry points. `AppOptions::new(models, product, host)`
-  takes the `ModelSet`, the product name (the window title and, on native, eframe's storage folder,
-  through `storage_id` where the name is no folder name)
-  and the host's `BuildInfo`, with setters for the icon, the source and documentation links, the
-  licence, the `cli_command` and an `AppOpening` (`Results` on native, `Run` or `Setup`, each with
-  an `OpenAt`, which `lib.rs` re-exports from the private `state`). The product's fields sit in the
-  crate-private `Product`, held as `AppState::product`, whose `Debug` prints the icon's byte length.
-  `Product::official` marks Henad's own app, and only the official binary sets it, through the
-  hidden `AppOptions::__official`. `native.rs` holds `run_native`, which returns `AppError` (its
-  `Debug` writes its `Display` and source, as `ShaderBuildError`'s does), and `results_folder`,
-  which `--open DIR` and `--open=DIR` go through. `web.rs` holds `start_web`, which starts the
-  wasm-bindgen-rayon pool at the crate-private `requested_threads` before it calls the options
-  closure, then looks up `the_canvas_id` and `loading_text`, and `init_web_logger`. A pool that
-  fails to start leaves `thread_pool_note`, which the Performance tab shows. wasm-bindgen-rayon and
-  the `init_thread_pool` re-export exist only with `target_feature = "atomics"`. A wasm32 build
-  without it, as docs.rs makes, has no pool and leaves a note of its own. A start failure is returned, a missing window
-  included, and the caller logs it once. In a window, it is also written into `loading_text` where
-  the page has one. Both entry points check the opening against the set before any device exists
-  (`AppOptions::check_opening`, `OpeningError`): the set has to hold the id, a run has to pass
-  `RunSetup::from_replay`, and a setup's entry has to declare the same `schema_hash`. `AppError` is
-  native only and `WebStartError` wasm only. henad-app re-exports no eframe item. `state`, `ui`, `HenadApp` and
-  `wgpu_configuration` are private. `HenadApp` (`lib.rs`) owns the `SimThread` and polls snapshots each frame.
-  `HenadApp::new` takes the options and hands the opening to `AppState::open`, and `wgpu_configuration` takes the set's
-  `GpuNeeds` for the device request. henad-models and the binary's env_logger are optional behind the default
-  `example-models` feature, which the `[[bin]]` requires, and `main.rs` builds the official options over
-  `example_models()`: "Henad", the icon, the links, the licence, `cli_command("henad-cli")` and `__official()`. The
-  eframe app name "Henad" names the native storage folder, which left 0.2.0's `Henad-Engine` behind,
-  and a browser keeps eframe's one key per origin. `ui/` has one file per panel or window
-  (`menu_bar.rs`, `model.rs`, `params.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
-  `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `about.rs`). The Export tab lives in a
-  directory,
-  `export/`. Its `mod.rs` draws the tab and writes the stat series and final state, `image.rs`
-  captures the viewport and `metadata.rs` builds the run details. `files/` holds the file dialogs:
-  `save.rs` hands bytes to a save dialog (several files go into one picked folder on native and
-  download one by one in a browser), and `open.rs` reads picked files, or takes a picked folder on
-  native. Each outcome carries a `SaveTarget` or `OpenTarget`, and `AppState::poll_saves` and
-  `poll_opens` route it to the panel that asked. `dock.rs` holds the tab definitions, the default
-  layout and the dispatch to each panel. Sweep and Results stack behind Viewport.
-  `agent_layer.rs` (with `agents.wgsl`) is the instanced agent renderer drawn over the grid layer,
-  and `painted.rs` carries a paint callback's wgpu handles past `CallbackTrait`'s `Send + Sync`
-  bound. `edge_layer.rs` (with `edges.wgsl`) draws a network's
-  edges under the nodes. It reads both ends from the agent layer's position buffers, bound as
-  storage, and uploads the edge list only when its version or length changes. That binding
-  needs `DownlevelFlags::VERTEX_STORAGE`, and WebGL2 lacks it. Without that flag there is no edge
-  layer, and a network model runs with its edges undrawn. `world.wgsl` holds the helpers both
-  shaders `#import`, including `is_placed`, the finiteness test that hides a retired node.
-  `state.rs` (`AppState`) holds the set as `models` and keys the selection by id:
-  `selected_model` and `loaded_model` are `Option<String>`, resolved at use through
-  `selected_entry`, `loaded_entry` and `lookup`. `offered_models` hides a GPU model where the
-  adapter has no compute, through `ModelSet::runnable`, and the app opens on the first offered
-  model, or with none selected and `NO_MODEL_RUNS` in the Model panel. A missing id reads as
-  `lookup_message` words it, "This build does not include model 'x'" or "Model 'x' needs a GPU with
-  compute support, and this device has none", with no full stop. `select_model` loads the defaults
-  and clears the schedule, or, for the loaded model, restores `loaded_values` (its built values with
-  every live edit, kept by `send_live_param`), its seed and its schedule, for the Model panel and
-  the Sweep tab alike, and an id the set lacks leaves no values. `AppState` also holds the values
-  the next build reads: `param_values`, the Seed field's `seed` with its raw `seed_text`, and the
-  scheduled actions in `schedule`.
-  `AppState::build_setup` checks all three through `RunSetup::from_parts`. Playback's
-  `build_refusal` shows a `SetupError` as Build's disabled reason (`setup_message`), as it shows
-  `INVALID_SEED`, `reset_simulation` builds nothing while the check fails, and `open_run` refuses
-  a replay `RunSetup::from_replay` refuses. `build_runner` builds the checked setup, and
-  `reset_simulation` sends `SimCommand::SetSchedule` to
-  the new runner when the schedule is not empty, then records `loaded_seed` and `loaded_schedule`.
-  `seed_pending` and `schedule_pending` compare each with its loaded copy, and the Reload needed
-  notice counts both. A `None` seed is the model's default, the constant `henad-cli` uses without
-  `--seed`. The engines take `seed.map_or(CONST, mix_seed)`, and the field keeps `None` as a state
-  of its own, shown as the "Default" hint and never as a number. `params.rs` draws the Seed row
-  above the sliders, its dice (`draw_seed`, the clock mixed through `mix_seed`), and the
-  scheduled-actions list under the action buttons. `parse_seed` reads an empty field as `None` and
-  a decimal `u64` as `Some`. Anything else shows `INVALID_SEED` and disables Build. Picking another
-  model clears the schedule. Its entries index the previous model's actions. `playback.rs` draws
-  the Run to tick row. `AppState::run_to` rebuilds first for a tick behind the current one, then
-  sends `SimCommand::RunTo` and sets `run_to_target`. Run is disabled while another model is
-  selected, while the sim plays, and for a tick behind the current one while Build is disabled.
-  A playing loop runs ahead of the snapshot's tick, and a target between the two would pause past
-  it. The progress line reads the target, Cancel sends `Pause`, and `HenadApp::logic` clears the
-  target once a snapshot reaches it. A snapshot past the target makes `logic` call `run_to` again,
-  and the second call rebuilds. Where the frame drives the sim (`!CAN_SPAWN_THREADS`), `logic`
-  keeps repainting while a run-to is pending. `AppState::open_run(Replay, OpenAt)` builds one sweep
-  run from a `henad_core::explore::replay::Replay`. It selects the model, sets the params, seed
-  and schedule, rebuilds, sends `RunTo` for `OpenAt::Tick`, and sets `focus_request` to the
-  Viewport. `HenadApp::ui` applies that request through `dock::focus_tab` after
-  `DockArea::show_inside`. The panels draw while the dock is borrowed. `OpenedRun` names the run in
-  Playback. A live param edit, an action press or a build from other values marks it modified
-  (`settle_opened_run`), and a build of another model or Offload drops it.
-  `AppState::open_setup(&RunSetup, OpenAt)` builds the set's entry under the setup's id from its
-  values, seed and schedule through the same fields, keeps a default seed as `None`, and records no
-  `OpenedRun`. `AppState::open` takes an `AppOpening`. A run or setup it cannot open (a GPU model
-  the compute filter hid, say) leaves nothing selected, keeps an `OpeningRefusal` (a lead line such
-  as "Run not opened" and the reason) in `opening_refusal`, which the Model panel shows with "Select
-  a model to continue." until a model is picked, or above "No model in this build runs on this
-  device." when none runs here, and brings the Model tab to the front. `export/metadata.rs` writes
-  `loaded_values` as `params`, the loaded `seed` (null for the default), `scheduled_actions`, the
-  `host` build from `AppState::product` and the `model_source` build, and reads `engine_version`
-  from `ENGINE_BUILD`. A sweep's manifest records the product's host build as well. `about.rs` draws the product's name,
-  its links and its build rows, Henad's logo and tagline for the official app and the host's icon
-  otherwise (decoded once into the `OnceCell` `logo_texture`, a failed decode included), a Built on
-  row from `ENGINE_BUILD` (with henad-core's version when it differs) for any other product, and one
-  Models row per distinct `ModelSource` build, showing the hash of its sources when the build stamps
-  no commit. Copy copies the name and every row. The menu entry reads "About" and the product name.
-  The runs table's Copy command builds `ResultsStore::cli_command(program, run_id)` from the
-  product's `cli_command` and is hidden without one, and the Sweep tab's advice names it through
-  `options::cli_phrase`, or "on the command line" without one.
-  `ui/sweep/` is the Sweep tab. `mod.rs` holds `SweepPanel` and `sweep_ui`, which splits the tab
-  into four egui panels: a header and a footer of fixed height (`header.rs`, `footer.rs`), a Plan
-  panel on the right while the tab is wide enough (`PLAN_PANEL_BREAKPOINT`), and a central scroll
-  area holding the form or the progress. The header and footer keep their ids and heights in every
-  state, and the last slot of the footer holds Start, then Pause or Resume, then Show results. A
-  press or a link sends a `SweepRequest`, applied once every panel has drawn. `dock.rs` turns off
-  `egui_dock`'s scroll bars for the tab and titles it with the session's state, as in "Sweep 42%".
-  `draft.rs` is pure and unit-tested: a `SweepDraft` per model holds the builder's fields as typed,
-  level text read by `LevelSpec::parse`, and converts to a `SweepSpec` (the Parameters panel values
-  fill every parameter it does not vary) and back, TOML through
-  `henad_explore::spec_file::SpecFile`. "One at a time" writes one factorial block per varied
-  parameter or action tick, each other varied parameter pinned to its panel value as a one-value
-  factor, since a spec cannot fix a parameter that any block varies. `from_spec` recognises that
-  shape and refuses other multi-block specs. `SweepDraft::check` collects every issue its pre-pass
-  finds before it plans, each a `DraftIssue` with the `DraftSite` of its row and an `IssueKind`:
-  `Missing` for input not given yet, `Invalid` for input the plan refuses. Both block Start.
-  `SweepPanel::cached_check` plans the draft only when it or the panel values change, and caps a
-  sweep at `MAX_DRAFT_RUNS`. The panel learns each model's stat columns from one build at its
-  default values (`ColumnsBuild` in `mod.rs`), on a thread named `henad-stat-columns` whose report
-  wakes the UI, a GPU model on a headless device of its own. A browser builds a CPU model inline
-  and skips a GPU model. `SweepDraft::set_stat_columns` hands the columns to the draft, which then
-  names outputs as `ReducerPlan::bind` does (a vector's `.x`, `.y` and `.magnitude`, a histogram's
-  `.total`), turns a watched bare vector label into its magnitude column, and in `check` binds the
-  reducers, the stop condition and a search's watched columns through `MeasurePlan::new` and
-  `SearchPlan::watched_reducers`. While the build runs, `columns_pending` holds the Missing issue
-  `COLUMNS_PENDING` ("Reading model outputs") at `DraftSite::Outputs` and Start stays disabled.
-  After a failed build each stat counts as one column, and a watched `Label.part:kind` of a
-  default kind is accepted for the sweep's own probe to check.
-  `row_levels` caps at `MAX_DRAFT_LEVELS` only a range the draft lists, and a range with no step
-  under a sampled design or a search can be any size. `SweepDraft::tick_source` (`TickSource`)
-  gives an action's tick as fixed, varied or taken from the design table's `action.<name>` column.
-  Save spec (`to_toml`) writes through `henad_explore::spec_file::LoadedSpec::to_toml`, with the
-  draft's execution table. It also refuses what the loader would, a reversed window or a threshold
-  that is not finite, and reads its own TOML back as a check. The draft keeps a loaded spec's `[execution]`
-  `memory` and `gpu_memory` (`memory_budget`, `gpu_memory_budget`). Save spec writes them back,
-  Start passes them to `SweepRunOptions` through `SessionExecution`, the Plan lists them, and the
-  Execution section shows them read-only beside a clear button. `MIN_TIMEOUT_SECONDS` bounds only
-  the Timeout field, and a loaded shorter timeout, 0 included, is kept, as `henad-cli` takes it.
-  `CheckSummary` turns the check into the lines the footer, its chips and the Plan panel list.
-  `plan.rs` (`PlanSummary`) is the plan the panel, the narrow Plan section
-  and a session draw. `layout.rs` holds `FormLayout`, the label column every section shares,
-  `SIDE_BY_SIDE_BREAKPOINT`, the section headers with their issue counts, the note line a row
-  reserves before any note comes, the `Reveal` that opens a section and scrolls to a row, and
-  `ISSUE_DELAY`, the time a focused text field holds back the issue of its text. `builder.rs`
-  draws the Design, Actions, Replicates and seeds, Run length, Outputs and Execution sections, and
-  `parameters.rs` the parameter rows, the values editor and the options menu, each writing the
-  row's `--vary` text, a list without spaces. `session.rs` wraps `henad_explore::handle::SweepRun`
-  (a thread on native, pumped from `HenadApp::logic` through `ui::sweep::update` in a browser, where
-  the frame keeps repainting while it steps), pauses the live sim on start, and keeps the
-  `KeptDraft` that started it for Save spec and the Plan panel. It hands `SweepRun` no device, so a
-  GPU sweep steps on a device of its own and never shares the app's `FaultSink`. A fault in
-  `render_ctx.faults` offloads the live model and leaves a running sweep alone, and `SessionState`
-  has no fault pause.
-  `progress.rs` draws the Status or Result grid, the Search grid and Runs in progress, and
-  `footer.rs` Pause, Resume, Abort with its modal, and the end with
-  Edit sweep, Save results and Show results. Show results sets `focus_request` to Results, as Open
-  on a run sets it to Viewport. Show failed runs and Show in Results go through
-  `ResultsPanel::show_failed_runs` and `ResultsPanel::select_candidate`. Events go to
-  `ui/results/`, the Results tab, whose `ResultsPanel` also keeps the in-memory files of the last
-  sweep for Save results. `store.rs` (`ResultsStore`) holds every run of the sweep, or of a folder
-  read through `henad_explore::result_set::ResultSet`, the configs with their axes (the value
-  columns that take more than one value), and a `SeriesCache` of series within
-  `DEFAULT_SERIES_BUDGET` bytes. It computes the Series view's replicate bands (`SeriesBand`), the
-  Response view's points and the heatmap's cells, each pooling a config's runs that did not fail
-  in order of run id, and the runs table's order. `summary.csv` pools in `runs.csv` order, which a
-  resume can leave out of run-id order, and the last digits can then differ. The other views cache
-  on `ResultsStore::revision`, and the Series view on the drawn configs' counts of runs and held
-  series plus `ResultsStore::replaced_count`, the runs a resumed sweep's rerun replaced.
-  `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
-  line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
-  legend hides both, and `heatmap.rs` draws the grid. `plot.rs` holds the palette, `decimate` (the
-  lowest and highest point of each bucket), the heatmap scale and `HeatmapTiles`, the plot item the
-  Heatmap view and the PSE grid draw through. It borrows the values, and a cell without a value, or
-  an empty PSE cell, draws as `NO_DATA_COLOR`. `table.rs` draws the runs with
-  `egui_extras::TableBuilder`, and the detail strip whose Open and Open at end go through
-  `AppState::open_run`. Open at end steps to the run's recorded ticks, which a stop condition can
-  bring early. The store refuses to replay a run whose plan gives another run key than its row,
-  while the model's schema matches the sweep's. A folder whose manifest records more than
-  `MAX_PLANNED_CONFIGS` configs is never planned, lists its configs from `runs.csv` alone and
-  refuses every replay, on native and in a browser. After a model change the replay opens under the
-  table's warning, as it does when Henad's or the model's build differs from any a session recorded
-  (`ResultsStore::changed_builds`). A model the entry or the manifest declares does not replay
-  exactly gets a note beside Open (`replays_exactly`). Copy command puts an equivalent
-  `--export-stats` line of the product's `cli_command` on the clipboard, which samples from tick 0
-  on the CLI's own cadence. Open results reads a folder on a thread of its own on native and the
-  picked files in a browser, on the frame after the one that first shows "Reading results"
-  (`hold_picked_files`, `due_picked_files`).
-  `ui::results::poll` takes the `egui::Context` for it.
-  Resume sweep resumes an incomplete folder through `SweepRun::resume_directory`, with the memory
-  budgets its manifest records and automatic concurrency (`SessionExecution::recorded`), and the
-  folder is read again once that sweep ends. `henad-app --open DIR` opens a folder at start.
-  `ui/sweep/search.rs` draws the Search section of Search mode: the method, the objective or the
-  PSE axes, the budget, and each method's other settings in a nested Method settings section. An
-  output picked there that the runs do not record joins the Outputs section, and Use range from
-  results reads `ResultsStore::output_range`. `SearchDraft` (`draft.rs`) keeps the settings of
-  every method across a switch. `ui/results/search.rs` is the Search view: the best so
-  far against evaluations for random search and hill climbing, the best, median and worst of each
-  generation for the genetic algorithm, and the PSE grid, where a click selects the first run of a
-  cell's exemplar. `ResultsPanel::ingest` takes a frame's events together, as `SweepSession::update`
-  drains them, and `ResultsStore::push_search_updates` records each `SearchBatchTold` batch by
-  batch, then adds the frame's new configs in one pass. The pass extends the configs and axes in
-  place (`fits_axes`, `extend_configs`), and a level keeps its id when levels are added below it.
-  Every config is built again only when a batch brings a second value to a column that is not an
-  axis, a text that is not a finite number to a numeric axis, or a candidate id at or below one
-  held. Runs that land before their candidate is told wait in `unassigned_runs`. A new level on a
-  numeric axis moves every level above it, and an `f32` search costs time linear in its levels per
-  frame.
-- **henad-cli**: headless benchmark runner, as a library with the official binary over it.
-  `lib.rs` holds the crate doc, `CliOptions` (a `ModelSet`, the host's `BuildInfo`, the command
-  name, the host's package name unless `command_name` sets another, and the `about` line help opens
-  with, henad-cli's description unless set), `SOME_RUNS_NOT_OK` and `run(options, arguments) -> u8`.
-  `run` installs the panic hook, parses with clap's `Command::name`, `bin_name` and `version` from
-  the options, and `about` when set, prints an error as `Error: {error:?}` and returns 1, and
-  returns clap's own code for `--help`, `--version` and a usage error. Argument parsing, the modes,
-  `Reporter`, `json_report` and the text formats are private. `main.rs` is three lines over `run`
-  with `example_models()` and its `build_info!()`. henad-models is optional behind the default
-  `example-models` feature, which the `[[bin]]` and the three integration tests that run it name in
-  `required-features`, and `cargo build -p henad-cli --no-default-features` builds the library
-  alone. Steps a state in a bare loop with no rendering, no
-  `SimThread` and no pacing, so a measurement times nothing but `step()`. `--act ID@TICK`
-  (`henad_core::action::Schedule`) runs a declared action before the step at that tick. An action
-  due from the end of warm-up up to, but not including, the tick the run stops on is timed with the
-  steps, and one due on that tick runs after the timer stops. The GPU path fires the same ticks.
-  The GPU benchmark fires before the step and the GPU stats export after it, one `action::Fire`
-  rule per run, as the two CPU loops do. Otherwise two runs back to back both fire the tick they
-  share. The benchmark is `henad_explore::benchmark::run_benchmark` (`benchmark.rs`), which holds
-  the rule, `BENCH_FIRE`, and reports each repetition through a callback as it starts and as it
-  finishes, so a run killed part way has printed every repetition it finished. `--export` and
-  `--export-stats` step a `Simulation` (`run_to` and `write_state`, `run_sampled`). The shared
-  `params_by_id_json` and `scheduled_actions_json` sit in henad-explore's `output/details.rs`, for
-  the CLI's summary and the app's run details. A GPU run steps through `gpu/stepping.rs` on a device
-  from henad-explore's `acquire_headless`, sized to the options' set's `gpu_needs()`. A set without
-  a GPU model asks for no device, apart from `--info`, and prints no GPU note. The CLI resolves its
-  positional id through that set's `ModelSet::lookup`, and refuses an id outside the set ("this
-  build does not include model 'x' (try --list)") apart from a GPU model on a machine without a
-  device. `--list` prints only the models this machine can run. The CLI never publishes and never
-  lays out a network.
-  `--export` calls `prepare_view` before it writes, and `--export-stats` before each sample, as a
-  publish would.
-  `explore.rs` is the sweep mode. `--out`, `--spec` or `--dry-run` selects it (`Mode::Explore`), and
-  no command line from before sweeps changes meaning. `--list` refuses all three, and `--info`
-  beside them prints the provenance header and runs the sweep. It turns the flags in `ExploreArgs`
-  into a one-block `SweepSpec`, a factorial over every `--vary`, a zip, a `--sample lhs:N` or
-  `random:N` draw, or a `--design` table, or loads `--spec`. In a sweep, `--act` adds an action
-  named by its id, or by the first of `ID_2`, `ID_3` and so on that no earlier action took, and
-  `--vary action.NAME=LEVELS` varies its tick. `--spec` conflicts with every flag that changes a
-  result, and needs `--out`, `--dry-run` or `--params` (the `spec_use` group). A value parser
-  (`check_set`, `check_act`, `check_vary`, `check_stop`, `check_reduce`) refuses a malformed
-  `--set`, `--act`, `--vary`, `--stop` or `--reduce` before anything runs, with exit code 2, and
-  the model checks the ids later. `--concurrent` (the lanes of a
-  CPU model or the tracks of a GPU model), `--memory`, `--gpu-memory`, `--shard`, `--resume` and
-  `--retry-failed` pass through to `SweepOptions`, and `--merge DIR... --out DIR` (`Mode::Merge`)
-  calls `merge` with no model and no device. It renders `ProgressEvent`s as a text line on stderr
-  or as `explore_*` JSON lines, and exits 3 (`SOME_RUNS_NOT_OK`) when a sweep ran to its end with a
-  run not `ok`, or a merge lacks a run. A sweep seeds its runs with `run_seed`, and the benchmark
-  keeps the `base + i` that `benchmarks/protocol.md` fixes.
-  It applies a spec's `[execution]` table, then the flags it was given, and calls `run_spec`, or
-  `plan_spec` for `--dry-run`. A spec with a `[search]` table runs as a search. Its plan lists the
-  batch size, the objective or the axes, the space and the search seed, and `--json` adds an
-  `explore_search_batch` line per batch.
-  `--params --json` (`json_report::params`) prints `schema_json` with a `kind` of `params`.
-  `scripts/bench_matrix.py` parses the text `--params` prints, and that text is unchanged.
-  `tests/golden.rs` compares `--list`, `--params` and `--params --json` byte for byte with what
-  0.2.0 printed, recorded in `tests/golden/` by the procedure in its `README.md`. Keep them.
-  `build.rs` calls `henad_build::stamp_commit`, as henad-app's does, and the `CliOptions` host
-  build is the one the manifest records, the binary's `build_info!()` for `henad-cli`. The `info`
-  line's `engine_version` reads `ENGINE_BUILD.version()`. Under `--json` each `SweepWarning` also
-  prints as an `explore_warning` line (`warning_json`), and so does the series rows warning, as
-  `series_rows`. `existing_invocations_keep_their_mode` reads the command lines of `lib.rs`, which
-  holds the crate doc, and of `docs/reference/cli.md`, and its floor is the 13 documented lines
-  that are not sweeps. `tests/json_lines.rs` runs the binary and holds each `--json` line kind to
-  the fields `benchmarks/protocol.md` and `docs/reference/cli.md` list, `explore_progress` aside,
-  which a quick sweep never sends and a unit test checks. Keep them.
-- **henad**: the facade, the crate a program depends on. Its one `lib.rs` re-exports, and defines
-  nothing but the `params!` forward and its hidden `__macro_support`: the root items and macros,
-  `params`, `stats`, `views`, `action`, `gpu`, `runner`, `engine`, `explore`, `benchmark`
-  (native), `authoring` with its `primitives` and `prelude`, the
-  gated `models` (`example-models`), `app` (`app`), `cli` (`cli`) and `testing` (`testing`), and
-  `henad::prelude`. Each re-export fixes its item's one documented path, and the guides name items
-  by these paths alone. `henad::explore` keeps henad-core's planning modules as modules (`spec`,
-  `plan`, `search` and the rest), and `henad::authoring` globs henad-core's `authoring::model`
-  modules flat, under `#![deny(ambiguous_glob_reexports)]`, so a name two of them share fails the
-  build. `binding` is the exception. The facade names its `BindingDecl` and `BindingKind`, as it
-  names each item of `helpers`, and leaves the engine's `buffer_target`, `RESERVED` and
-  `fmt_bytes` out. `params!` is a macro of the facade's own that forwards to henad-core's through
-  the hidden `__macro_support`. A `use` of henad-core's would bring its `params` module along, and
-  docs.rs would show that module at `henad::params`. The other root macros are plain re-exports.
-  henad-cli sits under a native target table, and `cli` adds nothing on wasm32. docs.rs builds the
-  facade for wasm32 too, without atomics, for the app's web entry point. No feature changes a bound,
-  a layout or a result. `examples/complete.rs` is the program a newcomer reads first, and
-  `README.md`, which the crate doc includes with `app` and `example-models` both on, holds a copy in
-  a `rust,no_run` fence.
-  `the_readme_program_matches_the_example` (`lib.rs`) holds the two equal byte for byte, apart
-  from the example's `// --8<--` lines, which the README copy leaves out. The program prints with
-  `writeln!` to standard output and carries no lint attribute, so it copies into any crate. Its
-  `main` empties `sir-rates` in the temporary directory, hands `study` the example set, that folder
-  and standard output, then opens the app. `tests/complete.rs` includes the example whole, runs
-  `study` into a buffer on a folder named after the process id, removes that folder, and compares
-  the lines with the "It prints" block of `docs/guide/library.md`, where a `...` line stands for
-  any lines.
-  `tests/facade_paths.rs` compiles against facade paths alone, for the items the tutorial never
-  names. It defines no model, needs no build script and never builds on a device, and its parts
-  that need an entry compile in a module no test calls. That module also holds the `gpu_build`
-  and `scoped_steps` regions `guide/library.md` includes, the second through a `rayon`
-  dev-dependency. Its `named_only` module names items whose path is the whole check. Keep all
-  three.
-- **henad-tutorial** (`examples/tutorial`, `publish = false`): the finished code of the five pages
-  under `docs/guide/first-model/`, which include each file whole. `life.rs`, `foraging/`,
-  `virus.rs`, `gpu_life/` and `gpu_foraging/` hold the models `life`, `foraging`, `virus`,
-  `gpu_life` and `gpu_foraging`, and `models()` (`lib.rs`) registers the five under the crate's
-  own `build_info!()`. The library and its tests name every item by a facade path, as a reader's
-  crate does: `henad::authoring::prelude::*` and `henad::authoring::...` in a model, the states
-  through `henad::engine`, the example models through `henad::models`. An item the tutorial needs
-  and the facade lacks goes into `crates/henad/src/lib.rs`, never into a direct dependency on an
-  inner crate. `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`, and
-  `henad::include_shaders!()` brings the bindings in, as in a downstream crate. The two GPU
-  directories carry their own shader copies. `tests/shaders.rs` holds each equal to the shipped
-  one byte for byte, `gpu_foraging`'s apart from the import path `gpu_foraging::state`.
-  `tests/parity.rs` steps each tutorial model beside the example model it teaches and demands the
-  same bits (`the_game_of_life_tutorial_matches_the_shipped_model` and its siblings), and
-  `tests/kit.rs` runs `assert_set_conforms` over `models()` and joins the five to
-  `example_models()`. `tests/snippets.rs` holds every page block titled with a file under `src/` to
-  that file, line by line, apart from the first versions it lists, and the template's crate
-  attributes, with their comments, to those of `lib.rs`. `tests/thread_count.rs` holds
-  the foraging tutorial's thread-count test, outside `foraging/mod.rs`, which the ants page shows
-  whole and a reader's crate, without `rayon`, has to build. The modules in `lib.rs` are `pub`, and
-  a reader's crate declares them private, so a dead item shows only there. A change to a page is
-  checked by following it in a copy of the template, patched to the workspace by path. The
-  `package` job excludes it,
-  `scripts/check_packaging.sh` reads `crates/` alone, and `about.toml`'s `[private] ignore` keeps
-  it off the licence page. Keep the five test files.
-- **The template** (`templates/model-project`, package `my-model`, `publish = false`): the project
-  a user fetches from a release tag and builds on the published crates, outside the workspace
-  through the root `exclude`. It depends on `henad` and `henad-build` alone, at the workspace's
-  major and minor (`"0.3"`), with the app and the CLI behind its own default
-  features `app` and `cli`. `src/vote.rs` (`Vote`, a `GridModel`) and `src/gpu_vote/` (`GpuVote`,
-  its `GpuGridModel` port seeded through `Vote::init`) follow the tutorial's import shape, and
-  `models()` (`src/lib.rs`) inserts each on a line of its own. The test at the foot of `lib.rs`
-  runs `assert_set_conforms` over `models()` and names no model. `src/main.rs` and
-  `src/bin/my-model-cli.rs` are the app and the CLI over `henad::app` and `henad::cli`, under the
-  product name "My Model". `build.rs` calls `stamp_commit` and `ShaderBuild::discover("src")`,
-  and ends in `Ok(())`, so a crate without shaders deletes one line. `.cargo/config.toml` holds the
-  wasm32 rustflags. `scripts/web-checks.sh`, which `scripts/build_web.sh` and the `lint-web` stage
-  source, refuses an inherited `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` rather than drop them, and
-  prints the install line of a missing nightly. `scripts/ci.sh` runs the stages `lint`,
-  `lint-web`, `test` and `web` (all four without an argument), with `--locked` once a lock exists,
-  and `.github/workflows/ci.yml` runs them through `bash`, since a checkout from Windows keeps no
-  executable bit, under `HENAD_REQUIRE_GPU=1` on lavapipe. `.gitattributes` keeps the scripts and
-  the pins at LF line ends.
-  `scripts/install-lavapipe.sh` holds the Mesa and gfx-rs/ci-build pins, and Henad's own `test`
-  job calls it. `.github/dependabot.yml` groups `henad` and `henad-build`. `README.md` holds the
-  `fetch`, `rename`, `run` and `update` regions, `Cargo.toml` the `profile` region, and
-  `guide/your-project.md` and `guide/library.md` include them. The template ships no `Cargo.lock`,
-  and its `.gitignore` never lists one.
-  `rustfmt.toml` sets the 120 columns Henad formats at. Its `[profile.release]` equals the root's,
-  which `scripts/check_packaging.sh` checks, and `./check.sh` never builds it.
+- Data layout is Struct-of-Arrays throughout, and `agent_lanes!` emits one `Vec<T>` per lane.
+- rayon runs on every target, web included, and no kernel has a sequential twin.
+- A chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`, never from anything a worker
+  mutates, so results never depend on the thread count. `AgentModel::CHUNK` is a fixed const.
+- Neighbour queries go through `SpatialHash`, never an O(n^2) search, and `ScatterGrid` takes
+  many-agents-one-cell writes without atomics.
+- `for_each_chunk_mut!` and any other hot-loop driver stay macros.
+- The sim never runs on the UI thread, and nothing joins a runner thread without a bound.
+- A GPU command buffer holds at most 64 steps of one run, and wgpu's uncaptured-error handler stays
+  installed.
 
 ### Adding a new model
 
 A user's model lives in a project made from `templates/model-project`, and the guide's pages under
-`docs/guide/first-model/` add one there: a file or directory under `src/`, a `mod` line and an
-`insert` line in `models()` in `src/lib.rs`, and no build file, since `ShaderBuild::discover("src")`
-finds every shader. An example model of Henad's own goes into henad-models instead, as below.
-
-Pick the trait matching the topology and the backend. All five are const metadata plus pure
-functions. The engine owns allocation, buffering, chunking, RNG seeding, param storage, the views,
-and the whole `SimState` impl.
-
-1. **`GridModel`** (`henad-core/src/authoring/model/grid_model.rs`) — cellular automata over `u8` cells.
-   Implement `init`, `step_cell`, `stats` and the consts; `cpu/grid_engine.rs` does the rest, including the parallel
-   row-wise step. Grid width/height are prepended to the param list at indices 0 and 1. See
-   `game_of_life.rs`, `sir.rs`.
-2. **`AgentModel`** (`henad-core/src/authoring/model/agent_model.rs`) — a population of agents, optionally over a
-   field. Declare lanes with `agent_lanes!`, then implement `init`, `run_step_pass` and `stats`.
-   `run_step_pass` is normally one call to the generated `lanes.run_pass(CHUNK, seed, tick, ..)`
-   with a per-agent closure, which is where the chunking and seeding happen — see
-   `boids/step.rs::run`. `num_agents`, `world_width` and `world_height` are prepended at indices 0,
-   1 and 2. `Lanes` comes from the macro; four more associated types pick the behaviour:
-   - `Field` — `NoField` (boids), `ScalarField<S>` for scatter-plus-decay layers (ants), or
-     `CaField<M>` to put a `GridModel` underneath a population.
-   - `Index` — `SpatialHash` when agents read each other, `NoIndex` when they don't.
-   - `Tally` — a per-chunk reduction merged in chunk order, `()` when there's nothing to count.
-   - `Params` — hot params extracted once per tick, so the kernel does no enum matching.
-
-   A model needing a second pass over agents before the step (ants filling deposit lanes)
-   overrides `run_deposit_pass`.
-
-3. **`GpuGridModel`** (`henad-core/src/authoring/model/gpu_grid_model.rs`) — a grid stepped by a compute
-   shader. Three WGSL sources (step, display, reduce), buffer lengths, seeds and a uniform block.
-   All `K` buffers ping-pong together. Each pass binds buffers by label, and the shipped display
-   and reduce shaders read only the first.
-4. **`GpuAgentModel`** (`henad-core/src/authoring/model/gpu_agent_model.rs`) — a population stepped by
-   compute shaders. Unlike a grid, a step is a _list_ of passes, because the two real models
-   disagree about almost everything structural: boids rebuilds a neighbour index and runs one pass
-   over three ping-ponged lanes, ants runs two passes over seven in-place buffers with a display
-   pass and a persistent counter. So a model declares `BUFFERS`, `STEP_PASSES` and an optional
-   `DISPLAY`, and each pass points at its shader's generated declarations,
-   `crate::binding_decls::bindings::<SHADER>`, brought in by `include_shaders!`. The engine builds a
-   second buffer side only when some `BufferSpec` asks for it, so a model that writes in place pays
-   nothing for double buffering. `Domain` has exactly three variants because those are the three the
-   two models use — do not add speculative ones.
-5. **`NetworkModel`** (`henad-core/src/authoring/model/network_model.rs`) is a population of nodes
-   joined by edges, on the CPU only. Declare node lanes with `agent_lanes!` as for an agent model,
-   then implement `init`, `stats` and whichever passes the model needs. `init` gets a graph holding
-   every node and no edges. A tick runs the sequential `run_global_pass` first, the only pass of
-   the tick that can change the graph. The parallel `run_node_pass` follows, over every slot,
-   retired ones included. The node pass is normally one `lanes.run_pass(..)` call, as in
-   `virus_network/step.rs::run`, and Team Assembly has none. `num_agents` (the node count),
-   `world_width` and `world_height` are prepended at indices 0, 1 and 2. `Params` are hot params
-   as for an agent model, and `Aux` is the model's own state outside the lanes and the graph.
-   Nodes come and go through `Nodes::spawn` and `Nodes::retire`. Both keep the lanes and the graph
-   the same length. A retired node sits at `NaN`, and a reused slot keeps the old node's lane
-   values. `stats` sees `Aux` immutably. A stat that walks the graph (Team Assembly's components)
-   is computed in `prepare_view`, cached in `Aux` against `Network::version()` and the node count
-   (a spawn leaves the version alone), and counted by `aux_heap_bytes`. `directed` is read every
-   tick, and a flip rebuilds the rows. `EDGE_PALETTE` colours each edge by its colour byte, and
-   `LAYOUT` tunes the spring layout.
-
-Every trait can declare one-off actions, drawn as buttons in the Parameters panel and named by
-`henad-cli --act ID@TICK`. A CPU trait lists them in `ACTIONS` and runs them in `act`, and
-`henad_core::actions!` declares the list and numbers each entry by its position. A GPU trait's
-`ACTIONS` lists `GpuGridAction` or `GpuAgentAction` passes instead, and the seed passed to build
-its uniform block is fresh on every press. An action runs between ticks (`SimCommand::Act` in the
-runner) and draws from its own stream (`action::action_seed`). Otherwise a press would draw the
-numbers the next tick would have.
-
-`SimState` is the runner interface, not a sixth authoring path. Implement one of the traits above
-rather than `SimState` directly.
-
-A GPU port that leaves the order of its writes to the device declares `REPLAYS_EXACTLY = false`,
-as `gpu_boids` does, and the kit then skips the checks that compare two runs of one seed. A port
-starts from its CPU model's tick 0, seeded from `grid_init_rng(seed)` or `agent_init_rng(seed)`.
-The agent ports and the template's `gpu_vote` call the CPU `init`, and the example grid ports
-repeat its draws.
-
-Either way, register an example model in `henad-models/src/lib.rs::example_models()` via the
-`register_*` generic for its trait, so it's type-erased into a `ModelEntry` and shows up in the UI.
-Nothing about an entry should be written by hand. Name, params, stats, actions and
-`topology_hint` are all derived from the trait. The registry tests run the testing kit over the
-set, as the template's `every_model_conforms` does over a project's `models()`. It is the safety
-net that a model's declared params, topology, actions and stat series match what its state
-actually does, that its results do not depend on the thread count, and, when a device is
-available, that a GPU entry builds on a baseline device and runs a full submission.
-
-### Performance-critical paths — read before touching
-
-- **A parallel pass costs a wake-up per worker, and stepping from outside the pool costs an inject
-  on top.** `runner/thread.rs` pumps inside `rayon::scope` and `henad-cli` steps inside one, so the
-  passes a kernel runs are injected from a worker rather than from a thread that has to be parked
-  and woken for each. `ca.rs::rows_per_leaf` is the other half: one row per rayon leaf handed 48
-  workers a 64 by 64 grid as 64 jobs of 64 cells, and the floor turns that into one job. Measured
-  together at 13x on the smallest grid rungs.
-- `henad-compute/src/cpu/field/ca.rs::step_row_moore`/`step_row_vn` and
-  `henad-models/src/*/step.rs` (the agent and node kernels) are the hot inner loops. The x-wrap is
-  peeled off both row loops so the interior runs without a per-cell modulo; keep that shape,
-  including the `enumerate()` interior loop.
-- **rayon runs on every target, web included, and no kernel has a sequential twin.** There are no
-  paired `_parallel`/`_sequential` functions to keep in step, and reintroducing one is a regression.
-  A `#[cfg(target_arch = "wasm32")]` around a hot loop means someone rebuilt a twin.
-- **`for_each_chunk_mut!` is a macro, not a function, and must stay one.** As a generic fn taking
-  `F: Fn(..)` the extra closure layer stopped the kernel inlining through it and cost 48% on SIR;
-  `#[inline]` did not help. Same trap applies to any new hot-loop driver.
-- Determinism: a chunk's RNG comes from `chunk_seed(base, tick, chunk_index)`, never from anything
-  a worker mutates, so results don't depend on how rayon schedules chunks. This now has to hold on
-  the web too, where the pool width is whatever `navigator.hardwareConcurrency` reported. `base` is advanced once
-  per tick on the sequential path by `advance_tick_seed` — folding the tick in only through
-  `chunk_seed` measured 14% slower on SIR with identical content, and that was never explained.
-  Boids, ants, Virus on a Network and Team Assembly each have a
-  `results_do_not_depend_on_the_thread_count` test, as do the foraging tutorial (in its `tests/`),
-  `cpu/grid_engine.rs`, `cpu/layout.rs` and `cpu/primitives/components.rs`. Keep them. The kit's `ThreadCount` compares
-  every CPU model of a set the same way, at 14 jobs. `a_build_that_reads_the_pool_width_fails_the_thread_count_check`
-  pins it deterministically. `a_shared_accumulator_fails_the_thread_count_check` retries up to five
-  times, since a pool can take a shared lock in the single thread's order by chance.
-- `AgentModel::CHUNK` is per-model on purpose. It sets both the RNG seeding granularity and the
-  parallel load balance, so it must be a fixed const (not derived from the thread count) but still
-  small enough to split across every core — 4096 gave only 13 chunks for 50k boids and cost 20%.
-  512 is the default, boids overrides to 64 (its kernel draws nothing, and 512 gave a thousand
-  agents two chunks) and ants to 4096. Changing ants' changes its results, since a chunk is its
-  seeding unit; changing boids' does not.
-- `SpatialHash` (`henad-core/src/spatial_hash.rs`) is a flat counting-sort grid, rebuilt every
-  tick from agent positions — this replaced a naive neighbor search and was the biggest lever in
-  getting boids to scale. All neighbor queries (including toroidal wraparound) go through
-  `query_radius` or `for_each_within`, which walk the same cells in the same order; the second
-  hands a kernel the deltas the range test already computed, so it does not work them out twice.
-  Don't reintroduce O(n²) neighbor search. `HashGrid::new` is the one place the cell geometry is
-  decided, for the CPU sort and the GPU one alike, and it caps the grid at `MAX_INDEX_CELLS`.
-- `henad-compute/src/cpu/primitives/scatter.rs` (`ScatterGrid`) handles the one write pattern the rest of the
-  engine can't: many agents depositing into the same cell. Read its module docs before changing
-  it — the strategy choice is measured (`benches/scatter.rs`), not assumed, and **atomics are not
-  an option**: `fetch_max` scales negatively under contention (7.1 ms at one thread, 99.2 ms at
-  four). Its three arms must stay bit-identical, because the arm is picked from the worker count
-  and the deposit count, so any divergence would make a model's results depend on the machine.
-  Re-run the bench rather than reasoning about it. The sparse arm (`Banded`) is what a field layer
-  takes: measured 2.3x to 12.3x over the dense ones wherever there are more cells than deposits,
-  and behind them at one deposit per cell even on one worker.
-- Data layout is Struct-of-Arrays throughout (`pos_x: Vec<f32>`, `pos_y: Vec<f32>`, ... rather
-  than `Vec<Agent>`) specifically for cache locality and rayon-friendliness — preserve this when
-  adding fields to a model's state. `agent_lanes!` emits one `Vec<T>` per lane with named field
-  access for exactly this reason.
-- Benchmarking: this machine drifts up to 40% under sustained load, so only interleaved old-vs-new
-  runs on a cooled machine mean anything. Game of Life is the cleanest signal, since it has no step
-  RNG and its output is bit-identical across refactors. When reporting a number, say whether it is
-  release-mode and what is actually being measured — a flat-out `step()` counter, not a frame rate.
-  A surprisingly favourable result gets flagged as surprising rather than presented as a finding: a
-  "300x GPU speedup" here was once a debug-build, framerate-capped artifact hiding a real 10x.
-
-### GPU — traps that already cost real debugging
-
-Each of these failed silently or misleadingly once. The engine now handles all of them, so the note
-is about not undoing them.
-
-- **A timestamp stamped on an empty compute pass is never written.** The symptom is a `start` of 0
-  and an absurd elapsed time (an absolute GPU tick, ~4e14 ns). `gpu/agent_engine.rs` puts the
-  opening stamp on the index rebuild's counting pass when there is an index, and on the first
-  declared pass when there is not.
-- **One oversized submission silently returns zeros.** Enough passes in a single command buffer
-  trips the OS GPU watchdog — no error, no panic, and every later readback reads zero. Batch at 64
-  steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed up
-  as a flaky test. The kit's `FullSubmission` compares one full submission of every GPU model at its
-  defaults with single steps run before it. The sweep's GPU tracks
-  (`henad-explore/src/exec/gpu.rs`) keep the bound per run. Each command buffer holds the steps of
-  one run, and two runs' buffers are never merged. N runs of 64 steps in one buffer would trip the
-  watchdog again.
-- **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
-  baseline. `limits.rs::raise` asks for exactly what the models need, the `GpuNeeds` a host reads
-  from its set through `ModelSet::gpu_needs()` before any device exists. Each GPU entry declares its
-  own from its pass list — no constant, because wgpu's own advice is to request only what you need
-  and a constant would be either short of a future model or dead headroom. For the example models
-  it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
-  than knowing them: henad-compute cannot see which models a host offers.
-  The kit's `BaselineBuild`, run by the registry tests on a `Limits::default()` device from
-  `headless_test_device`, holds the line, and asserts in the same breath that `capacity.rs` agrees.
-  Build and declared demand pin each other, and an over-reported pass count fails there.
-  `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
-  demand. Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a
-  check counting only storage buffers can pass locally and fail there.
-- **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The
-  baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
-  where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever
-  the adapter reports. Unlike the buffer count, these are deliberately machine-dependent: how big a
-  run can be is a property of the hardware however we ask.
-- **The display texture is a sampled view, never a mirror of the grid.** One texel per cell caps
-  the grid at `max_texture_dimension_2d` and costs 4 bytes per cell, which at 16384² is 1.07 GB of
-  RGBA for something drawn into a ~1000 px panel. `display_scale.rs` caps each axis at
-  `MAX_DISPLAY_DIM`, a display pass dispatches per _texel_ and reads the cell at
-  `texel * grid / tex`, and `viewport.rs` samples the CPU grid the same way on upload. Both are
-  identity below the cap.
-- **A model over the device's limit is refused before it is built.** `gpu/capacity.rs` computes a
-  model's buffer sizes, texture dimensions and per-pass storage-binding counts from what it already
-  declares, and checks them first. The app disables Build and both engines assert with a readable
-  message. That covers sizes and binding counts. The cheap half.
-- **Everything else the device rejects reaches the UI instead of the process.** wgpu's default handler panics on any
-  error no scope claims. `gpu::fault::catching_on` wraps model construction in error scopes for all
-  three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as the floor under
-  every path no scope covers, egui's own rendering included. Contracts `capacity.rs` cannot see
-  (uniform layout, an allocation the device has no memory for) now reach the UI as a modal, and
-  `contracts.rs` turns a workgroup size or a buffer label the device would accept into a panic
-  at construction. Do not undo either half — remove the handler and the next validation error ends the
-  process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never sees
-  what a sim thread does. The sink exists to cover that asymmetry.
-- **A panicking kernel is caught too, and its location needs help.** Both sim threads wrap
-  `run()` once at thread start, outside the loop, so the catch costs nothing per tick. Rayon
-  catches a worker's panic and re-raises it on the caller with `resume_unwind`, which does not run
-  the panic hook again, so `fault.rs` keeps a global fallback alongside its thread-local record.
-  Drop the fallback and every `step_cell` panic loses its `file:line`.
-- **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
-  `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
-  batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
-- **A stats sample encoded while the previous readback is pending is dropped.** `CounterReadback`
-  skips its copy while a map is in flight, and the stats repeat the older values with no error.
-  `stepping::submit_slice` debug-asserts against it, and `stepping::sample_stats` collects a
-  readback still in flight before it encodes its own. A poll that gives up a map unmaps the staging
-  buffer. A buffer left mapped or pending makes the next copy into it a validation error and fails
-  every later map. A host that pipelines its samples learns from the `StatsPoll` that
-  `poll_stats_readback` returns whether the latest one landed or failed. The
-  GPU tracks in `henad-explore/src/exec/gpu.rs` record no sample while one reads back, and assert
-  it outside their error scopes, where a panic would pass for a failed run.
-- **A lost device fails quietly first.** After `Device::destroy` or a driver loss, polls and waits
-  still succeed, and builds and readbacks fail as ordinary validation errors. wgpu reports the loss
-  only through the device-lost callback, and for a destroyed device only once a poll finds its
-  queue empty. `GpuContext::new` installs that callback and `GpuContext::is_lost` reads it. The GPU
-  tracks drain the device and check it before writing any run that failed on the GPU. Otherwise
-  every run left is written as `gpu_error` instead of being left for `--resume`. `stepping::wait`
-  and `stepping::sample_stats` return `FaultKind::DeviceLost` once it is set, and a `Simulation`
-  returns it in place of the errors the loss caused. Otherwise `--export-stats` and the benchmark
-  step on a lost device and report the last stats it read.
-- **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
-  henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
-  `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
-  `shader_bindings` and `binding_decls`, each under one allow list, `unsafe_code` included. The
-  macro and the generated code name `include!`, `concat!`, `env!` and `assert!` through `::core`.
-  henad-compute and henad-models also call the hidden `stamp_source_hash`, and henad-explore's
-  `build.rs` calls `stamp_engine_commit` alone.
-  henad-compute names its entry points with `ShaderBuild::new("src/gpu")`, and the other two use
-  `discover` over `src` and `src/ui`: every `.wgsl` file without a `#define_import_path` line.
-  `discover` follows a symlink to a directory, and walks a directory reached twice once. It
-  refuses a path component that is no Rust identifier or is a keyword, names that
-  collide, a `henad.wgsl` file or a `henad` directory holding a `.wgsl` file in any case, which
-  would shadow a shared module, and a first component the generated code uses at its root (`wgpu`,
-  `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`).
-  `generate` refuses an import path that starts with one of them too, since the bindings name an
-  imported module by its import path, and a quoted one by its file stem (`bindings_module`,
-  `ShaderBuildError::ReservedImport`). A module or an imported file with a `@binding` line fails
-  the build, as does an import cycle. `wgsl_bindgen` would follow a cycle until the stack
-  overflows, and a panic of its own becomes `ShaderBuildError::Compose`. The binding constant is
-  the path's components upper-cased and joined by `_`. `generate` copies the shared modules from
-  henad-core into `OUT_DIR/henad_wgsl/henad/` and removes a copy henad-core no longer holds, runs
-  `wgsl_bindgen` (pinned to `=0.23.3`, and `scripts/check_packaging.sh` holds
-  `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines off, prints one
-  `cargo:rerun-if-changed` for the shader root (and one per explicit entry and per file outside the
-  root an entry imports), in the single-colon form that keeps a downstream MSRV below 1.77, skips
-  the pass when the FNV-1a stamp of its inputs and of `output.rs` itself matches
-  `shader_bindings.stamp`, and writes each file only when its bytes change. The inputs are every
-  file `wgsl_bindgen`'s dependency tree reads, a quoted path import outside the root or a file
-  without the `.wgsl` extension included. A crate with no shaders gets an empty `shader_bindings.rs` and loses its
-  stamp. Otherwise the shaders' return would match the old stamp and keep the empty file.
-  `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
-  layouts therefore come from the WGSL, and each model asserts its own struct against the generated
-  one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time, so no shader
-  is assembled at runtime any more. henad-build also reads each entry's `@group(0)` lines into
-  `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding` or
-  `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` (`BindingLine`), on a
-  sampler, a sampled texture or another address space (`UnsupportedBinding`), or on a gap in the
-  indices. A compile-time assertion in `binding_decls.rs` holds each list to the length of the
-  generated `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed
-  against the `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate`
-  against a scratch `OUT_DIR`, never Cargo. The engine resolves each name itself. `params`, `dims`,
-  `output`, `cell_start`, `sorted`, `counters` and `partials` are reserved, and any other name is a
-  `BufferSpec` label with an optional `_in` or `_out` suffix. The access mode picks the side.
-  `henad-core/src/authoring/model/binding.rs` is the reference. An imported constant or type reaches
-  the generated bindings exactly when an entry point references it, since naga keeps only what an
-  entry point references. Hence `grid_dims.wgsl` for `Dims`, and the `CODES` array in `parity.wgsl`
-  for `MOORE_ROW_MAJOR` and the other codes.
-
-### Sim runs off the UI thread
-
-`SimThread` (`henad-compute/src/cpu/sim_thread.rs`) exists so simulation stepping never blocks
-rendering. It is a thin handle over a `Driver<Loop>`, and the split underneath it lives in
-`henad-compute/src/runner/`. A `SimLoop` does whatever is due now and says when it next wants
-calling, as `Pace::Idle`, `Pace::Now` or `Pace::After`. A `Driver` decides how to wait.
-`runner/thread.rs` runs the loop on an OS thread of its own, taking `mpsc` commands.
-`runner/frame.rs` pumps it inline from `SimThread::update()`, which `henad-app` calls each frame,
-and stops once a frame has spent `PUMP_BUDGET_MS`. `wasm32-unknown-unknown` cannot spawn a thread
-even with atomics, hence the second driver.
-
-The `#[cfg(target_arch = "wasm32")]` choosing between the two sits in `runner/mod.rs` and nowhere
-else, so stepping is written once. `SimThread`'s API (`play`/`pause`/`step_once`/`run_to`/
-`set_schedule`/`send`/`update`) is the same either way and `henad-app` never learns which driver it
-holds. `gpu/sim_thread.rs` is driven the same way.
-
-`SimCommand::SetSchedule` replaces the loop's `Schedule`, fires the entries due at the current tick
-unless that tick has fired, and publishes. Both loops keep `fired_through`, the highest tick whose
-actions have had their turn, set once a step reaches a tick (on the GPU, once a batch or
-`StepOnce` passes it) or a schedule fires it. Only the first schedule sent before the first step
-fires the build tick, and no tick fires twice. From then on each entry fires once, after the step
-that reaches its tick.
-This is `Fire::AfterStep`, the rule of `henad-cli --export-stats` and a sweep's `RunCursor`, and
-the snapshot at tick t carries tick t's actions. An empty schedule costs one test per step, and
-`Schedule::run_due` allocates nothing when no action is refused. `SimCommand::RunTo(tick)` steps
-uncapped toward the tick and never past it, publishes every `runner::RUN_TO_PUBLISH_INTERVAL` on the
-way, and at the tick pauses and force-publishes. `Play`, `Pause` and `StepOnce` cancel it. A tick
-at or behind the current one pauses at once. Going back is the host's job, and the app rebuilds
-first. The GPU loop cuts a batch at the target and a submission at each tick an action is due at,
-gives each action a submission of its own (`encode_action` needs one per press), and at the target
-takes the blocking `snapshot_now`. On native the stats then equal the state at the target. In a
-browser the readback cannot block, and the stats land on a later pump. A loop told to step while a
-one-shot snapshot's readback is still out (`late_stats`) waits for it and publishes that tick
-again first. Otherwise the build's zeros stay in the history as tick 0's row. Either driver runs a
-run-to through the same `pump`, and the frame driver cuts it at `PUMP_BUDGET_MS` like any other.
-`a_replay_of_a_planned_run_matches_its_sweep_row` and `a_gpu_schedule_matches_export_stats`
-(henad-explore) pin the live loop's rule to a sweep's and to `--export-stats`. Keep them.
-
-A sweep started from the app runs off the UI thread as well, through
-`henad_explore::handle::SweepRun`. On native the handle spawns a thread that runs the sweep as
-`run_spec` does (`run_in_memory` or `run_into_directory`), lanes or tracks and all, and its
-`SweepControl` holds or ends every run between two slices of steps. In a browser it wraps a
-`runner::Driver<PumpedSweep>`, and `HenadApp::logic` pumps it each frame through
-`ui::sweep::update` and `SweepRun::update`. Either way the host reads `SweepEvent`s from an
-`mpsc` channel that loses none (`Planned`, each `RunFinished` in plan order, a search's
-`SearchBatchTold` with an `Arc<SearchUpdate>` after each batch's runs, then one `Finished` with the
-`SweepRecord`, or `Failed`), and a `SweepProgress` where the latest write wins. The `wake`
-callback of `SweepRunOptions` runs after each event, and an idle UI then repaints to collect it.
-Dropping the handle aborts the sweep, and on native waits for the thread to write its files. A
-pause never changes a result. A run's trajectory depends on its seed and schedule alone.
-
-The UI thread only ever reads the latest snapshot (`snapshot.rs`) and never touches the live
-`SimState` directly. Publishing goes through a `SnapshotSlot`, holding the `fresh` snapshot plus a
-`spare` the host hands back for its buffers. Recycling is only an optimisation. Dropping a snapshot
-instead means the next publish allocates.
-
-`build_snapshot` calls `SimState::prepare_view` first, which is where a model turns state into
-something drawable — ants quantises its `f32` pheromone field into palette indices there. That
-runs on publish, not every tick, so anything a view needs but a step doesn't belongs in
-`prepare_view` rather than in `step`.
-
-A network model's layout relaxes next, in `SimState::relax_layout`, and stats come last. The layout
-runs at least one iteration and keeps going until the budget from `SimCommand::SetLayout` is spent.
-The budget is capped at `runner::MAX_VIEW_BUDGET_MS` on wasm, where the view is prepared inside the
-frame pump. The layout moves nodes only on a publish that follows a tick, or on every publish while
-paused if `while_paused` is set. An action publishes without a tick, and leaves a paused network
-where it is unless `while_paused` is set. The layout never runs inside `step()`, so node positions
-are not a function of the tick. The edge list is copied into the snapshot only when
-`Network::version()` or the edge count changes. A recolour through `Network::update_colors` that
-changes nothing leaves the version alone. The GPU runner accepts `SetLayout` and ignores it.
+`docs/guide/first-model/` add one there. An example model of Henad's own goes into henad-models.
+Pick the trait matching the topology and the backend: `GridModel`, `AgentModel`, `NetworkModel`,
+`GpuGridModel` or `GpuAgentModel`, all const metadata plus pure functions. Implement one of them
+rather than `SimState`, which is the runner interface. Register an example model in
+`example_models()` through the `register_*` generic for its trait, and write nothing about an entry
+by hand. `agents/models.md` walks through each trait, actions and GPU ports.

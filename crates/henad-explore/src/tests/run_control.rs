@@ -1,26 +1,16 @@
 //! Checks of the controls on one run: stop conditions, actions and their ticks as factors.
 
-use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::plan::PlanWarning;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 
 use crate::exec::Concurrency;
 use crate::sweep::SweepWarning;
 use crate::tests::broken::{Bug, BuggyState};
-use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, sweep, sweep_options, sweep_with};
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
+use crate::tests::support::{
+    OutputTables, Recorder, ScratchDir, entry, factorial, fixed, sweep, sweep_options, sweep_with, values,
+};
 
 /// Returns an SIR sweep of 2 replicates on a 24 by 24 grid, keeping every sample in the series.
 fn sir_spec(steps: u64, stats_every: u64) -> SweepSpec {
@@ -115,11 +105,7 @@ fn wave_spec(ticks: &[&str]) -> SweepSpec {
         name: "wave".to_owned(),
         ..ActionSpec::new("seed_outbreak", 0)
     }];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::action("wave", values(ticks))],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::action("wave", values(ticks))])];
     spec
 }
 
@@ -199,7 +185,7 @@ fn a_refused_action_is_noted_and_the_run_stays_ok() {
     assert_eq!(refused.run_column("stop_reason"), ["steps"]);
     assert_eq!(
         refused.run_column("note"),
-        ["model refused action 'seed_outbreak' at tick 0; model refused action 'seed_outbreak' at tick 6"]
+        ["model rejected action 'seed_outbreak' at tick 0; model rejected action 'seed_outbreak' at tick 6"]
     );
 
     let mut quiet = spec.clone();

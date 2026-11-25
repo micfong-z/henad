@@ -9,7 +9,7 @@ icon: material/grid
 _See [Writing a CPU grid model](../guide/first-model/game-of-life.md) for a tutorial._
 
 `GridModel` is the authoring trait for a cellular automaton, a grid of `u8` cells where every cell advances by one rule per tick.
-It fits a world made of small integer states, each cell updating from what surrounds it.
+It fits a world made of small integer states, where each cell updates from the cells around it.
 You implement `init`, `step_cell`, `stats` and the consts, and the engine supplies everything else, including the parallel row-wise step.
 
 ```rust
@@ -17,7 +17,8 @@ You implement `init`, `step_cell`, `stats` and the consts, and the engine suppli
 ```
 
 Read `game_of_life.rs` and `sir.rs` alongside this page.
-Game of Life is the smaller of the two and draws no random numbers during a step, which makes it the easier one to copy from when you begin.
+Game of Life is the smaller of the two and draws no random numbers during a step.
+It is the easier one to copy from when you begin.
 
 ## Items you supply
 
@@ -100,7 +101,8 @@ fn init(grid: &mut Grid2D<u8>, params: &[ParamValue], rng: &mut u64);
 `init` runs once, sequentially, on the current side of a freshly allocated grid.
 The `rng` argument is a plain `u64` xorshift state, advanced by the [random primitives](../reference/primitives.md#random).
 
-A GPU port of the model calls this same function to seed its buffers, which keeps tick 0 bit-identical between the two backends.
+A GPU port of the model seeds its buffers by calling this same function, or by repeating it draw for draw as the shipped ports do.
+Either way tick 0 comes out bit-identical between the two backends.
 See [porting a model to the GPU](porting.md).
 
 ## Left to the engine

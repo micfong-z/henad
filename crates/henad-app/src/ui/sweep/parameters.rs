@@ -14,8 +14,8 @@ use crate::ui::params::display_value;
 use crate::ui::plural;
 use crate::ui::sweep::builder::FormInput;
 use crate::ui::sweep::draft::{
-    DraftDesign, DraftIssue, DraftMode, DraftSite, FactorDraft, IssueKind, LevelPreview, levels_example, number_text,
-    parse_levels, round_step, whole_range_text,
+    DraftDesign, DraftIssue, DraftSite, ExploreMode, FactorDraft, IssueKind, LevelPreview, both_ends_fill, kind_bounds,
+    levels_example, number_text, parse_levels, quarter_step, takes_integers, whole_range_text,
 };
 use crate::ui::sweep::layout::{FormRows, Note, column, icon_button, note_label, note_line, segmented, slot};
 
@@ -39,9 +39,7 @@ const NOTE_HEAD_VALUES: usize = 3;
 pub fn levels_tooltip(integer: bool, draws_ranges: bool) -> &'static str {
     match (integer, draws_ranges) {
         (_, true) => "Enter comma-separated values, min:max:step with both ends included, or min:max to draw from",
-        (true, false) => {
-            "Enter comma-separated values or min:max:step, both ends included. Leave out the step to step by 1."
-        }
+        (true, false) => "Enter comma-separated values or min:max:step, both ends included. The step defaults to 1.",
         (false, false) => {
             "Enter comma-separated values or min:max:step, both ends included. Use min:max under Latin hypercube or \
              Uniform random."
@@ -153,21 +151,21 @@ pub fn row_note(
 }
 
 /// Returns the legend over the parameter rows, for a draft in `mode` with `design`.
-pub fn legend(mode: DraftMode, design: DraftDesign) -> &'static str {
+pub fn legend(mode: ExploreMode, design: DraftDesign) -> &'static str {
     match (mode, design) {
-        (DraftMode::Search, _) => {
+        (ExploreMode::Search, _) => {
             "Enter a range as 0.1:0.5 to search all of it, or values as 0.1, 0.2 to select from. Checkbox and \
              dropdown parameters use all options by default."
         }
-        (DraftMode::Sweep, DraftDesign::Table) => {
+        (ExploreMode::Sweep, DraftDesign::Table) => {
             "The design table sets the parameters it names. Other parameters use values from the Parameters tab."
         }
-        (DraftMode::Sweep, DraftDesign::LatinHypercube | DraftDesign::UniformRandom) => {
+        (ExploreMode::Sweep, DraftDesign::LatinHypercube | DraftDesign::UniformRandom) => {
             "Enter a range as 0.1:0.5 for the design to draw from, or values as 0.1, 0.2."
         }
-        (DraftMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
-            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. Leave out the step of an \
-             integer range to step by 1."
+        (ExploreMode::Sweep, DraftDesign::EveryCombination | DraftDesign::Zip | DraftDesign::VaryEachAlone) => {
+            "Enter values as 0.1, 0.2, or a range as 0.1:0.5:0.1 with both ends included. The step of an integer \
+             range defaults to 1."
         }
     }
 }
@@ -194,11 +192,9 @@ pub fn parameters_section(
             slot(ui, layout.values_width(), |ui| ui.label(weak("Values")));
         });
     }
-    let table_columns = draft
-        .runs_table()
-        .then(|| draft.table.as_ref().map(|table| table.columns()).unwrap_or_default());
+    let table_columns = draft.table_columns();
     let context = RowContext {
-        search: draft.mode == DraftMode::Search,
+        search: draft.mode == ExploreMode::Search,
         draws_ranges: draft.draws_ranges(),
         cli_command: input.cli_command,
     };
@@ -213,7 +209,7 @@ pub fn parameters_section(
             panel_value: input.panel_values.get(index),
             in_table: table_columns
                 .as_ref()
-                .map(|columns| columns.iter().any(|column| column == descriptor.id)),
+                .map(|columns| columns.iter().any(|column| column == descriptor.id())),
             preview: input.summary.param_previews.get(index).and_then(Option::as_ref),
             issue: input.summary.issues_at(DraftSite::Factor(index)).next(),
         };
@@ -286,13 +282,13 @@ fn parameter_row(
     };
     let add_label = |ui: &mut egui::Ui, factor: &mut FactorDraft| match row.in_table {
         Some(true) => ui
-            .add(Label::new(format!("{MDI_TABLE_COLUMN} {}", descriptor.label)).truncate())
+            .add(Label::new(format!("{MDI_TABLE_COLUMN} {}", descriptor.label())).truncate())
             .on_hover_text("Set by design table"),
         Some(false) => ui
-            .add(Label::new(descriptor.label).truncate())
+            .add(Label::new(descriptor.label()).truncate())
             .on_hover_text("Not in design table. Uses value from the Parameters tab."),
         None => ui
-            .add(Checkbox::new(&mut factor.vary, descriptor.label))
+            .add(Checkbox::new(&mut factor.vary, descriptor.label()))
             .on_hover_text(vary_tooltip.as_str()),
     };
     let varied = row.in_table.is_none();
@@ -332,13 +328,13 @@ fn ticked(
     factor: &mut FactorDraft,
     label: &egui::Response,
 ) {
-    if !(label.changed() && factor.vary) || LevelNoun::of(&row.descriptor.kind) == LevelNoun::Option {
+    if !(label.changed() && factor.vary) || LevelNoun::of(row.descriptor.kind()) == LevelNoun::Option {
         return;
     }
     if context.search && factor.levels_text.trim().is_empty() {
-        factor.levels_text = whole_range_text(&row.descriptor.kind);
+        factor.levels_text = whole_range_text(row.descriptor.kind());
     } else if !context.search {
-        rows.focus_later(ui, values_field_id(row.model_id, row.descriptor.id));
+        rows.focus_later(ui, values_field_id(row.model_id, row.descriptor.id()));
     }
 }
 
@@ -363,13 +359,13 @@ fn values_cell(
         }
         if row.in_table.is_some() || !factor.vary {
             if layout.baseline_width.is_none() {
-                slot(ui, width, |ui| ui.weak(format!("at {baseline}")));
+                slot(ui, width, |ui| ui.weak(format!("At {baseline}")));
             }
             return;
         }
-        let noun = LevelNoun::of(&row.descriptor.kind);
+        let noun = LevelNoun::of(row.descriptor.kind());
         let (control, text_len) = if noun == LevelNoun::Option {
-            let menu = options_menu(ui, &row.descriptor.kind, &mut factor.levels_text, width);
+            let menu = options_menu(ui, row.descriptor.kind(), &mut factor.levels_text, width);
             (menu.labelled_by(label.id), None)
         } else {
             let field = values_field(ui, context, row, &mut factor.levels_text, width);
@@ -402,9 +398,9 @@ fn values_field(
     text: &mut String,
     width: f32,
 ) -> egui::Response {
-    let integer = matches!(row.descriptor.kind, ParamKind::U32 { .. });
+    let integer = takes_integers(row.descriptor);
     let (hint, tooltip) = if context.search {
-        (whole_range_text(&row.descriptor.kind), SEARCH_LEVELS_TOOLTIP)
+        (whole_range_text(row.descriptor.kind()), SEARCH_LEVELS_TOOLTIP)
     } else if context.draws_ranges {
         ("min:max or values".to_owned(), levels_tooltip(integer, true))
     } else {
@@ -415,15 +411,15 @@ fn values_field(
         let field = ui
             .add(
                 TextEdit::singleline(text)
-                    .id(values_field_id(row.model_id, row.descriptor.id))
+                    .id(values_field_id(row.model_id, row.descriptor.id()))
                     .hint_text(hint)
                     .desired_width(field_width),
             )
             .on_hover_text(tooltip);
-        let name = format!("Edit values of {}", row.descriptor.label);
+        let name = format!("Edit values of {}", row.descriptor.label());
         let button = icon_button(ui, MDI_TUNE_VERTICAL, &name, "Edit values");
         Popup::from_toggle_button_response(&button)
-            .id(values_editor_id(row.model_id, row.descriptor.id))
+            .id(values_editor_id(row.model_id, row.descriptor.id()))
             .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
             .width(EDITOR_WIDTH)
             .show(|ui| {
@@ -463,9 +459,10 @@ pub enum EditorSegment {
 impl EditorSegment {
     /// Returns the form `text` takes in a draft that draws from a range when `draws_ranges` is set.
     ///
-    /// Where no design draws, a range with no step is a stepped range. A whole number's range steps by 1 there.
+    /// Where no design draws, a range with no step is a stepped range. A whole number's range steps by 1 there. A
+    /// range written in percent takes the form of the range of its fractions.
     pub fn of(text: &str, draws_ranges: bool) -> Self {
-        match parse_levels(text) {
+        match parse_levels(text).map(|levels| levels.to_fractions()) {
             Ok(LevelSpec::Range { step: None, .. }) if draws_ranges => Self::Drawn,
             Ok(LevelSpec::Range { .. }) => Self::Range,
             _ => Self::Values,
@@ -482,29 +479,22 @@ pub struct RangeFields {
 }
 
 impl RangeFields {
-    /// Returns the range `text` writes for a parameter of `kind`, or the ends of the values it lists.
+    /// Returns the range `text` writes for parameter `descriptor`, or the ends of the values it lists.
     ///
     /// Text with no numbers yields the parameter's bounds. A range with no step gets a quarter of its width as the
-    /// step, rounded to 1, 2 or 5 times a power of ten.
-    pub fn of(text: &str, kind: &ParamKind) -> Self {
-        let (low, high) = kind_bounds(kind);
-        let default_step = |min: f64, max: f64| {
-            let step = round_step((max - min) / 4.0);
-            let step = if matches!(kind, ParamKind::U32 { .. }) {
-                step.round().max(1.0)
-            } else {
-                step
-            };
-            if step.is_finite() && step > 0.0 { step } else { 1.0 }
-        };
-        match parse_levels(text) {
+    /// step, rounded to 1, 2 or 5 times a power of ten, and to a whole number for an integer parameter. A value or
+    /// range written in percent yields its fractions, the numbers the parameter holds.
+    pub fn of(text: &str, descriptor: &ParamDescriptor) -> Self {
+        let (low, high) = kind_bounds(descriptor.kind());
+        let default_step = |min: f64, max: f64| quarter_step(descriptor, min, max).unwrap_or(1.0);
+        match parse_levels(text).map(|levels| levels.to_fractions()) {
             Ok(LevelSpec::Range { min, max, step }) => Self {
                 min,
                 max,
                 step: step.unwrap_or_else(|| default_step(min, max)),
             },
             Ok(LevelSpec::Values(values)) => {
-                let numbers: Vec<f64> = values.iter().filter_map(|value| value.trim().parse().ok()).collect();
+                let numbers: Vec<f64> = values.iter().filter_map(|value| listed_number(value)).collect();
                 let min = numbers.iter().copied().fold(f64::INFINITY, f64::min);
                 let max = numbers.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                 if min.is_finite() && max.is_finite() && max > min {
@@ -529,72 +519,74 @@ impl RangeFields {
         }
     }
 
-    /// Returns the range as a parameter of `kind` writes it: `min:max:step`, or `min:max` when `drawn` is set.
-    pub fn text(self, kind: &ParamKind, drawn: bool) -> String {
-        let (min, max) = (number_text(kind, self.min), number_text(kind, self.max));
+    /// Returns the range as parameter `descriptor` writes it: `min:max:step`, or `min:max` when `drawn` is set.
+    ///
+    /// Note that a percentage's range is written as fractions, and an integer parameter's range in whole numbers.
+    pub fn text(self, descriptor: &ParamDescriptor, drawn: bool) -> String {
+        let (min, max) = (number_text(descriptor, self.min), number_text(descriptor, self.max));
         if drawn {
             format!("{min}:{max}")
         } else {
-            format!("{min}:{max}:{}", number_text(kind, self.step))
+            format!("{min}:{max}:{}", number_text(descriptor, self.step))
         }
     }
 }
 
-/// Returns the lowest and highest value of a parameter of `kind`, 0 and 1 for a parameter that is not a number.
-fn kind_bounds(kind: &ParamKind) -> (f64, f64) {
-    match *kind {
-        ParamKind::F32 { min, max, .. } => (f64::from(min), f64::from(max)),
-        ParamKind::U32 { min, max, .. } => (f64::from(min), f64::from(max)),
-        ParamKind::Bool { .. } | ParamKind::Choice { .. } => (0.0, 1.0),
+/// Returns the bounds of parameter `descriptor` as the editor shows them, as in "1 to 16384, integers".
+pub fn bounds_text(descriptor: &ParamDescriptor) -> String {
+    let (low, high) = kind_bounds(descriptor.kind());
+    let text = format!("{} to {}", number_text(descriptor, low), number_text(descriptor, high));
+    if takes_integers(descriptor) {
+        format!("{text}, integers")
+    } else {
+        text
     }
 }
 
-/// Returns the bounds of a parameter of `kind` as the editor shows them, as in "1 to 16384, integers".
-pub fn bounds_text(kind: &ParamKind) -> String {
-    let (low, high) = kind_bounds(kind);
-    let text = format!("{} to {}", number_text(kind, low), number_text(kind, high));
-    match kind {
-        ParamKind::U32 { .. } => format!("{text}, integers"),
-        _ => text,
-    }
-}
-
-/// Returns the text `text` becomes when the editor switches it to `segment`, for a parameter of `kind`.
+/// Returns the text `text` becomes when the editor switches it to `segment`, for parameter `descriptor`.
 ///
 /// Listed values keep their ends as a range, and a range lists its ends.
-pub fn segment_text(segment: EditorSegment, text: &str, kind: &ParamKind) -> String {
-    let fields = RangeFields::of(text, kind);
+pub fn segment_text(segment: EditorSegment, text: &str, descriptor: &ParamDescriptor) -> String {
+    let fields = RangeFields::of(text, descriptor);
     match segment {
         EditorSegment::Values => match parse_levels(text) {
             Ok(LevelSpec::Values(_)) => text.to_owned(),
-            Ok(LevelSpec::Range { .. }) => {
-                format!("{},{}", number_text(kind, fields.min), number_text(kind, fields.max))
-            }
+            Ok(LevelSpec::Range { .. } | LevelSpec::PercentRange { .. }) => format!(
+                "{},{}",
+                number_text(descriptor, fields.min),
+                number_text(descriptor, fields.max)
+            ),
             _ => String::new(),
         },
-        EditorSegment::Range => fields.text(kind, false),
-        EditorSegment::Drawn => fields.text(kind, true),
+        EditorSegment::Range => fields.text(descriptor, false),
+        EditorSegment::Drawn => fields.text(descriptor, true),
     }
 }
 
-/// Returns the quick fill that steps across a parameter's whole range, or uses it whole where a range is drawn from.
-pub fn whole_range_fill(kind: &ParamKind, draws_ranges: bool) -> String {
+/// Returns the number a listed value stands for, a value written in percent divided by 100, or `None` for text that is
+/// not a number.
+fn listed_number(value: &str) -> Option<f64> {
+    let value = value.trim();
+    match value.strip_suffix('%') {
+        Some(percent) => percent.trim_end().parse::<f64>().ok().map(|percent| percent / 100.0),
+        None => value.parse().ok(),
+    }
+}
+
+/// Returns the quick fill that steps across the whole range of parameter `descriptor`, or uses it whole where a range
+/// is drawn from.
+pub fn whole_range_fill(descriptor: &ParamDescriptor, draws_ranges: bool) -> String {
     if draws_ranges {
-        whole_range_text(kind)
+        whole_range_text(descriptor.kind())
     } else {
-        levels_example(kind)
+        levels_example(descriptor)
     }
 }
 
-/// Returns the quick fill of a parameter's minimum and maximum only.
-pub fn both_ends_fill(kind: &ParamKind) -> String {
-    let (low, high) = kind_bounds(kind);
-    format!("{},{}", number_text(kind, low), number_text(kind, high))
-}
-
-/// Returns the quick fill of half, one and one and a half times `value`, each held within a parameter's bounds, with
-/// repeats dropped.
-pub fn around_fill(kind: &ParamKind, value: &ParamValue) -> String {
+/// Returns the quick fill of half, one and one and a half times `value`, each held within the bounds of parameter
+/// `descriptor` and rounded to a whole number for an integer parameter, with repeats dropped.
+pub fn around_fill(descriptor: &ParamDescriptor, value: &ParamValue) -> String {
+    let kind = descriptor.kind();
     let center = match *value {
         // The centre is the decimal the value is written as. Widened in binary, 0.3 times 1.5 comes out a hair past
         // 0.45.
@@ -605,7 +597,7 @@ pub fn around_fill(kind: &ParamKind, value: &ParamValue) -> String {
     let (low, high) = kind_bounds(kind);
     let mut texts: Vec<String> = Vec::new();
     for factor in [0.5, 1.0, 1.5] {
-        let text = number_text(kind, (center * factor).clamp(low, high));
+        let text = number_text(descriptor, (center * factor).clamp(low, high));
         if !texts.contains(&text) {
             texts.push(text);
         }
@@ -627,9 +619,10 @@ struct ValuesEditor<'a> {
 
 /// Draws the values editor of a number's row, writing each edit into `text` at once.
 fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String) {
-    let kind = &editor.descriptor.kind;
-    ui.strong(editor.descriptor.label);
-    ui.weak(bounds_text(kind));
+    let descriptor = editor.descriptor;
+    let kind = descriptor.kind();
+    ui.strong(descriptor.label());
+    ui.weak(bounds_text(descriptor));
     let mut segment = EditorSegment::of(text, editor.draws_ranges);
     let drawn_label = if editor.search {
         "Range to search"
@@ -654,34 +647,32 @@ fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String
         }
     });
     if switched {
-        *text = segment_text(segment, text, kind);
+        *text = segment_text(segment, text, descriptor);
     }
     match segment {
         EditorSegment::Values => {
             ui.weak("Enter comma-separated values, such as 0.1, 0.2.");
         }
-        EditorSegment::Range | EditorSegment::Drawn => range_fields(ui, kind, segment, text),
+        EditorSegment::Range | EditorSegment::Drawn => range_fields(ui, descriptor, segment, text),
     }
     ui.horizontal_wrapped(|ui| {
-        let whole = ui
-            .small_button("Whole range")
-            .on_hover_text("Step across the whole range");
+        let whole = ui.small_button("Whole range").on_hover_text("Step across whole range");
         if whole.clicked() {
-            *text = whole_range_fill(kind, editor.draws_ranges);
+            *text = whole_range_fill(descriptor, editor.draws_ranges);
         }
         if ui
             .small_button("Both ends")
             .on_hover_text("Minimum and maximum only")
             .clicked()
         {
-            *text = both_ends_fill(kind);
+            *text = both_ends_fill(descriptor);
         }
         if let Some(value) = editor.panel_value {
             let around = ui
                 .small_button("Around current")
                 .on_hover_text("0.5×, 1× and 1.5× the Parameters tab value, within bounds");
             if around.clicked() {
-                *text = around_fill(kind, value);
+                *text = around_fill(descriptor, value);
             }
             let current = ui
                 .small_button("Current value")
@@ -698,11 +689,12 @@ fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String
     });
 }
 
-/// Draws the Minimum, Maximum and, for a stepped range, Step fields of the editor, writing a change into `text`.
-fn range_fields(ui: &mut egui::Ui, kind: &ParamKind, segment: EditorSegment, text: &mut String) {
-    let mut fields = RangeFields::of(text, kind);
-    let (low, high) = kind_bounds(kind);
-    let whole = matches!(kind, ParamKind::U32 { .. });
+/// Draws the Minimum, Maximum and, for a stepped range, Step fields of the editor for parameter `descriptor`, writing
+/// a change into `text`.
+fn range_fields(ui: &mut egui::Ui, descriptor: &ParamDescriptor, segment: EditorSegment, text: &mut String) {
+    let mut fields = RangeFields::of(text, descriptor);
+    let (low, high) = kind_bounds(descriptor.kind());
+    let whole = takes_integers(descriptor);
     let speed = ((high - low) / 200.0).max(if whole { 1.0 } else { 0.001 });
     fn number(value: &mut f64, range: std::ops::RangeInclusive<f64>, speed: f64, whole: bool) -> DragValue<'_> {
         let drag = DragValue::new(value).range(range).speed(speed);
@@ -740,7 +732,7 @@ fn range_fields(ui: &mut egui::Ui, kind: &ParamKind, segment: EditorSegment, tex
             }
         });
     if changed {
-        *text = fields.text(kind, segment == EditorSegment::Drawn);
+        *text = fields.text(descriptor, segment == EditorSegment::Drawn);
     }
 }
 
@@ -842,14 +834,15 @@ fn options_menu(ui: &mut egui::Ui, kind: &ParamKind, text: &mut String, width: f
 mod tests {
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
-    use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    use henad_core::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
 
     use super::{
         EditorSegment, LevelNoun, RangeFields, around_fill, both_ends_fill, bounds_text, format_hint,
         options_button_text, options_text, picked_options, preview_note, preview_tooltip, row_note, segment_text,
         values_editor_id, values_field_id, whole_range_fill,
     };
-    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview, levels_text};
+    use crate::ui::sweep::draft::levels::levels_text;
+    use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview};
     use crate::ui::sweep::layout::Note;
 
     const RATE: ParamKind = ParamKind::F32 {
@@ -873,12 +866,12 @@ mod tests {
     };
 
     const NETWORK: ParamKind = ParamKind::Choice {
-        options: &["Random", "Geometric"],
+        options: ChoiceOptions::from_static(&["Random", "Geometric"]),
         default: 0,
     };
 
     const LAYOUT: ParamKind = ParamKind::Choice {
-        options: &["Random", "Geometric", "Lattice"],
+        options: ChoiceOptions::from_static(&["Random", "Geometric", "Lattice"]),
         default: 0,
     };
 
@@ -1000,84 +993,154 @@ mod tests {
 
     #[test]
     fn the_editor_switches_text_between_its_forms() {
-        assert_eq!(segment_text(EditorSegment::Range, "0.1, 0.5", &RATE), "0.1:0.5:0.1");
-        assert_eq!(segment_text(EditorSegment::Drawn, "0.1:0.5:0.1", &RATE), "0.1:0.5");
-        assert_eq!(segment_text(EditorSegment::Values, "0.1:0.5:0.1", &RATE), "0.1,0.5");
-        assert_eq!(segment_text(EditorSegment::Range, "", &WIDTH), "1:16384:5000");
+        let (rate, width) = (param(&RATE), param(&WIDTH));
+        assert_eq!(segment_text(EditorSegment::Range, "0.1, 0.5", &rate), "0.1:0.5:0.1");
+        assert_eq!(segment_text(EditorSegment::Drawn, "0.1:0.5:0.1", &rate), "0.1:0.5");
+        assert_eq!(segment_text(EditorSegment::Values, "0.1:0.5:0.1", &rate), "0.1,0.5");
+        assert_eq!(segment_text(EditorSegment::Range, "", &width), "1:16384:5000");
         assert_eq!(
             RangeFields {
                 min: 0.1,
                 max: 0.9,
                 step: 0.2
             }
-            .text(&RATE, false),
+            .text(&rate, false),
             "0.1:0.9:0.2"
         );
-        assert_eq!(bounds_text(&RATE), "0 to 1");
-        assert_eq!(bounds_text(&WIDTH), "1 to 16384, integers");
+        assert_eq!(bounds_text(&rate), "0 to 1");
+        assert_eq!(bounds_text(&width), "1 to 16384, integers");
     }
 
-    /// Returns whether `henad-cli --vary` accepts `text` as the values of a parameter of `kind` in a factorial design.
-    fn vary_takes(kind: &ParamKind, text: &str) -> bool {
-        let descriptor = ParamDescriptor {
-            id: "param",
-            label: "Param",
-            kind: kind.clone(),
-            apply: ParamApply::Live,
-            format: ParamFormat::Plain,
-        };
+    /// Text written in percent takes the form, ends and step of its fractions, and a switch of form writes the
+    /// fractions, the values the text stood for.
+    #[test]
+    fn the_editor_reads_percent_text_as_its_fractions() {
+        let rate = param(&RATE);
+        assert_eq!(EditorSegment::of("1%:5%:1%", false), EditorSegment::Range);
+        assert_eq!(EditorSegment::of("1%:5%", true), EditorSegment::Drawn);
+        assert_eq!(EditorSegment::of("1%, 2%", true), EditorSegment::Values);
+        let fields = RangeFields::of("1%:5%:1%", &rate);
+        assert_eq!((fields.min, fields.max, fields.step), (0.01, 0.05, 0.01));
+        let listed = RangeFields::of("1%, 3%", &rate);
+        assert_eq!((listed.min, listed.max), (0.01, 0.03));
+        assert_eq!(segment_text(EditorSegment::Drawn, "1%:5%:1%", &rate), "0.01:0.05");
+        assert_eq!(segment_text(EditorSegment::Values, "1%:5%:1%", &rate), "0.01,0.05");
+        assert_eq!(segment_text(EditorSegment::Range, "1%, 2%", &rate), "0.01:0.02:0.002");
+    }
+
+    /// Returns parameter `param` of `kind`.
+    fn param(kind: &ParamKind) -> ParamDescriptor {
+        ParamDescriptor::new("param", "Param", kind.clone())
+    }
+
+    /// Returns whether `henad-cli --vary` accepts `text` as the values of parameter `descriptor` in a factorial
+    /// design.
+    fn vary_takes(descriptor: &ParamDescriptor, text: &str) -> bool {
         LevelSpec::parse(text).is_ok_and(|levels| {
-            FactorSpec::param("param", levels)
-                .resolve(&[descriptor], &[], &DesignKind::Factorial)
+            FactorSpec::param(descriptor.id(), levels)
+                .resolve(std::slice::from_ref(descriptor), &[], &DesignKind::Factorial)
                 .is_ok()
         })
     }
 
     #[test]
     fn quick_fills_write_the_text_a_command_line_takes() {
-        assert_eq!(whole_range_fill(&RATE, false), "0:1:0.2");
-        assert_eq!(whole_range_fill(&RATE, true), "0:1");
-        assert_eq!(both_ends_fill(&WIDTH), "1,16384");
-        assert_eq!(around_fill(&RATE, &ParamValue::F32(0.3)), "0.15,0.3,0.45");
+        let (rate, width, fixed, layout) = (param(&RATE), param(&WIDTH), param(&FIXED), param(&LAYOUT));
+        assert_eq!(whole_range_fill(&rate, false), "0:1:0.2");
+        assert_eq!(whole_range_fill(&rate, true), "0:1");
+        assert_eq!(both_ends_fill(&width), "1,16384");
+        assert_eq!(around_fill(&rate, &ParamValue::F32(0.3)), "0.15,0.3,0.45");
         assert_eq!(
-            around_fill(&RATE, &ParamValue::F32(0.8)),
+            around_fill(&rate, &ParamValue::F32(0.8)),
             "0.4,0.8,1",
             "held within the bounds"
         );
         assert_eq!(
-            around_fill(&WIDTH, &ParamValue::U32(1)),
+            around_fill(&width, &ParamValue::U32(1)),
             "1,2",
             "a whole number rounds, and a repeat is dropped"
         );
         assert_eq!(
-            whole_range_fill(&FIXED, false),
+            whole_range_fill(&fixed, false),
             "5,5",
             "a range with no width lists both ends"
         );
         let loaded = LevelSpec::Values(vec!["1".to_owned(), "16384".to_owned()]);
         assert_eq!(levels_text(&loaded), "1,16384", "a row loaded from a spec");
         let fills = [
-            (&RATE, whole_range_fill(&RATE, false)),
-            (&RATE, both_ends_fill(&RATE)),
-            (&RATE, around_fill(&RATE, &ParamValue::F32(0.3))),
-            (&RATE, segment_text(EditorSegment::Values, "0.1:0.5:0.1", &RATE)),
-            (&WIDTH, whole_range_fill(&WIDTH, false)),
-            (&WIDTH, both_ends_fill(&WIDTH)),
-            (&WIDTH, around_fill(&WIDTH, &ParamValue::U32(1024))),
-            (&WIDTH, levels_text(&loaded)),
-            (&FIXED, whole_range_fill(&FIXED, false)),
+            (&rate, whole_range_fill(&rate, false)),
+            (&rate, both_ends_fill(&rate)),
+            (&rate, around_fill(&rate, &ParamValue::F32(0.3))),
+            (&rate, segment_text(EditorSegment::Values, "0.1:0.5:0.1", &rate)),
+            (&width, whole_range_fill(&width, false)),
+            (&width, both_ends_fill(&width)),
+            (&width, around_fill(&width, &ParamValue::U32(1024))),
+            (&width, levels_text(&loaded)),
+            (&fixed, whole_range_fill(&fixed, false)),
             (
-                &LAYOUT,
+                &layout,
                 options_text(&super::option_names(&LAYOUT), &[true, true, true]),
             ),
             (
-                &LAYOUT,
+                &layout,
                 options_text(&super::option_names(&LAYOUT), &[true, false, true]),
             ),
         ];
-        for (kind, text) in fills {
-            assert!(vary_takes(kind, &text), "--vary refuses {text:?}");
+        for (descriptor, text) in fills {
+            assert!(vary_takes(descriptor, &text), "--vary refuses {text:?}");
         }
+    }
+
+    /// An `f32` marked integer fills, switches and edits whole numbers alone, as a `u32` does, and `--vary` takes every
+    /// fill.
+    #[test]
+    fn an_integer_f32_fills_whole_numbers() {
+        let birth = henad_core::helpers::f32_param("birth", "Birth", 3.0, -1.0, 8.0, Some(1.0)).integer();
+        let offset = henad_core::helpers::f32_param("offset", "Offset", 0.0, -1.0, 1.0, None).integer();
+        assert_eq!(bounds_text(&birth), "-1 to 8, integers");
+        assert_eq!(whole_range_fill(&birth, false), "-1:8:2");
+        assert_eq!(whole_range_fill(&birth, true), "-1:8");
+        assert_eq!(both_ends_fill(&birth), "-1,8");
+        assert_eq!(around_fill(&birth, &ParamValue::F32(3.0)), "2,3,5");
+        assert_eq!(
+            around_fill(&birth, &ParamValue::F32(-1.0)),
+            "-1",
+            "held within the bounds"
+        );
+        assert_eq!(
+            whole_range_fill(&offset, false),
+            "-1:1:1",
+            "a quarter of the range rounds up to 1"
+        );
+        assert_eq!(RangeFields::of("", &offset).step, 1.0);
+        assert_eq!(segment_text(EditorSegment::Range, "-1, 1", &offset), "-1:1:1");
+        assert_eq!(
+            RangeFields {
+                min: -0.4,
+                max: 2.6,
+                step: 1.3
+            }
+            .text(&birth, false),
+            "0:3:1",
+            "a dragged field writes whole numbers, and no -0"
+        );
+        let fills = [
+            whole_range_fill(&birth, false),
+            both_ends_fill(&birth),
+            around_fill(&birth, &ParamValue::F32(3.0)),
+            around_fill(&birth, &ParamValue::F32(-1.0)),
+            segment_text(EditorSegment::Values, "-1:8:2", &birth),
+            segment_text(EditorSegment::Range, "2, 7", &birth),
+        ];
+        for text in fills {
+            assert!(vary_takes(&birth, &text), "--vary refuses {text:?}");
+        }
+        let plain = henad_core::helpers::f32_param("birth", "Birth", 3.0, -1.0, 8.0, Some(1.0));
+        assert_eq!(
+            around_fill(&plain, &ParamValue::F32(3.0)),
+            "1.5,3,4.5",
+            "an unmarked f32 keeps fractions"
+        );
     }
 
     #[test]

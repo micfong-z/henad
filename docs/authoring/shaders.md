@@ -71,6 +71,7 @@ A bare `use henad::...` there is ambiguous between the crate and the generated m
 ## Shared WGSL
 
 The shared modules ship with henad-core, in `henad-core/src/authoring/primitives/wgsl/`, and a shader imports them with `#import henad::<module>`, resolved at build time.
+A grid rule's step is composed while the program runs, by `henad::rules::compose_wgsl` under the `model-files` feature, and imports them the same way, one `#import` line of the item form below each.
 
 ```wgsl
 #import henad::dispatch::linear_index
@@ -84,10 +85,11 @@ The shared modules ship with henad-core, in `henad-core/src/authoring/primitives
 | `henad::rng` | The WGSL twins of the [random primitives](../reference/primitives.md#random) |
 | `henad::dims` | The `Dims` struct a grid model's display and reduce shaders read |
 | `henad::reduce_tree` | `block_sum`, the workgroup fold a reduce leaf repeats |
+| `henad::hash` | `walk_bounds`, `walk_cell` and their caps, for the walk over the neighbour index that a radius query takes |
 
 Most primitives here pair with a Rust function under `henad::authoring::primitives`, and a parity test pins each pair of pure functions together.
 [Authoring primitives](../reference/primitives.md) is the index.
-It lists the WGSL-only primitives and records what is deliberately absent.
+It lists the WGSL-only primitives, and what Henad does not provide.
 
 Your own module is a file with a `#define_import_path` line.
 An import resolves by file path alone, so the import path mirrors the file's path below `src`, or below the directory of the shader importing it.
@@ -120,10 +122,10 @@ The shipped grid models bind each buffer twice in the step shader, `<label>_in` 
 That suffix is a naming convention.
 The access mode decides which side a name resolves to.
 
-!!! note "Names are read, not typechecked"
+!!! note "Nothing checks a binding's type"
 
     The engine resolves bindings by name, and every storage slot looks alike to wgpu.
-    A binding whose declared WGSL type does not match what the buffer holds still produces a valid layout, which then reads the wrong bytes.
+    A binding whose declared WGSL type does not match what the buffer holds still produces a valid layout, and the shader reads the wrong bytes.
 
 ## Dispatch
 
@@ -151,7 +153,7 @@ A shader is composed from its imports and re-emitted by naga, so the text the en
 HENAD_DUMP_WGSL=/tmp/wgsl cargo run --release
 ```
 
-With that variable set, every shader the engine compiles is written to `<dir>/<label>.wgsl`, which lets you read a validation error against the composed source as ordinary text.
+With that variable set, every shader the engine compiles is written to `<dir>/<label>.wgsl`, and you can read a validation error against the composed source as ordinary text.
 See [environment variables](../reference/environment.md).
 
 ## Next

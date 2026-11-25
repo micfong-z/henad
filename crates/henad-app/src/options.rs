@@ -13,7 +13,7 @@ use henad_core::explore::replay::Replay;
 use henad_core::provenance::BuildInfo;
 
 use crate::state::OpenAt;
-use crate::ui::sweep::draft::error_chain;
+use crate::ui::text::error_chain;
 
 /// Henad's icon, the default of [`AppOptions::icon_png`].
 const HENAD_ICON_PNG: &[u8] = include_bytes!("../assets/icon-256.png");
@@ -248,10 +248,10 @@ impl std::fmt::Display for OpeningError {
             ),
             Self::OtherSchema(model) => write!(
                 formatter,
-                "the setup to open declares other parameters, stats or actions than model '{model}' of this build"
+                "the setup to open declares different parameters, stats or actions from model '{model}' of this build"
             ),
             Self::RunRefused { model, reason } => {
-                write!(formatter, "model '{model}' refuses the run to open: {reason}")
+                write!(formatter, "model '{model}' rejects the run to open: {reason}")
             }
         }
     }
@@ -368,7 +368,7 @@ impl WebStartError {
 impl std::fmt::Display for WebStartError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
-            WebStartErrorKind::NoWindow => formatter.write_str("the app runs outside a browser window with a document"),
+            WebStartErrorKind::NoWindow => formatter.write_str("the app must run in a browser window with a document"),
             WebStartErrorKind::MissingCanvas(id) => write!(formatter, "the page has no canvas '{id}'"),
             WebStartErrorKind::Opening(error) => write!(formatter, "the app cannot open: {error}"),
             WebStartErrorKind::Eframe(error) => write!(formatter, "the app failed to start: {error}"),
@@ -384,7 +384,6 @@ mod tests {
     use henad_compute::entry::{ModelSet, register_grid_model};
     use henad_core::action::{Schedule, Scheduled};
     use henad_core::authoring::model::grid_model::GridModel;
-    use henad_core::explore::replay::Replay;
     use henad_core::grid::Grid2D;
     use henad_core::params::{ParamDescriptor, ParamValue};
     use henad_core::topology::NeighborhoodKind;
@@ -392,6 +391,7 @@ mod tests {
 
     use super::{AppOpening, AppOptions, OpeningError};
     use crate::state::OpenAt;
+    use crate::tests::support::replay;
 
     /// A host's own model under the id of an example model, declaring no parameters.
     struct OtherSir;
@@ -428,14 +428,7 @@ mod tests {
 
     fn run_of(model: &str, params: Vec<ParamValue>) -> AppOpening {
         AppOpening::Run {
-            replay: Replay {
-                model: model.to_owned(),
-                params,
-                seed: 1,
-                schedule: Schedule::default(),
-                ticks: 10,
-                label: "Sweep run 0".to_owned(),
-            },
+            replay: replay(model, params),
             open_at: OpenAt::Start,
         }
     }
@@ -467,7 +460,7 @@ mod tests {
         let rate = sir
             .param_descriptors()
             .iter()
-            .position(|descriptor| descriptor.id == "infection_rate")
+            .position(|descriptor| descriptor.id() == "infection_rate")
             .expect("sir declares infection_rate");
         let mut out_of_bounds = defaults.clone();
         out_of_bounds[rate] = ParamValue::F32(2.0);
@@ -491,7 +484,7 @@ mod tests {
             options(examples.clone(), unknown_action).check_opening(),
             Err(OpeningError::RunRefused {
                 model: "sir".to_owned(),
-                reason: "model has no action 'absent'".to_owned(),
+                reason: "unknown action 'absent'".to_owned(),
             })
         );
 

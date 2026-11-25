@@ -5,11 +5,15 @@
 
 use std::collections::HashSet;
 
-use henad_compute::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
+use henad_compute::cpu::network_engine::NetworkModelState;
 use henad_core::model::SimState as _;
 use henad_core::params::ParamValue;
 use henad_core::view::StatValue;
 use henad_models::virus_network::{INFECTED, RESISTANT, SUSCEPTIBLE, VirusNetwork};
+
+mod support;
+
+use support::{band, network_params, param_index};
 
 type State = NetworkModelState<VirusNetwork>;
 
@@ -17,9 +21,6 @@ const SEED: u64 = 0x7185_0BEE_5EED_0001;
 
 /// Buckets with fewer trials than this are skipped, to avoid false positives from small-number statistics.
 const MIN_TRIALS: u64 = 1_000;
-
-/// Half-width of the acceptance band, in standard deviations of a binomial proportion.
-const SIGMAS: f64 = 5.0;
 
 /// Number of nodes, large enough that every bucket in these tests clears `MIN_TRIALS`.
 const NODES: u32 = 200_000;
@@ -29,44 +30,12 @@ const OUTBREAK: u32 = NODES / 4;
 
 use ParamValue::{Bool, Choice, F32, U32};
 
-/// Returns the default params with some overridden by id.
-///
-/// # Panics
-///
-/// Panics if an id is not declared by the model.
-fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
-    let descs = network_model_param_descriptors::<VirusNetwork>();
-    for (id, _) in overrides {
-        assert!(descs.iter().any(|d| d.id == *id), "no parameter '{id}'");
-    }
-    descs
-        .iter()
-        .map(|d| {
-            overrides
-                .iter()
-                .find(|(id, _)| *id == d.id)
-                .map_or_else(|| d.kind.default_value(), |(_, v)| v.clone())
-        })
-        .collect()
-}
-
-fn index(id: &str) -> usize {
-    network_model_param_descriptors::<VirusNetwork>()
-        .iter()
-        .position(|d| d.id == id)
-        .unwrap_or_else(|| panic!("no parameter '{id}'"))
-}
-
 fn build(overrides: &[(&str, ParamValue)]) -> State {
-    State::from_params_seeded(&params(overrides), Some(SEED))
+    State::from_params_seeded(&network_params::<VirusNetwork>(overrides), Some(SEED))
 }
 
 fn states(state: &State) -> Vec<u8> {
     state.lanes().state.clone()
-}
-
-fn band(expected: f64, trials: u64) -> f64 {
-    SIGMAS * (expected * (1.0 - expected) / trials as f64).sqrt()
 }
 
 fn assert_rate(what: &str, hits: u64, trials: u64, expected: f64) {
@@ -111,10 +80,10 @@ fn encoding_matches_the_models_own_stats() {
         let counted = cells.iter().filter(|&&c| c == value).count() as f64;
         let entry = stats
             .iter()
-            .find(|e| e.label == name)
+            .find(|e| e.label() == name)
             .unwrap_or_else(|| panic!("no `{name}` stat"));
-        let StatValue::Scalar(reported) = entry.value else {
-            panic!("`{name}` is not a scalar: {:?}", entry.value)
+        let StatValue::Scalar(reported) = entry.value() else {
+            panic!("`{name}` is not a scalar: {:?}", entry.value())
         };
         assert!(
             (counted - reported).abs() < 0.5,
@@ -264,7 +233,7 @@ fn only_the_declared_transitions_happen() {
     for tick in 0..100 {
         if tick == 50 {
             directed = true;
-            state.set_param(index("directed"), &Bool(directed));
+            state.set_param(param_index::<VirusNetwork>("directed"), &Bool(directed));
         }
         let sources = infected_sources(&state, &before, directed);
         state.step();
@@ -288,7 +257,7 @@ fn only_the_declared_transitions_happen() {
 #[test]
 fn directed_infection_follows_the_edges() {
     fn run(directed: bool) -> Vec<u8> {
-        let values = params(&[
+        let values = network_params::<VirusNetwork>(&[
             ("num_agents", U32(3)),
             ("average_node_degree", U32(1)),
             ("initial_outbreak_size", U32(1)),
@@ -386,7 +355,7 @@ fn a_random_network_has_the_declared_edge_count() {
 fn a_geometric_network_has_the_declared_mean_degree() {
     let geometric = |nodes: u32, seed: u64| {
         State::from_params_seeded(
-            &params(&[("num_agents", U32(nodes)), ("network", Choice(1))]),
+            &network_params::<VirusNetwork>(&[("num_agents", U32(nodes)), ("network", Choice(1))]),
             Some(seed),
         )
     };

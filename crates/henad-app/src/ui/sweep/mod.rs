@@ -18,12 +18,12 @@ pub mod session;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use egui::{CentralPanel, Frame, Id, Margin, Panel, ScrollArea};
 use henad_compute::cpu::sim_thread::WakeFn;
 use henad_compute::entry::ModelEntry;
 use henad_compute::gpu::GpuContext;
+use henad_core::explore::fingerprint::schema_hash;
 use henad_core::explore::plan::{ModelSchema, PlanWarning};
 use henad_core::export::StatColumns;
 use henad_core::metadata::Backend;
@@ -35,14 +35,18 @@ use henad_explore::spec_file::SpecFile;
 use serde::Deserialize;
 
 use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
-use crate::state::{AppState, lookup_message};
+use crate::state::{AppState, ModelPool, default_values, lookup_message};
 use crate::ui::dock::Tab;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget, SaveTarget};
+use crate::ui::focus;
+use crate::ui::model::model_label;
 use crate::ui::plural;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::ui::results::spawn_reporting;
 use crate::ui::sweep::builder::banner_line;
 use crate::ui::sweep::draft::{
-    DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftMode, DraftPlan, DraftSite, IssueKind,
-    LevelPreview, LevelPreviews, SweepDraft, capitalize, describe_error,
+    DesignTableDraft, DraftAlgorithm, DraftDesign, DraftIssue, DraftPlan, DraftSite, ExploreMode, IssueKind,
+    LevelPreview, LevelPreviews, PlanCounts, SweepDraft,
 };
 use crate::ui::sweep::footer::{AbortModal, BuilderFooter, SessionFooter};
 use crate::ui::sweep::header::{BuilderHeader, SessionHeader};
@@ -50,6 +54,7 @@ use crate::ui::sweep::layout::{FormState, IssueCount, Reveal, SweepSection};
 use crate::ui::sweep::plan::PlanSummary;
 use crate::ui::sweep::progress::SessionResult;
 use crate::ui::sweep::session::{KeptDraft, SessionExecution, SessionState, SweepSession};
+use crate::ui::text::{capitalize, describe_error};
 
 /// Id of the Plan panel.
 const PLAN_PANEL_ID: &str = "henad_sweep_plan";
@@ -88,6 +93,8 @@ pub struct SweepPanel {
     column_builds: BTreeMap<String, ColumnsBuild>,
     /// Program that the tab's advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<String>,
+    /// Pool the column builds run in, the app's [`AppState::model_pool`].
+    pub model_pool: ModelPool,
 }
 
 /// Build of a model at its default values, for the stat columns of its sample at tick 0.
@@ -102,30 +109,25 @@ enum ColumnsBuild {
 impl ColumnsBuild {
     /// Starts a build of `entry`'s model.
     ///
-    /// On native the model builds on its own thread, and `wake` runs once the build reports. A GPU model builds
-    /// on its own device, as a sweep does, so a fault in the build never reaches the live model. A browser builds
-    /// a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot block.
+    /// On native the model builds on its own thread, on a worker of `pool`, and `wake` runs once the build reports. A
+    /// GPU model builds on its own device, as a sweep does, so a fault in the build never reaches the live model. A
+    /// browser builds a CPU model at once and never builds a GPU model. A GPU sample blocks, and a browser cannot
+    /// block.
     #[cfg(not(target_arch = "wasm32"))]
-    fn start(entry: &ModelEntry, wake: &WakeFn) -> Self {
-        let (sender, receiver) = flume::bounded(1);
+    fn start(entry: &ModelEntry, wake: &WakeFn, pool: &ModelPool) -> Self {
         let entry = entry.clone();
-        let wake = Arc::clone(wake);
-        let spawned = std::thread::Builder::new()
-            .name("henad-stat-columns".to_owned())
-            .spawn(move || {
-                let columns = default_stat_columns(&entry);
-                // The receiver is gone once the app is closing, and nothing is left to report to.
-                drop(sender.send(columns));
-                wake();
-            });
+        let pool = pool.clone();
+        let spawned = spawn_reporting("henad-stat-columns", Arc::clone(wake), move || {
+            default_stat_columns(&entry, &pool)
+        });
         match spawned {
-            Ok(_) => Self::Running(receiver),
+            Ok(receiver) => Self::Running(receiver),
             Err(_) => Self::Sampled(None),
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start(entry: &ModelEntry, _wake: &WakeFn) -> Self {
+    fn start(entry: &ModelEntry, _wake: &WakeFn, _pool: &ModelPool) -> Self {
         Self::Sampled(match entry.metadata().backend {
             Backend::Cpu => sampled_stat_columns(entry, None),
             Backend::Gpu => None,
@@ -260,7 +262,7 @@ impl SweepPanel {
         let build = self
             .column_builds
             .entry(entry.id().to_owned())
-            .or_insert_with(|| ColumnsBuild::start(entry, wake));
+            .or_insert_with(|| ColumnsBuild::start(entry, wake, &self.model_pool));
         #[cfg(not(target_arch = "wasm32"))]
         build.poll();
         let draft = self
@@ -277,6 +279,19 @@ impl SweepPanel {
 
     /// Drops the last check, so the next check reads the output folder again.
     fn clear_check(&mut self) {
+        self.last_check = None;
+    }
+
+    /// Forgets what the tab learned from the code of a model that the set has replaced, `previous` replaced by
+    /// `current`: the build of its stat columns and the last check. When `declarations_changed`, the model's draft is
+    /// carried to `current`, as [`SweepDraft::carry_to`] carries it.
+    ///
+    /// The next frame builds the replacement for its columns.
+    pub fn forget_model(&mut self, previous: &ModelSchema<'_>, current: &ModelSchema<'_>, declarations_changed: bool) {
+        self.column_builds.remove(current.id);
+        if declarations_changed && let Some(draft) = self.drafts.get_mut(current.id) {
+            draft.carry_to(previous, current);
+        }
         self.last_check = None;
     }
 
@@ -316,26 +331,21 @@ impl SweepPanel {
 /// Returns the stat columns of `entry`'s model at its default values, `None` when the build fails or no GPU device
 /// can be acquired for a GPU model.
 ///
-/// A GPU model builds on a device sized to its own needs.
+/// The model builds on a worker of `pool`, and a GPU model on a device sized to its own needs.
 #[cfg(not(target_arch = "wasm32"))]
-fn default_stat_columns(entry: &ModelEntry) -> Option<StatColumns> {
+fn default_stat_columns(entry: &ModelEntry, pool: &ModelPool) -> Option<StatColumns> {
     let gpu = match entry.gpu_needs() {
         Some(needs) => Some(henad_explore::device::acquire_headless(needs).ok()?),
         None => None,
     };
-    sampled_stat_columns(entry, gpu.as_ref())
+    pool.install(|| sampled_stat_columns(entry, gpu.as_ref()))
 }
 
 /// Returns the stat columns of a build of `entry`'s model at its default values, `None` when the build fails.
 ///
 /// A GPU model builds on `gpu`.
 fn sampled_stat_columns(entry: &ModelEntry, gpu: Option<&GpuContext>) -> Option<StatColumns> {
-    let values: Vec<ParamValue> = entry
-        .param_descriptors()
-        .iter()
-        .map(|descriptor| descriptor.kind.default_value())
-        .collect();
-    ProbeReport::build(entry, gpu, &values, None)
+    ProbeReport::build(entry, gpu, &default_values(entry), None)
         .ok()
         .map(|report| report.columns)
 }
@@ -413,8 +423,8 @@ impl IssueLine {
 /// Result of a draft's check, as the tab draws it.
 #[derive(Debug, Clone, Default)]
 pub struct CheckSummary {
-    /// Plan counts of configurations or evaluations, replicates and runs, `None` while the draft has issues.
-    pub counts: Option<(u64, u64, u64)>,
+    /// Counts of the plan's configurations or evaluations, replicates and runs, `None` while the draft has issues.
+    pub counts: Option<PlanCounts>,
     /// Approximate size in bytes of the series, once counted.
     pub series_bytes: Option<u64>,
     pub warnings: Vec<String>,
@@ -454,7 +464,7 @@ impl CheckSummary {
         }
         let search = &check.draft.search;
         if check.result.is_ok()
-            && check.draft.mode == DraftMode::Search
+            && check.draft.mode == ExploreMode::Search
             && search.algorithm == DraftAlgorithm::PatternSpace
             && search.pattern_space.initial_samples >= search.max_evaluations
         {
@@ -589,20 +599,23 @@ fn footer_panel(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
 /// Adds the Plan panel for a tab `tab_width` wide, with `add_contents` in it, while `plan_open` is set.
 fn plan_panel(ui: &mut egui::Ui, tab_width: f32, plan_open: &mut bool, add_contents: impl FnOnce(&mut egui::Ui)) {
     let max_width = (PLAN_PANEL_MAX_SHARE * tab_width).max(PLAN_PANEL_MIN_WIDTH);
-    Panel::right(PLAN_PANEL_ID)
-        .resizable(true)
-        .default_size(PLAN_PANEL_WIDTH)
-        .size_range(PLAN_PANEL_MIN_WIDTH..=max_width)
-        .frame(Frame::NONE.inner_margin(Margin {
-            left: 8,
-            ..Margin::ZERO
-        }))
-        .show_collapsible(ui, plan_open, |ui| {
-            ScrollArea::vertical()
-                .id_salt("henad_sweep_plan_scroll")
-                .auto_shrink([false; 2])
-                .show(ui, add_contents);
-        });
+    let ctx = ui.ctx().clone();
+    focus::without_focus_stop(&ctx, focus::panel_divider(Id::new(PLAN_PANEL_ID)), || {
+        Panel::right(PLAN_PANEL_ID)
+            .resizable(true)
+            .default_size(PLAN_PANEL_WIDTH)
+            .size_range(PLAN_PANEL_MIN_WIDTH..=max_width)
+            .frame(Frame::NONE.inner_margin(Margin {
+                left: 8,
+                ..Margin::ZERO
+            }))
+            .show_collapsible(ui, plan_open, |ui| {
+                ScrollArea::vertical()
+                    .id_salt("henad_sweep_plan_scroll")
+                    .auto_shrink([false; 2])
+                    .show(ui, add_contents);
+            });
+    });
 }
 
 /// Draws the tab while it builds a sweep: its header, footer, plan and form.
@@ -614,11 +627,13 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     let entry = &entry;
     let schema = entry.schema();
     let wake = app.repaint_waker();
+    let label = model_label(app, entry.id(), entry.name());
+    let editor_not_applied = app.editor_differs_from(entry);
     app.sweep.learn_stat_columns(entry, &wake);
     // Every text the panels draw is built here. The form borrows the draft once they have drawn.
     let check = app.sweep.cached_check(&schema, &app.param_values);
     let summary = CheckSummary::new(check, entry, &schema);
-    let plan = PlanSummary::for_draft(check, &schema, entry.name(), &summary);
+    let plan = PlanSummary::for_draft(check, &schema, &label, &summary);
     let sections = builder::SectionSummaries::new(check, &schema, &summary);
     let mode = check.draft.mode;
     let steps_per_run = check.draft.warmup.saturating_add(check.draft.steps);
@@ -650,9 +665,10 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
 
     header_panel(ui, |ui| {
         let header = BuilderHeader {
-            model_name: entry.name(),
+            model_name: &label,
             notification: status.as_deref(),
             gpu_refused: cfg!(target_arch = "wasm32") && entry.metadata().backend == Backend::Gpu,
+            editor_not_applied,
             cli_command: cli_command.as_deref(),
             plan_fits: form.plan_fits,
         };
@@ -705,7 +721,7 @@ fn builder_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     }
 
     if *confirm_replace {
-        footer::replace_modal(&ctx, header::noun(mode), confirm_replace, request);
+        footer::replace_modal(&ctx, mode, confirm_replace, request);
     }
 }
 
@@ -728,7 +744,8 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     };
     let progress = session.progress();
     let state = session.state(&progress);
-    let noun = session.noun();
+    let mode = session.mode();
+    let noun = mode.noun();
     let resumed = session.is_resumed();
     let modal_open = settle_session_modals(state, confirm_abort, confirm_replace);
     let resumed_plan;
@@ -749,7 +766,7 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     header_panel(ui, |ui| {
         let header = SessionHeader {
             state,
-            noun,
+            mode,
             model_name: &session.model_name,
             notification: status.as_deref(),
             resumed,
@@ -759,9 +776,9 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
     });
     footer_panel(ui, |ui| {
         let result = (!state.is_running())
-            .then(|| SessionResult::new(noun, session.report.as_ref(), session.failure.as_deref(), &progress));
+            .then(|| SessionResult::new(mode, session.report.as_ref(), session.failure.as_deref(), &progress));
         let footer = SessionFooter {
-            noun,
+            mode,
             state,
             progress: &progress,
             result,
@@ -792,7 +809,7 @@ fn session_frame(ui: &mut egui::Ui, app: &mut AppState, tab_width: f32, request:
 
     if *confirm_abort {
         let modal = AbortModal {
-            noun,
+            mode,
             progress: &progress,
             paused: state.is_paused(),
             in_folder: session.output_dir.is_some(),
@@ -906,6 +923,7 @@ fn start(app: &mut AppState) {
     let entry = &entry;
     let schema = entry.schema();
     let wake = app.repaint_waker();
+    let label = model_label(app, entry.id(), entry.name());
     app.sweep.learn_stat_columns(entry, &wake);
     app.sweep.clear_check();
     let check = app.sweep.cached_check(&schema, &app.param_values);
@@ -914,16 +932,13 @@ fn start(app: &mut AppState) {
     };
     let summary = CheckSummary::new(check, entry, &schema);
     let kept = KeptDraft {
+        entry: entry.clone(),
         draft: check.draft.clone(),
         panel_values: check.panel_values.clone(),
-        plan: PlanSummary::for_draft(check, &schema, entry.name(), &summary),
+        plan: PlanSummary::for_draft(check, &schema, &label, &summary),
     };
     let spec = planned.spec.clone();
-    let noun = if planned.search_plan.is_some() {
-        "Search"
-    } else {
-        "Sweep"
-    };
+    let title = check.draft.mode.title();
     let folder_results = check.folder_results;
     let execution = SessionExecution {
         concurrency: check.draft.concurrency,
@@ -934,7 +949,7 @@ fn start(app: &mut AppState) {
     let folder = output_dir.clone();
     app.sweep.start_failure = None;
     if let Some(results) = folder_results {
-        app.sweep.start_failure = Some(format!("{noun} start failed: {}", results.refusal()));
+        app.sweep.start_failure = Some(format!("{title} start failed: {}", results.refusal()));
         return;
     }
     match SweepSession::start(app, spec, execution, output_dir) {
@@ -952,33 +967,28 @@ fn start(app: &mut AppState) {
             app.sweep.session = Some(session);
             app.sweep.status = None;
         }
-        Err(message) => app.sweep.start_failure = Some(format!("{noun} start failed: {message}")),
+        Err(message) => app.sweep.start_failure = Some(format!("{title} start failed: {message}")),
     }
 }
 
 /// Saves the spec of the session's draft while a session exists, and of the selected model's draft otherwise.
 fn save_spec(app: &mut AppState) {
-    let (draft, panel_values) = if let Some(session) = &app.sweep.session {
+    // A session's draft pairs with the entry it started with. The set's entry might have been replaced since.
+    let (entry, draft, panel_values) = if let Some(session) = &app.sweep.session {
         let Some(kept) = &session.kept else {
             return;
         };
-        (kept.draft.clone(), kept.panel_values.clone())
+        (kept.entry.clone(), kept.draft.clone(), kept.panel_values.clone())
     } else {
         let Some(entry) = app.selected_entry().cloned() else {
             return;
         };
         let schema = entry.schema();
         let draft = app.sweep.draft_mut(&schema).clone();
-        (draft, app.param_values.clone())
-    };
-    let Some(entry) = app.models.get(&draft.model_id) else {
-        return;
+        (entry, draft, app.param_values.clone())
     };
     let schema = entry.schema();
-    let name = match draft.mode {
-        DraftMode::Sweep => format!("henad-{}-sweep.toml", entry.id()),
-        DraftMode::Search => format!("henad-{}-search.toml", entry.id()),
-    };
+    let name = format!("henad-{}-{}.toml", entry.id(), draft.mode.noun());
     match draft.to_toml(&schema, &panel_values) {
         Ok(text) => app.save_as(SaveTarget::SweepSpec, &name, text.into_bytes()),
         Err(issues) => {
@@ -1042,7 +1052,7 @@ pub fn receive_open(app: &mut AppState, target: OpenTarget, result: OpenResult) 
     match target {
         OpenTarget::SweepSpec => load_spec(app, &file),
         OpenTarget::DesignTable => load_table(app, file),
-        OpenTarget::OutputFolder | OpenTarget::Results => {}
+        OpenTarget::OutputFolder | OpenTarget::Results | OpenTarget::Model | OpenTarget::Function => {}
     }
 }
 
@@ -1085,8 +1095,18 @@ fn read_spec(app: &mut AppState, file: &DialogFile) -> Result<(), String> {
 fn edit_sweep(app: &mut AppState) {
     let kept = app.sweep.session.as_ref().and_then(|session| session.kept.as_deref());
     let reselect = kept.and_then(|kept| {
-        let id = app.models.get(&kept.draft.model_id)?.id().to_owned();
-        let panel_values = || kept.panel_values.iter().cloned().map(Some).collect::<Vec<_>>();
+        let current = app.models.get(&kept.draft.model_id)?;
+        let id = current.id().to_owned();
+        // The values follow the parameters the sweep ran with. Replaced code with other parameters starts from its own
+        // values.
+        let same_declarations = schema_hash(&current.schema()) == schema_hash(&kept.entry.schema());
+        let panel_values = || {
+            if same_declarations {
+                kept.panel_values.iter().cloned().map(Some).collect()
+            } else {
+                Vec::new()
+            }
+        };
         (app.selected_model.as_deref() != Some(id.as_str())).then(|| (id, panel_values()))
     });
     if let Some((id, panel_values)) = reselect {
@@ -1140,67 +1160,28 @@ fn load_table(app: &mut AppState, file: DialogFile) {
     }
 }
 
-/// Returns `duration` rounded down for a progress line.
-///
-/// It returns "under 1 ms" below a millisecond, milliseconds under a second, seconds under a minute, minutes and
-/// seconds under ten minutes, minutes under an hour, and hours and minutes past that.
-pub fn format_duration(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    let (hours, minutes) = (seconds / 3600, seconds % 3600 / 60);
-    match seconds {
-        0 if duration.subsec_millis() == 0 => "under 1 ms".to_owned(),
-        0 => format!("{} ms", duration.subsec_millis()),
-        1..60 => format!("{seconds} s"),
-        60..600 => format!("{minutes} min {} s", seconds % 60),
-        600..3600 => format!("{minutes} min"),
-        _ => format!("{hours} h {minutes} min"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+
     use std::sync::Arc;
-    use std::time::Duration;
 
     use henad_compute::cpu::sim_thread::WakeFn;
     use henad_core::export::StatColumns;
-    use henad_core::params::ParamValue;
+
     use henad_explore::output::manifest::ManifestMode;
     use henad_explore::output::{EVALUATIONS_FILE, MANIFEST_FILE, RUNS_FILE};
     use henad_models::example_models;
 
     use super::{
-        CheckSummary, ColumnsBuild, FolderResults, SweepPanel, folder_results, format_duration, sampled_stat_columns,
+        CheckSummary, ColumnsBuild, FolderResults, SweepPanel, folder_results, sampled_stat_columns,
         settle_session_modals, tab_title,
     };
     use crate::icons::material_design_icons::MDI_FLASK_OUTLINE;
+    use crate::state::default_values;
+    use crate::tests::support::{ScratchFolder, sir};
     use crate::ui::sweep::draft::{COLUMNS_PENDING, DraftIssue, DraftSite, IssueKind};
     use crate::ui::sweep::layout::SweepSection;
     use crate::ui::sweep::session::SessionState;
-
-    /// Folder under the system's temporary folder, removed when dropped.
-    struct ScratchFolder(PathBuf);
-
-    impl Drop for ScratchFolder {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
-    }
-
-    #[test]
-    fn a_duration_is_rounded_to_the_units_a_progress_line_needs() {
-        assert_eq!(format_duration(Duration::ZERO), "under 1 ms");
-        assert_eq!(format_duration(Duration::from_micros(900)), "under 1 ms");
-        assert_eq!(format_duration(Duration::from_micros(40_700)), "40 ms");
-        assert_eq!(format_duration(Duration::from_millis(480)), "480 ms");
-        assert_eq!(format_duration(Duration::from_millis(999)), "999 ms");
-        assert_eq!(format_duration(Duration::from_millis(1_000)), "1 s");
-        assert_eq!(format_duration(Duration::from_millis(45_900)), "45 s");
-        assert_eq!(format_duration(Duration::from_secs(250)), "4 min 10 s");
-        assert_eq!(format_duration(Duration::from_secs(1_530)), "25 min");
-        assert_eq!(format_duration(Duration::from_secs(4_830)), "1 h 20 min");
-    }
 
     #[test]
     fn a_session_closes_the_modals_it_leaves_nothing_to_answer() {
@@ -1247,8 +1228,8 @@ mod tests {
 
     #[test]
     fn a_folder_names_the_mode_of_the_results_it_holds() {
-        let folder = ScratchFolder(std::env::temp_dir().join(format!("henad-app-folder-{}", std::process::id())));
-        drop(std::fs::remove_dir_all(&folder.0));
+        let folder = ScratchFolder::new("folder");
+        std::fs::remove_dir(&folder.0).expect("the empty folder is removed");
         assert_eq!(folder_results(&folder.0), None, "a missing folder is free");
         std::fs::create_dir_all(&folder.0).expect("the folder is created");
         std::fs::write(folder.0.join("notes.txt"), "kept").expect("a scratch file");
@@ -1300,13 +1281,9 @@ mod tests {
 
     #[test]
     fn a_start_failure_lasts_until_the_draft_changes() {
-        let sir = example_models().get("sir").cloned().expect("SIR is registered");
+        let sir = sir();
         let schema = sir.schema();
-        let panel_values: Vec<ParamValue> = sir
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind.default_value())
-            .collect();
+        let panel_values = default_values(&sir);
         let mut panel = SweepPanel::default();
         panel.cached_check(&schema, &panel_values);
         panel.start_failure = Some("Sweep start failed: Folder holds search results".to_owned());
@@ -1320,13 +1297,9 @@ mod tests {
 
     #[test]
     fn a_check_lists_its_issues_by_section_and_counts_them() {
-        let sir = example_models().get("sir").cloned().expect("SIR is registered");
+        let sir = sir();
         let schema = sir.schema();
-        let panel_values: Vec<ParamValue> = sir
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind.default_value())
-            .collect();
+        let panel_values = default_values(&sir);
         let mut panel = SweepPanel::default();
         let draft = panel.draft_mut(&schema);
         draft.factors[2].vary = true;
@@ -1350,11 +1323,7 @@ mod tests {
     fn a_draft_waits_for_the_build_of_its_columns() {
         let boids = example_models().get("boids").cloned().expect("boids is registered");
         let schema = boids.schema();
-        let panel_values: Vec<ParamValue> = boids
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind.default_value())
-            .collect();
+        let panel_values = default_values(&boids);
         let wake: WakeFn = Arc::new(|| {});
         let pending = [DraftIssue::missing(DraftSite::Outputs, COLUMNS_PENDING)];
 
@@ -1389,6 +1358,61 @@ mod tests {
             "a failed build leaves the stat labels to check against"
         );
         assert!(check.draft.stat_columns.is_none());
+    }
+
+    #[test]
+    fn install_forgets_the_sweep_tab_columns_of_the_model() {
+        use henad_core::provenance::ModelCode;
+
+        use crate::state::{AppState, default_values};
+        use crate::tests::support::{edited_sir, set_of};
+
+        let Some(mut app) = AppState::headless(example_models(), false) else {
+            return;
+        };
+        let wake: WakeFn = Arc::new(|| {});
+        let sir = app.models.get("sir").cloned().expect("SIR is registered");
+        let boids = app.models.get("boids").cloned().expect("boids is registered");
+        for entry in [&sir, &boids] {
+            app.sweep
+                .column_builds
+                .insert(entry.id().to_owned(), ColumnsBuild::Sampled(None));
+            app.sweep.learn_stat_columns(entry, &wake);
+            app.sweep.draft_mut(&entry.schema()).replicates = 7;
+        }
+        app.sweep.cached_check(&sir.schema(), &default_values(&sir));
+        assert!(app.sweep.last_check.is_some());
+
+        app.install_models(&set_of(sir.clone()));
+        assert!(
+            app.sweep.column_builds.contains_key("sir"),
+            "the same code changes nothing"
+        );
+        assert!(app.sweep.last_check.is_some());
+
+        let recoded = sir.clone().__with_code(ModelCode::new("henad-app-test", "edited sir"));
+        app.install_models(&set_of(recoded));
+        assert!(
+            !app.sweep.column_builds.contains_key("sir"),
+            "the columns of the old code"
+        );
+        assert!(app.sweep.column_builds.contains_key("boids"), "another model's columns");
+        assert_eq!(
+            app.sweep.drafts.get("sir").map(|draft| draft.replicates),
+            Some(7),
+            "a draft of unchanged declarations stays"
+        );
+        assert!(app.sweep.last_check.is_none());
+
+        app.install_models(&set_of(edited_sir()));
+        let draft = app
+            .sweep
+            .drafts
+            .get("sir")
+            .expect("a draft of other declarations is carried");
+        assert_eq!(draft.replicates, 7);
+        assert_eq!(draft.factors.len(), edited_sir().param_descriptors().len());
+        assert_eq!(app.sweep.drafts.get("boids").map(|draft| draft.replicates), Some(7));
     }
 
     #[test]

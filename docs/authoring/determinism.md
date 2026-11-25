@@ -7,9 +7,11 @@ icon: material/check-decagram-outline
 # Determinism and testing
 
 Henad runs every kernel in parallel and gives no guarantee about which chunk runs on which core.
-The answer still has to come out the same every time, and this page covers the rules that make sure it does.
+The answer still has to come out the same every time.
+This page covers the rules for that.
 
-The engine seeds a chunk's RNG from the tick's seed and the chunk's index, and from nothing a worker mutates, which keeps a result independent of how rayon schedules the chunks.
+The engine seeds a chunk's RNG from the tick's seed and the chunk's index, and from nothing a worker mutates.
+A result therefore does not depend on how rayon schedules the chunks.
 The same has to hold on the web, where the pool width is whatever `navigator.hardwareConcurrency` reported.
 
 Reductions obey the same rule.
@@ -57,13 +59,13 @@ fn results_do_not_depend_on_the_thread_count() {
 }
 ```
 
-Three details of the test matter.
+Keep three details when you adapt the test.
 
-- Compare **bits** rather than floats.
+- Compare bits rather than floats.
   Two NaNs with the same bits compare equal, where `==` fails, and `-0.0` and `0.0` differ, where `==` calls them equal.
   An approximate comparison would hide a last-bit difference altogether.
-- Use a **population that spans several chunks**, preferably one that is not a multiple of `CHUNK`, so that the ragged final chunk is covered too.
-- Use **thread counts that are not multiples of each other**, since running 1 against 7 splits the work completely differently.
+- Use a population that spans several chunks, preferably one that is not a multiple of `CHUNK`, so that the ragged final chunk is covered too.
+- Use thread counts that are not multiples of each other, since running 1 against 7 splits the work completely differently.
 
 To run a single test by name:
 
@@ -137,13 +139,13 @@ The consistency tests live in `crates/henad-models/tests/` and are named `consis
 
 ## Consistency fixtures
 
-A fixture recording another engine's output has to come from a **written procedure**, and a generation script does not qualify.
+A fixture recording another engine's output has to come from a written procedure instead of a generation script.
 The procedure goes in `crates/henad-models/tests/fixtures/docs/` for a human to run.
 
-A driver script would presume the reference engine is installed, which no future collaborator can be expected to have.
+A driver script would presume the reference engine is installed, and no future collaborator can be expected to have it.
 The committed fixture together with its procedure is the reproducibility record.
 
-Where the reference engine is code rather than a GUI, a small committed program *is* the procedure, and that is fine.
+Where the reference engine is code rather than a GUI, a small committed program counts as the procedure.
 
 !!! danger "Never generate a fixture from Henad"
 

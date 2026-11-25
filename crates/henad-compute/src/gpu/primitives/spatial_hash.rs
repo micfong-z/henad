@@ -7,10 +7,14 @@
 use henad_core::authoring::model::field::Extent;
 pub use henad_core::spatial_hash::HashGrid;
 
-use crate::gpu::primitives::dispatch::linear_dispatch;
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
+use crate::gpu::primitives::pipeline::{compute_pipeline, dispatch_pass, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::prefix_scan::PrefixScan;
+use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::hash_count::HashParams;
+
+/// Most workgroups of the largest-bucket pass, one axis of a dispatch. Each invocation strides over the cells past it.
+const LARGEST_GROUPS: u32 = 65_535;
 
 /// Counting-sort spatial hash of a GPU population, with the tables, scan and pipelines its rebuild uses.
 #[derive(Debug)]
@@ -200,34 +204,33 @@ impl GpuSpatialHash {
     ) {
         encoder.clear_buffer(&self.counts, 0, None);
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_hash_count_pass"),
-                timestamp_writes: begin_stamp.map(|(query_set, index)| wgpu::ComputePassTimestampWrites {
-                    query_set,
-                    beginning_of_pass_write_index: Some(index),
-                    end_of_pass_write_index: None,
-                }),
-            });
-            pass.set_pipeline(&self.count_pipeline);
-            pass.set_bind_group(0, count_bind, &[]);
-            pass.dispatch_workgroups(self.agent_groups.0, self.agent_groups.1, 1);
-        }
+        let stamp = begin_stamp.map(|(query_set, index)| wgpu::ComputePassTimestampWrites {
+            query_set,
+            beginning_of_pass_write_index: Some(index),
+            end_of_pass_write_index: None,
+        });
+        dispatch_pass(
+            encoder,
+            "henad_hash_count_pass",
+            &self.count_pipeline,
+            count_bind,
+            self.agent_groups,
+            stamp,
+        );
 
         self.scan.encode(encoder);
 
         // The scatter bumps the cursor, so it works on a copy and `cell_start` survives.
         encoder.copy_buffer_to_buffer(&self.cell_start, 0, &self.cursor, 0, self.table_bytes());
 
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_hash_scatter_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.scatter_pipeline);
-            pass.set_bind_group(0, &self.scatter_bind, &[]);
-            pass.dispatch_workgroups(self.agent_groups.0, self.agent_groups.1, 1);
-        }
+        dispatch_pass(
+            encoder,
+            "henad_hash_scatter_pass",
+            &self.scatter_pipeline,
+            &self.scatter_bind,
+            self.agent_groups,
+            None,
+        );
     }
 
     fn table_bytes(&self) -> u64 {
@@ -240,6 +243,111 @@ impl GpuSpatialHash {
         let agent = self.num_agents as usize * std::mem::size_of::<u32>();
         // Three tables plus two agent arrays. The scan's intermediates are a rounding error.
         3 * table + 2 * agent
+    }
+
+    /// Returns the measurement of the largest bucket of this hash, with its pipeline built on `device`, each object
+    /// labelled from `label`.
+    pub fn largest_bucket(&self, device: &wgpu::Device, label: &str) -> LargestBucket {
+        let readback = CounterReadback::new(device, &format!("{label}_hash_largest"), 1);
+        let layout = device.create_bind_group_layout(
+            &crate::shader_bindings::primitives::hash_largest::WgpuBindGroup0::LAYOUT_DESCRIPTOR,
+        );
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("{label}_hash_largest_bind")),
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.counts.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: readback.binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.params.as_entire_binding(),
+                },
+            ],
+        });
+        let pipeline = compute_pipeline(
+            device,
+            &format!("{label}_hash_largest"),
+            crate::shader_bindings::primitives::hash_largest::SHADER_STRING,
+            &layout,
+        );
+        LargestBucket {
+            pipeline,
+            bind,
+            groups: self.grid.num_cells().div_ceil(WORKGROUP).clamp(1, LARGEST_GROUPS),
+            readback,
+            consumed: 0,
+        }
+    }
+}
+
+/// Measurement of the largest bucket of a [`GpuSpatialHash`], the most agents one cell of its latest build holds: a
+/// pass that writes it into one word, and the word's readback.
+///
+/// Each measurement is tagged with the tick of the step whose build it reads, and [`Self::poll`] returns one only once.
+#[derive(Debug)]
+pub struct LargestBucket {
+    pipeline: wgpu::ComputePipeline,
+    bind: wgpu::BindGroup,
+    /// Workgroups of the pass, one row.
+    groups: u32,
+    readback: CounterReadback,
+    /// Tag of the latest measurement [`Self::poll`] returned, 0 before the first.
+    consumed: u64,
+}
+
+impl LargestBucket {
+    /// Records the measurement of the hash's latest build, tagged with `tick`, and the copy of its word for readback,
+    /// and returns whether it recorded them.
+    ///
+    /// Nothing is recorded while the readback of an earlier measurement is in flight, since its copy would be
+    /// skipped. Record it after the build, in the same encoder or a later one.
+    pub fn encode(&mut self, encoder: &mut wgpu::CommandEncoder, tick: u64) -> bool {
+        if self.readback.is_pending() {
+            return false;
+        }
+        self.readback.encode_clear(encoder);
+        dispatch_pass(
+            encoder,
+            "henad_hash_largest_pass",
+            &self.pipeline,
+            &self.bind,
+            (self.groups, 1),
+            None,
+        );
+        self.readback.encode_copy_tagged(encoder, tick);
+        true
+    }
+
+    /// Starts the readback of the measurement [`Self::encode`] recorded. Call it once that encoder is submitted.
+    pub fn begin_readback(&mut self) {
+        self.readback.begin_map();
+    }
+
+    /// Returns whether a readback has begun and not finished.
+    pub fn is_pending(&self) -> bool {
+        self.readback.is_pending()
+    }
+
+    /// Polls the readback, waiting for the device when `block` holds and the target can wait, and returns the tick and
+    /// the largest bucket of a measurement that landed since the last call.
+    ///
+    /// A measurement tagged with tick 0, before any build, is never returned.
+    pub fn poll(&mut self, device: &wgpu::Device, block: bool) -> Option<(u64, u32)> {
+        if self.readback.poll_or_block(device, block) != StatsPoll::Landed {
+            return None;
+        }
+        let tick = self.readback.values_tag();
+        if tick <= self.consumed {
+            return None;
+        }
+        self.consumed = tick;
+        self.readback.values().first().map(|&largest| (tick, largest))
     }
 }
 
@@ -262,6 +370,7 @@ mod tests {
     use crate::gpu::headless_context;
     use crate::gpu::primitives::dispatch::WORKGROUP;
     use crate::gpu::primitives::pipeline::storage_buffer;
+    use crate::gpu::primitives::readback::read_words;
     use henad_core::authoring::model::field::Extent;
     use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::spatial_hash::SpatialHash;
@@ -306,37 +415,6 @@ mod tests {
         (0..n).map(|_| (unit() * w, unit() * h)).unzip()
     }
 
-    /// Reads a `u32` storage buffer back through a staging copy.
-    fn read_u32(ctx: &crate::gpu::GpuContext, buffer: &wgpu::Buffer, len: usize) -> Vec<u32> {
-        let size = (len * std::mem::size_of::<u32>()) as u64;
-        let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hash_test_staging"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
-        ctx.queue.submit(Some(encoder.finish()));
-
-        let (tx, rx) = flume::bounded(1);
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |r| drop(tx.send(r)));
-        ctx.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll");
-        rx.recv().expect("map channel").expect("map");
-
-        let data = staging.slice(..).get_mapped_range().expect("map range");
-        let out = bytemuck::cast_slice::<u8, u32>(&data)[..len].to_vec();
-        drop(data);
-        staging.unmap();
-        out
-    }
-
     /// Builds the hash for one set of positions and reads back `(cell_start, sorted)`.
     fn build(
         ctx: &crate::gpu::GpuContext,
@@ -363,8 +441,8 @@ mod tests {
 
         let cells = hash.grid().num_cells() as usize + 1;
         (
-            read_u32(ctx, hash.cell_start_buffer(), cells),
-            read_u32(ctx, hash.sorted_buffer(), n as usize),
+            read_words(&ctx.device, &ctx.queue, hash.cell_start_buffer())[..cells].to_vec(),
+            read_words(&ctx.device, &ctx.queue, hash.sorted_buffer())[..n as usize].to_vec(),
         )
     }
 
@@ -372,8 +450,7 @@ mod tests {
     /// order within a cell.
     #[test]
     fn buckets_match_the_cpu_hash() {
-        let Some(ctx) = headless_context("gpu_spatial_hash_test", wgpu::Features::empty()) else {
-            log::warn!("skipping buckets_match_the_cpu_hash: no adapter");
+        let Some(ctx) = headless_context("gpu_spatial_hash_test") else {
             return;
         };
 
@@ -405,11 +482,60 @@ mod tests {
         }
     }
 
+    /// Builds the hash for one set of positions and returns the largest bucket the device measures, the build tagged
+    /// with tick 1.
+    fn measured_largest(ctx: &crate::gpu::GpuContext, pos_x: &[f32], pos_y: &[f32], ext: Extent, cell: f32) -> u32 {
+        let hash = GpuSpatialHash::new(&ctx.device, &ctx.queue, "test", ext, cell, pos_x.len() as u32);
+        let interleaved: Vec<f32> = pos_x.iter().zip(pos_y).flat_map(|(&x, &y)| [x, y]).collect();
+        let pos = storage_buffer(&ctx.device, "test_pos", interleaved.len());
+        ctx.queue.write_buffer(&pos, 0, bytemuck::cast_slice(&interleaved));
+        let bind = hash.bind_positions(&ctx.device, "test_count_bind", &pos);
+        let mut largest = hash.largest_bucket(&ctx.device, "test");
+
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        hash.encode_build(&mut encoder, &bind, None);
+        assert!(largest.encode(&mut encoder, 1), "nothing reads back yet");
+        ctx.queue.submit(Some(encoder.finish()));
+        largest.begin_readback();
+        let (tick, value) = largest.poll(&ctx.device, true).expect("the measurement lands");
+        assert_eq!(tick, 1);
+        assert_eq!(largest.poll(&ctx.device, true), None, "a measurement is returned once");
+        value
+    }
+
+    /// The largest bucket the device measures is the most agents any cell of the CPU hash holds, and every agent
+    /// when all of them stand at one point.
+    #[test]
+    fn the_largest_bucket_matches_the_cpu_hash() {
+        let Some(ctx) = headless_context("gpu_spatial_hash_largest_test") else {
+            return;
+        };
+        let (w, h, cell, n) = (1_000.0f32, 730.0f32, 47.0f32, 5_000usize);
+        let (pos_x, pos_y) = positions(n, w, h);
+        let mut cpu = SpatialHash::new(cell, w, h);
+        cpu.build(&pos_x, &pos_y);
+        let (cpu_start, _) = cpu.buckets();
+        let cpu_largest = cpu_start
+            .windows(2)
+            .map(|bounds| bounds[1] - bounds[0])
+            .max()
+            .expect("a cell");
+        assert_eq!(measured_largest(&ctx, &pos_x, &pos_y, extent(w, h), cell), cpu_largest);
+
+        let clustered = vec![160.5f32; n];
+        assert_eq!(
+            measured_largest(&ctx, &clustered, &clustered, extent(w, h), cell),
+            n as u32,
+            "every agent in one cell"
+        );
+    }
+
     /// Exercises the 2D dispatch fold and a multi-level scan.
     #[test]
     fn a_large_population_still_sorts_every_agent() {
-        let Some(ctx) = headless_context("gpu_spatial_hash_large_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_large_population_still_sorts_every_agent: no adapter");
+        let Some(ctx) = headless_context("gpu_spatial_hash_large_test") else {
             return;
         };
 

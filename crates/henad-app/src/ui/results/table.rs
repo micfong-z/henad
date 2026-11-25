@@ -12,8 +12,9 @@ use crate::icons::material_design_icons::{
 };
 use crate::state::OpenAt;
 use crate::ui::results::ResultsRequest;
-use crate::ui::results::plot::{format_significant, labeled_combo, refresh_due, text_width};
+use crate::ui::results::plot::{cache_stale, format_significant, labeled_combo};
 use crate::ui::results::store::{ResultsStore, RunsColumn, RunsFilter, RunsSort};
+use crate::ui::text::text_width;
 
 /// Warning shown beside Open and on the opened run's line for a run of a model that does not replay exactly.
 pub const INEXACT_REPLAY: &str =
@@ -280,10 +281,12 @@ impl TableView {
             let settings_changed = order.filter != filter
                 || order.sort != sort
                 || (filter == RunsFilter::SelectedConfigs && order.selected_configs != *selected_configs);
-            if settings_changed || order.revision == store.revision() {
-                return settings_changed;
-            }
-            refresh_due(ctx, order.sorted_at)
+            cache_stale(
+                ctx,
+                settings_changed,
+                order.revision != store.revision(),
+                order.sorted_at,
+            )
         });
         if stale {
             self.cache = None;
@@ -303,7 +306,8 @@ impl TableView {
 /// Draws the strip for run `run_id`: its name, Open, Open at end and, with a `cli_command`, Copy command.
 ///
 /// The buttons are disabled with the store's [`ResultsStore::replay_refusal`] when the runs cannot replay, and with
-/// [`ResultsStore::untold_candidate`] for a run of a search whose batch is not told yet.
+/// [`ResultsStore::untold_candidate`] for a run of a search whose batch is not told yet. Copy command is also disabled
+/// with [`ResultsStore::command_refusal`] for the runs of a model file.
 pub fn detail_strip(
     ui: &mut egui::Ui,
     store: &ResultsStore,
@@ -347,13 +351,17 @@ pub fn detail_strip(
             *request = Some(ResultsRequest::OpenRun { run_id, start });
         }
         if let Some(program) = cli_command {
+            let command_refusal = refusal.or(store.command_refusal());
             let copy = ui
-                .add_enabled(replays, egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")))
+                .add_enabled(
+                    command_refusal.is_none(),
+                    egui::Button::new(format!("{MDI_CONTENT_COPY} Copy command")),
+                )
                 .on_hover_text(format!(
-                    "Copy {program} command to replay this run. Its stats might fall on other ticks than this run's \
-                     series."
+                    "Copy {program} command to replay this run. Its stats might be sampled on different ticks from \
+                     this run's series."
                 ))
-                .on_disabled_hover_text(refusal_text);
+                .on_disabled_hover_text(command_refusal.unwrap_or_default());
             if copy.clicked() {
                 *request = Some(ResultsRequest::CopyCommand(run_id));
             }
@@ -386,8 +394,8 @@ const STAMP_COMMIT_HINT: &str = "Call henad_build::stamp_commit in the model cra
 /// A change of the model's parameters, stats or actions, or of a build, comes first, and a build that cannot be
 /// compared after it. The list is empty when the model's declarations and every recorded build match the current
 /// ones.
-fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
-    let noun = if store.is_search() { "search" } else { "sweep" };
+pub(crate) fn replay_warnings(store: &ResultsStore) -> Vec<(String, Option<&'static str>)> {
+    let noun = store.mode().noun();
     let changed = if store.schema_matches {
         match store.changed_builds.as_slice() {
             [] => None,

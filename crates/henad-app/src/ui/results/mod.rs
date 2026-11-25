@@ -2,6 +2,7 @@
 //! views that plot them.
 
 pub mod heatmap;
+pub mod labels;
 pub mod plot;
 pub mod response;
 pub mod search;
@@ -14,6 +15,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Id, Modal};
+#[cfg(not(target_arch = "wasm32"))]
+use henad_compute::cpu::sim_thread::WakeFn;
 use henad_compute::entry::{ModelEntry, ModelLookupError};
 use henad_core::explore::plan::Plan;
 use henad_explore::handle::{DEFAULT_SERIES_BUDGET, SweepEvent};
@@ -22,10 +25,12 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::search_run::{SearchPlan, SearchUpdate};
 use henad_explore::sweep::SweepEnd;
 
-use crate::icons::material_design_icons::{MDI_FOLDER_OPEN_OUTLINE, MDI_PLAY};
+use crate::icons::material_design_icons::{MDI_FOLDER_OPEN_OUTLINE, MDI_PENCIL_OUTLINE, MDI_PLAY};
 use crate::state::{AppState, OpenAt};
 use crate::ui::dock::Tab;
+use crate::ui::editor;
 use crate::ui::files::{DialogFile, OpenResult, OpenTarget};
+use crate::ui::model::model_label;
 use crate::ui::plural;
 use crate::ui::results::heatmap::HeatmapView;
 use crate::ui::results::response::ResponseView;
@@ -33,11 +38,15 @@ use crate::ui::results::search::SearchView;
 use crate::ui::results::series::SeriesView;
 use crate::ui::results::store::{ResultsSource, ResultsStore, RunsFilter};
 use crate::ui::results::table::TableView;
-use crate::ui::sweep::draft::describe_error;
+use crate::ui::sweep::draft::ExploreMode;
 use crate::ui::sweep::session::SweepSession;
+use crate::ui::text::{describe_error, folder_name};
 
 /// Number of configs that a new store selects for the Series view.
 const DEFAULT_SELECTED_CONFIGS: usize = 5;
+
+/// Label of the button that opens the model the results ran in the Editor.
+pub const OPEN_IN_EDITOR: &str = "Open in Editor";
 
 /// Status line shown while picked files wait to be read.
 const READING_RESULTS: &str = "Reading results";
@@ -85,6 +94,8 @@ pub enum ResultsRequest {
     CopyCommand(u64),
     /// Reads the series of the drawn configs' runs from the folder.
     LoadSeries,
+    /// Opens the model the results ran in the Editor: the recorded sheet, or the recorded code.
+    OpenInEditor,
 }
 
 /// Series read from a folder on a separate thread.
@@ -229,6 +240,16 @@ impl ResultsPanel {
         }
     }
 
+    /// Compares the held results of model `id` with `model`, the app's lookup of the entry that has replaced the set's
+    /// entry under that id, or of an id the set no longer holds. Results of another model are left alone.
+    pub fn model_replaced(&mut self, id: &str, model: Result<&ModelEntry, &ModelLookupError>) {
+        if let Some(store) = &mut self.store
+            && store.model_id == id
+        {
+            store.model_changed(model);
+        }
+    }
+
     /// Files of a sweep held in memory, `None` for a sweep written to a folder or a sweep still running.
     pub fn files(&self) -> Option<&Arc<SweepFiles>> {
         self.files.as_ref()
@@ -258,11 +279,7 @@ impl ResultsPanel {
     /// Selects the first run of search candidate `candidate_id`, which opens the run strip. A candidate with no
     /// run in the panel changes nothing.
     pub fn select_candidate(&mut self, candidate_id: u64) {
-        let first_run = self
-            .store
-            .as_ref()
-            .and_then(|store| store.config_runs(candidate_id).next())
-            .map(|outcome| outcome.run.run_id);
+        let first_run = self.store.as_ref().and_then(|store| store.first_run_id(candidate_id));
         if first_run.is_some() {
             self.selected_run = first_run;
         }
@@ -357,29 +374,45 @@ impl ReadResults {
     }
 }
 
+/// Runs `work` on a new thread named `name`, and returns the receiver its result arrives on.
+///
+/// `wake` runs once the result is sent. A result sent after the receiver is gone, as when the app is closing, is
+/// dropped.
+///
+/// # Errors
+///
+/// Returns the error of a thread that cannot start.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn spawn_reporting<T: Send + 'static>(
+    name: &str,
+    wake: WakeFn,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::io::Result<flume::Receiver<T>> {
+    let (sender, receiver) = flume::bounded(1);
+    std::thread::Builder::new().name(name.to_owned()).spawn(move || {
+        // The receiver is gone once the app is closing, and nothing is left to report to.
+        drop(sender.send(work()));
+        wake();
+    })?;
+    Ok(receiver)
+}
+
 /// Reads the results in `folder` and builds their store on a separate thread, and shows them once built.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_folder(app: &mut AppState, folder: PathBuf) {
-    let (sender, receiver) = flume::bounded(1);
-    let wake = app.repaint_waker();
     let path = folder.clone();
     let models = app.models.clone();
     let gpu_ctx = app.gpu_ctx.clone();
-    let spawned = std::thread::Builder::new()
-        .name("henad-results".to_owned())
-        .spawn(move || {
-            let read = ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET)
-                .map_err(|error| describe_error(&error))
-                .map(|set| {
-                    let model = models.lookup(&set.manifest().model.id, gpu_ctx.as_ref());
-                    ReadResults::new(set, ResultsSource::Folder(path), model)
-                });
-            // The receiver is gone once the app is closing, and nothing is left to report to.
-            drop(sender.send(read));
-            wake();
-        });
+    let spawned = spawn_reporting("henad-results", app.repaint_waker(), move || {
+        ResultSet::open_dir(&path, DEFAULT_SERIES_BUDGET)
+            .map_err(|error| describe_error(&error))
+            .map(|set| {
+                let model = models.lookup(&set.manifest().model.id, gpu_ctx.as_ref());
+                ReadResults::new(set, ResultsSource::Folder(path), model)
+            })
+    });
     match spawned {
-        Ok(_) => {
+        Ok(receiver) => {
             app.results.status = Some(format!("Opening {}", folder.display()));
             app.results.folder_load = Some((folder, receiver));
         }
@@ -462,7 +495,12 @@ fn poll_folder_load(app: &mut AppState) {
         return;
     }
     match read {
-        Ok(read) => show_results(app, read),
+        Ok(mut read) => {
+            // The set's entry might have been replaced while the thread read the folder.
+            let model = app.lookup(&read.store.model_id);
+            read.store.model_changed(model.as_ref().copied());
+            show_results(app, read);
+        }
         Err(message) => app.results.status = Some(format!("Open failed: {message}")),
     }
 }
@@ -522,6 +560,11 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     toolbar(ui, app, &mut request);
     let sweep_running = app.sweep.is_running();
     let cli_command = app.product.cli_command.clone();
+    let label = app
+        .results
+        .store()
+        .map(|store| model_label(app, &store.model_id, &store.model_name))
+        .unwrap_or_default();
     let ResultsPanel {
         store,
         view,
@@ -539,7 +582,7 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
         apply_request(ui.ctx(), app, request);
         return;
     };
-    summary_line(ui, store);
+    summary_line(ui, store, &label);
     ui.horizontal(|ui| {
         let views = [
             ResultsView::Search,
@@ -574,15 +617,19 @@ pub fn results_ui(ui: &mut egui::Ui, app: &mut AppState) {
     apply_request(ui.ctx(), app, request);
 }
 
-/// Draws the source of the results, Open results and Resume sweep, and the status line.
+/// Draws the source of the results, Open results, Resume sweep and Open in Editor, and the status line.
 fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRequest>) {
     let sweep_running = app.sweep.is_running();
-    let running_noun = app.sweep.session.as_ref().map_or("sweep", SweepSession::noun);
-    let running_hover = format!("A {running_noun} is running");
+    let running_mode = app
+        .sweep
+        .session
+        .as_ref()
+        .map_or(ExploreMode::Sweep, SweepSession::mode);
+    let running_hover = format!("A {} is running", running_mode.noun());
     let panel = &app.results;
     ui.horizontal_wrapped(|ui| {
         if let Some(store) = &panel.store {
-            source_label(ui, &store.source, store.is_search());
+            source_label(ui, &store.source, store.mode());
         }
         let open_tooltip = if cfg!(target_arch = "wasm32") {
             "Select manifest.json and CSV files from a results folder"
@@ -600,28 +647,37 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
             *request = Some(ResultsRequest::OpenResults);
         }
         if resumable(app) {
-            let noun = if panel.store.as_ref().is_some_and(ResultsStore::is_search) {
-                "search"
+            let mode = panel.store.as_ref().map_or(ExploreMode::Sweep, ResultsStore::mode);
+            let refusal = if sweep_running {
+                Some(running_hover.clone())
             } else {
-                "sweep"
+                code_refusal(panel.store.as_ref(), mode)
             };
             let resume = ui
-                .add_enabled(!sweep_running, egui::Button::new(format!("{MDI_PLAY} Resume {noun}")))
+                .add_enabled(
+                    refusal.is_none(),
+                    egui::Button::new(format!("{MDI_PLAY} Resume {}", mode.noun())),
+                )
                 .on_hover_text("Run missing runs")
-                .on_disabled_hover_text(&running_hover);
+                .on_disabled_hover_text(refusal.unwrap_or_default());
             if resume.clicked() {
                 *request = Some(ResultsRequest::ResumeSweep);
+            }
+        }
+        if let Some(store) = panel.store.as_ref().filter(|store| store.records_editable_code()) {
+            let open = ui
+                .button(format!("{MDI_PENCIL_OUTLINE} {OPEN_IN_EDITOR}"))
+                .on_hover_text(format!("Open this {}'s model in Editor", store.mode().noun()));
+            if open.clicked() {
+                *request = Some(ResultsRequest::OpenInEditor);
             }
         }
     });
     let resume_text = panel
         .store
         .as_ref()
-        .filter(|_| !sweep_running && resumable(app))
-        .and_then(|store| {
-            let noun = if store.is_search() { "search" } else { "sweep" };
-            store.recorded_execution?.resume_text(noun)
-        });
+        .filter(|store| !sweep_running && resumable(app) && store.code_matches)
+        .and_then(|store| store.recorded_execution?.resume_text(store.mode()));
     if let Some(text) = resume_text {
         ui.weak(text);
     }
@@ -633,7 +689,19 @@ fn toolbar(ui: &mut egui::Ui, app: &mut AppState, request: &mut Option<ResultsRe
     }
 }
 
+/// Returns the reason Resume cannot resume the folder of `store`, a folder of runtime code that differs from the app's
+/// entry, or `None` when the code matches.
+///
+/// `mode` names the results, a sweep or a search.
+fn code_refusal(store: Option<&ResultsStore>, mode: ExploreMode) -> Option<String> {
+    store
+        .filter(|store| !store.code_matches)
+        .map(|_| format!("Model code changed since this {} ran", mode.noun()))
+}
+
 /// Returns whether the results come from an incomplete folder whose sweep this app can resume.
+///
+/// Resume shows for such a folder, and [`code_refusal`] can still disable it.
 fn resumable(app: &AppState) -> bool {
     app.results.store.as_ref().is_some_and(|store| {
         cfg!(not(target_arch = "wasm32"))
@@ -644,20 +712,14 @@ fn resumable(app: &AppState) -> bool {
 }
 
 /// Draws the source of the results, the search or sweep in memory or the files read.
-fn source_label(ui: &mut egui::Ui, source: &ResultsSource, is_search: bool) {
+fn source_label(ui: &mut egui::Ui, source: &ResultsSource, mode: ExploreMode) {
     match source {
-        ResultsSource::Sweep if is_search => {
-            ui.strong("Current search");
-        }
         ResultsSource::Sweep => {
-            ui.strong("Current sweep");
+            ui.strong(format!("Current {}", mode.noun()));
         }
         ResultsSource::Folder(folder) => {
-            let name = folder.file_name().map_or_else(
-                || folder.display().to_string(),
-                |name| name.to_string_lossy().into_owned(),
-            );
-            ui.strong(name).on_hover_text(folder.display().to_string());
+            ui.strong(folder_name(folder))
+                .on_hover_text(folder.display().to_string());
         }
         ResultsSource::Files(names) => {
             ui.strong(names.join(", "));
@@ -665,13 +727,13 @@ fn source_label(ui: &mut egui::Ui, source: &ResultsSource, is_search: bool) {
     }
 }
 
-/// Draws the model and the count of runs, and whether the sweep is missing runs.
-fn summary_line(ui: &mut egui::Ui, store: &ResultsStore) {
+/// Draws the model, labelled `label` as the model list labels it, the count of runs, and whether the sweep is missing
+/// runs.
+fn summary_line(ui: &mut egui::Ui, store: &ResultsStore, label: &str) {
     ui.horizontal_wrapped(|ui| {
         let runs = store.runs().len() as u64;
         ui.label(format!(
-            "{}: {runs} {}, {} failed",
-            store.model_name,
+            "{label}: {runs} {}, {} failed",
             plural(runs, "run"),
             store.failed_count()
         ));
@@ -747,6 +809,21 @@ fn apply_request(ctx: &egui::Context, app: &mut AppState, request: Option<Result
             }
         }
         ResultsRequest::LoadSeries => load_series(app),
+        ResultsRequest::OpenInEditor => open_in_editor(app),
+    }
+}
+
+/// Opens the model the held results ran in the Editor, the sheet they recorded or else their code, and brings the
+/// Editor to the front. A model of the Editor with unsaved edits asks first.
+///
+/// A recorded text that does not read is reported on the status line.
+pub fn open_in_editor(app: &mut AppState) {
+    let Some(store) = &app.results.store else {
+        return;
+    };
+    match store.editable_model() {
+        Some(model) => editor::replace_model(app, editor::Replacement::Open(model)),
+        None => app.results.status = Some("Recorded model cannot be read".to_owned()),
     }
 }
 
@@ -775,12 +852,12 @@ fn resume_sweep(app: &mut AppState) {
 
 #[cfg(target_arch = "wasm32")]
 fn resume_sweep(app: &mut AppState) {
-    let noun = if app.results.store.as_ref().is_some_and(ResultsStore::is_search) {
-        "search"
-    } else {
-        "sweep"
-    };
-    app.results.status = Some(format!("Use the desktop app to resume a {noun}"));
+    let mode = app
+        .results
+        .store
+        .as_ref()
+        .map_or(ExploreMode::Sweep, ResultsStore::mode);
+    app.results.status = Some(format!("Use the desktop app to resume a {}", mode.noun()));
 }
 
 /// Reads the missing series of the drawn configs' runs from the folder, on a separate thread.
@@ -809,18 +886,12 @@ fn load_series(app: &mut AppState) {
     let stat_columns = store.stat_columns().to_vec();
     let series_budget = store.series_room(&kept_runs);
     let requested_runs = missing.clone();
-    let (sender, receiver) = flume::bounded(1);
-    let spawned = std::thread::Builder::new()
-        .name("henad-series".to_owned())
-        .spawn(move || {
-            let read =
-                henad_explore::result_set::read_directory_series(&folder, &stat_columns, &missing, series_budget)
-                    .map_err(|error| describe_error(&error));
-            drop(sender.send(read));
-            wake();
-        });
+    let spawned = spawn_reporting("henad-series", wake, move || {
+        henad_explore::result_set::read_directory_series(&folder, &stat_columns, &missing, series_budget)
+            .map_err(|error| describe_error(&error))
+    });
     match spawned {
-        Ok(_) => {
+        Ok(receiver) => {
             panel.status = Some("Loading series".to_owned());
             panel.series_load = Some(SeriesLoad {
                 kept_runs,
@@ -846,7 +917,7 @@ mod tests {
     use henad_core::explore::design::DesignKind;
     use henad_core::explore::factor::{FactorSpec, LevelSpec};
     use henad_core::explore::measure::SeriesBuffer;
-    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::outcome::RunOutcome;
     use henad_core::explore::plan::Plan;
     use henad_core::explore::reducer::{ReducerKind, ReducerSpec};
     use henad_core::explore::search::genetic::GeneticSettings;
@@ -860,6 +931,7 @@ mod tests {
     use henad_models::example_models;
 
     use super::{READING_RESULTS, ReadResults, ResultsPanel, ResultsView, SeriesLoad, poll_series_load};
+    use crate::tests::support::{ScratchFolder, finished_run, sir};
     use crate::ui::files::DialogFile;
     use crate::ui::results::store::{ResultsSource, ResultsStore};
 
@@ -868,10 +940,6 @@ mod tests {
         let mut series = SeriesBuffer::new(3);
         series.push(0, &[value; 3]);
         series
-    }
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
     }
 
     /// Returns the plan of SIR over two infection rates with `replicates` runs each.
@@ -894,17 +962,8 @@ mod tests {
     fn outcome(plan: &Plan, run_id: u64, series: SeriesBuffer) -> RunOutcome {
         let run = plan.run(run_id).expect("a planned run");
         RunOutcome {
-            run,
-            run_key: plan.run_key(&run),
-            status: RunStatus::Ok,
-            stop_reason: StopReason::Steps,
-            ticks: 0,
-            population: 1,
-            build_ms: 1.0,
-            wall_ms: 1.0,
-            reducers: Vec::new(),
             series,
-            note: None,
+            ..finished_run(run, plan.run_key(&run))
         }
     }
 
@@ -935,15 +994,6 @@ mod tests {
         let store = panel.store.as_ref().expect("the sweep's store");
         assert_eq!(store.series(0), Some(&series(1.0)), "run 0 keeps the sweep's series");
         assert_eq!(panel.status, None);
-    }
-
-    /// Removes the folder it holds once dropped, so a failed test leaves nothing behind.
-    struct ScratchFolder(std::path::PathBuf);
-
-    impl Drop for ScratchFolder {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
     }
 
     /// Returns a search of SIR by `algorithm` over the infection rate, 6 evaluations of 2 replicates.
@@ -1008,9 +1058,7 @@ mod tests {
     fn a_search_held_live_matches_its_folder_and_replays_from_either() {
         let models = example_models();
         for (name, algorithm) in compared_searches() {
-            let folder =
-                ScratchFolder(std::env::temp_dir().join(format!("henad-app-search-{name}-{}", std::process::id())));
-            drop(std::fs::remove_dir_all(&folder.0));
+            let folder = ScratchFolder::new(&format!("search-{name}"));
             let output = SweepOutput::Directory(folder.0.clone());
             let options = SweepRunOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
             let mut run =
@@ -1342,5 +1390,53 @@ mod tests {
             [2, 3].into(),
             "run 1 is never loaded again"
         );
+    }
+
+    /// Results read while the set lacked their model take the entry that joins the set.
+    #[test]
+    fn results_of_a_missing_model_replay_once_the_model_joins_the_set() {
+        use henad_compute::entry::ModelSet;
+        use henad_explore::progress::NoProgress;
+        use henad_explore::sweep::{SweepOptions, run_spec};
+
+        use crate::state::AppState;
+        use crate::tests::support::set_of;
+
+        let sir = sir();
+        let mut without_sir = ModelSet::new(henad_core::build_info!());
+        for entry in &example_models() {
+            if entry.id() != "sir" {
+                without_sir.insert(entry.clone()).expect("example ids are unique");
+            }
+        }
+        let Some(mut app) = AppState::headless(without_sir, false) else {
+            return;
+        };
+        let mut spec = SweepSpec::new("sir");
+        spec.fixed = [("grid_width", "8"), ("grid_height", "8")]
+            .map(|(id, value)| (id.to_owned(), value.to_owned()))
+            .to_vec();
+        spec.run.steps = 3;
+        let options = SweepOptions::new(Provenance::new(henad_core::build_info!(), Vec::new()));
+        let record =
+            run_spec(&sir, None, &spec, SweepOutput::Memory, &options, &mut NoProgress).expect("the sweep runs");
+        let files = record.files.expect("a sweep in memory returns its files");
+        let named = files
+            .entries()
+            .into_iter()
+            .map(|(name, bytes)| (name.to_owned(), bytes.to_vec()))
+            .collect();
+        let set = ResultSet::from_files(named, usize::MAX).expect("the files read");
+        let read = ReadResults::new(set, ResultsSource::Files(Vec::new()), app.lookup("sir"));
+        app.results.show_read_results(read);
+        let store = app.results.store().expect("the results are shown");
+        assert_eq!(store.replay_refusal(), Some("This build does not include model 'sir'"));
+        assert!(!store.code_matches);
+
+        app.install_models(&set_of(sir));
+        let store = app.results.store().expect("the results are shown");
+        assert_eq!(store.replay_refusal(), None);
+        assert!(store.code_matches);
+        assert!(store.replay(0).is_ok(), "the run replays");
     }
 }

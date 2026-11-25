@@ -28,6 +28,7 @@ henad = { version = "0.3", features = ["example-models", "app"] }
 | `app` | The app, at `henad::app` |
 | `cli` | The command line, at `henad::cli`, on native targets |
 | `testing` | The [testing kit](../authoring/testing.md), at `henad::testing` |
+| `model-files` | [Model files](../reference/model-files.md): grid rules at `henad::rules`, and graph models and sheets at `henad::graph` |
 
 No feature is on by default, and no feature changes a result.
 A program with its own models starts from the [template](your-project.md) instead.
@@ -237,7 +238,7 @@ A run's trajectory depends on its model, its values, its seed and its schedule.
 A rebuild on the same build of Henad and of the model, on the same platform, steps through the same states, and its stats at the run's last tick equal the run's last row in `series.csv`.
 A pause, the thread count or the number of runs stepping beside it never changes a run.
 
-Four things stand between a run and its rebuild:
+Four things can make a rebuild differ from its run:
 
 - **A model that does not replay exactly.**
   A GPU model whose passes leave the order of their writes to the device declares `REPLAYS_EXACTLY = false`.
@@ -286,6 +287,8 @@ A resume or a merge compares the recorded builds with its own, and warns when He
 The app warns before it opens a run when Henad's build or the model's build differs from a build that the folder records.
 `ResultSet::replay` compares no builds.
 To check a rebuild, a program compares `results.recorded_builds(BuildRole::Engine)` with `RecordedBuild::engine()`, and `recorded_builds(BuildRole::Model)` with `RecordedBuild::from(entry.source())`, using `RecordedBuild::same_build`.
+A model composed at run time also records the hash that identifies its code, and a resume or a merge rejects a folder whose runs ran other code.
+`results.code_matches(entry.source())` returns whether a resume would accept the entry's code.
 
 `henad::build_info!()` returns the build of the crate it expands in.
 A crate that holds models builds its set with `ModelSet::new(henad::build_info!())`, and the set records that build on each model inserted into it.
@@ -305,8 +308,8 @@ A program without its own models, such as the one above, needs no `build.rs`.
 The stamp hashes the files under the crate's `src` and its manifest.
 A file that a model reads at compile time, through `include_bytes!` or `include_str!`, belongs under `src`, where the hash sees it.
 
-henad-core and henad-build have no source hash.
-An edited copy of either crate, pulled in through `[patch]`, is treated as the release it patches, and a resume does not warn about it.
+henad-core, henad-build and henad-graph have no source hash.
+An edited copy of any of the three, pulled in through `[patch]`, is treated as the release it patches, and a resume does not warn about it.
 
 ## Next
 

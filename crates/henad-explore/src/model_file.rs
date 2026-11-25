@@ -1,0 +1,754 @@
+//! Model files: a model as one TOML file, the form in which a model is saved, shared and opened.
+//!
+//! A model file starts with `format = "henad-model"` and `format_version = 1`, then the `kind` of model it holds.
+//! [`ModelFile::parse`] reads the header first and dispatches on the kind: `gpu_grid` for a grid rule, held by a
+//! [`GridRuleFile`], `graph` for a graph model, held by a [`GraphFile`] of henad-graph, and `sheet` for a sheet, the
+//! author document a researcher builds without nodes, held by a [`SheetFile`] of henad-graph with the graph it lowers
+//! to.
+//!
+//! A grid rule's file continues with the rule's `id`, `name` and `description`. The `[grid]` table holds the default
+//! `width` and `height` and the `boundary`, `torus` or `bounded`. Each `[[state]]` table holds a state's `label`, its
+//! `color` as three or four bytes, and an optional `initial`, the id of the `f32` parameter that gives its initial
+//! share. Each `[[param]]` table holds a parameter in the vocabulary of `--params --json`: `id`, `label`, `kind`
+//! (`f32`, `u32`, `bool` or `choice`), its bounds and `default`, an `f32`'s `step` and `format`, and a choice's
+//! `options`. The `[step]` table's `wgsl` holds the rule's WGSL in a string the file holds verbatim, a literal string
+//! between `'''` as a rule.
+//!
+//! Every table refuses an unknown key. Line ends read as `\n`, and every diagnostic is placed in the text as passed.
+//!
+//! The *canonical text* of a file is the file written again by [`ModelFile::to_toml`]: every key in a fixed order,
+//! every value in one form, and, for a grid rule, no comment outside the step. Two files that differ in nothing else
+//! have the same canonical text, and its [`ModelCode`] is the model's code identity in a results folder.
+//!
+//! A graph model builds through henad-graph's WGSL compiler, [`GridProgram`] on a grid and [`AgentProgram`] for agents.
+//! A sheet builds as the graph it lowers to, and every finding about that graph is placed at the table of the sheet
+//! its node was lowered from, with no pass and no node.
+
+use std::fmt;
+use std::ops::Range;
+
+use serde::Deserialize;
+use serde::de::IgnoredAny;
+use toml::Spanned;
+
+use henad_compute::entry::ModelEntry;
+use henad_compute::gpu::runtime_grid::{GridRule, RuleDeclaration, RuleState};
+use henad_core::authoring::primitives::space::Boundary;
+use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
+use henad_core::params::ParamKind;
+use henad_core::provenance::ModelCode;
+use henad_graph::document::World;
+use henad_graph::host::HostEvaluator;
+use henad_graph::model_text::{LineEnds, ModelHeader, ParamTable, toml_string as string, write_param};
+use henad_graph::sheet::sentence::SHEET_EMPTY;
+use henad_graph::sheet::{KIND_SHEET, SheetFile, SheetFileError};
+use henad_graph::wgsl::{AgentProgram, FaultNames, GridProgram, Probes};
+use henad_graph::{GraphFile, GraphFileError, KIND_GRAPH};
+
+/// Value of a model file's `format` key.
+const FORMAT: &str = "henad-model";
+
+/// Version of the model file format this build reads and writes.
+const FORMAT_VERSION: u64 = 1;
+
+/// Value of the `kind` key of a grid rule.
+const KIND_GPU_GRID: &str = "gpu_grid";
+
+/// A model read from a model file, by the file's `kind`.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ModelFile {
+    /// A grid rule, `kind = "gpu_grid"`.
+    GpuGrid(Box<GridRuleFile>),
+    /// A graph model, `kind = "graph"`.
+    Graph(Box<GraphFile>),
+    /// A sheet, `kind = "sheet"`, with the graph it lowers to.
+    Sheet(Box<SheetFile>),
+}
+
+/// A grid rule read from a model file, with the text it was read from.
+#[derive(Clone)]
+pub struct GridRuleFile {
+    rule: GridRule,
+    /// Text the rule was read from, or the canonical text of a rule that came from no file.
+    text: String,
+    /// Places of the rule's declarations and step in [`Self::text`] with its line ends made `\n`.
+    places: Places,
+    /// Map from [`Self::places`] back to [`Self::text`].
+    line_ends: LineEnds,
+}
+
+/// Places of a rule's declarations and step in a model file, as byte offsets into its text with line ends made
+/// `\n`.
+#[derive(Debug, Clone)]
+struct Places {
+    /// The `id` value.
+    id: Range<usize>,
+    /// The `[grid]` table.
+    grid: Range<usize>,
+    /// Each `[[state]]` table, in order.
+    states: Vec<Range<usize>>,
+    /// Each `[[param]]` table, in order.
+    params: Vec<Range<usize>>,
+    /// Offset of the step's first character.
+    step: usize,
+}
+
+impl Places {
+    /// Returns the bytes of `declaration`.
+    fn of(&self, declaration: RuleDeclaration) -> Option<Range<usize>> {
+        match declaration {
+            RuleDeclaration::Id => Some(self.id.clone()),
+            RuleDeclaration::Grid => Some(self.grid.clone()),
+            RuleDeclaration::State(index) => self.states.get(index).cloned(),
+            RuleDeclaration::Param(index) => self.params.get(index).cloned(),
+            _ => None,
+        }
+    }
+}
+
+/// Prints the rule's id and the byte length of the text.
+impl fmt::Debug for GridRuleFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GridRuleFile")
+            .field("rule", &self.rule)
+            .field("text_bytes", &self.text.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Reason a model file cannot be read or built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ModelFileError {
+    /// The text is not a model file: TOML that does not parse, a key that is unknown or missing, or a value of the
+    /// wrong type.
+    Toml(Box<CodeDiagnostic>),
+    /// The file declares another format, version or kind, or a value a model file cannot hold.
+    Format(Box<CodeDiagnostic>),
+    /// The rule's declarations or its step are refused. A diagnostic about one declaration or about the step is
+    /// placed in the file.
+    Rule(Vec<CodeDiagnostic>),
+    /// The graph's checker or its host evaluator reports errors. Each diagnostic carries its pass and node id when it
+    /// has them, and a checker's diagnostic is placed in the file.
+    Graph(Vec<CodeDiagnostic>),
+    /// The sheet's checker or its lowering reports errors, or the graph it lowers to does not build. Each diagnostic
+    /// is placed at the table of the sheet it is about and carries no pass and no node.
+    Sheet(Vec<CodeDiagnostic>),
+    /// The file reads and checks, and this build cannot build a model of its kind.
+    Unsupported(Box<CodeDiagnostic>),
+}
+
+impl ModelFileError {
+    /// Every diagnostic the error carries.
+    pub fn diagnostics(&self) -> &[CodeDiagnostic] {
+        match self {
+            Self::Toml(diagnostic) | Self::Format(diagnostic) | Self::Unsupported(diagnostic) => {
+                std::slice::from_ref(&**diagnostic)
+            }
+            Self::Rule(diagnostics) | Self::Graph(diagnostics) | Self::Sheet(diagnostics) => diagnostics,
+        }
+    }
+}
+
+impl From<GraphFileError> for ModelFileError {
+    fn from(error: GraphFileError) -> Self {
+        match error {
+            GraphFileError::Toml(diagnostic) => Self::Toml(diagnostic),
+            other => Self::Format(Box::new(other.diagnostic().clone())),
+        }
+    }
+}
+
+impl From<SheetFileError> for ModelFileError {
+    fn from(error: SheetFileError) -> Self {
+        match error {
+            SheetFileError::Toml(diagnostic) => Self::Toml(diagnostic),
+            SheetFileError::Invalid(errors) => Self::Sheet(errors.as_slice().to_vec()),
+            other => Self::Format(Box::new(other.diagnostic().clone())),
+        }
+    }
+}
+
+/// Writes each diagnostic on lines of its own.
+impl fmt::Display for ModelFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, diagnostic) in self.diagnostics().iter().enumerate() {
+            if index > 0 {
+                f.write_str("\n")?;
+            }
+            write!(f, "{diagnostic}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for ModelFileError {}
+
+impl ModelFile {
+    /// Returns the model file of `rule`, its text the canonical text.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`GridRuleFile::from_rule`].
+    pub fn from_rule(rule: GridRule) -> Result<Self, ModelFileError> {
+        GridRuleFile::from_rule(rule).map(|file| Self::GpuGrid(Box::new(file)))
+    }
+
+    /// Reads the model file held in `text`, dispatching on its `kind`.
+    ///
+    /// A file without a `kind` reads as a grid rule, which then reports the missing key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelFileError::Format`] for a file of another format, version or kind, and otherwise the errors of
+    /// [`GridRuleFile::parse`], of [`GraphFile::parse`], which refuses a graph past henad-graph's
+    /// [`MAX_FILE_BYTES`](henad_graph::limits::MAX_FILE_BYTES), or of [`SheetFile::parse`], which refuses a sheet past
+    /// [`MAX_SHEET_BYTES`](henad_graph::sheet::limits::MAX_SHEET_BYTES) and returns the errors of the sheet's check and
+    /// lowering as [`ModelFileError::Sheet`]. Each diagnostic is placed in `text` when it has a place.
+    pub fn parse(text: &str) -> Result<Self, ModelFileError> {
+        let (read, line_ends) = LineEnds::normalize(text);
+        let header = ModelHeader::read(&read).map_err(|error| toml_error(text, &line_ends, &error))?;
+        header
+            .check(&[KIND_GPU_GRID, KIND_GRAPH, KIND_SHEET])
+            .map_err(|problem| placed(text, &line_ends, problem.message, problem.span))?;
+        match header.kind() {
+            Some(KIND_GRAPH) => GraphFile::parse(text)
+                .map(|file| Self::Graph(Box::new(file)))
+                .map_err(ModelFileError::from),
+            Some(KIND_SHEET) => SheetFile::parse(text)
+                .map(|file| Self::Sheet(Box::new(file)))
+                .map_err(ModelFileError::from),
+            _ => GridRuleFile::parse(text).map(|file| Self::GpuGrid(Box::new(file))),
+        }
+    }
+
+    /// Model id of the file: the rule's id, the id of the graph's target, or the sheet's id.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::GpuGrid(file) => &file.rule.id,
+            Self::Graph(file) => &file.document().target.id,
+            Self::Sheet(file) => &file.document().sheet.id,
+        }
+    }
+
+    /// Rule the file holds, `None` for a graph or a sheet.
+    pub fn rule(&self) -> Option<&GridRule> {
+        match self {
+            Self::GpuGrid(file) => Some(file.rule()),
+            Self::Graph(_) | Self::Sheet(_) => None,
+        }
+    }
+
+    /// Graph the file holds, `None` for a grid rule or a sheet.
+    ///
+    /// The graph a sheet lowers to is [`Self::lowered_graph`].
+    pub fn graph(&self) -> Option<&GraphFile> {
+        match self {
+            Self::GpuGrid(_) | Self::Sheet(_) => None,
+            Self::Graph(file) => Some(file.as_ref()),
+        }
+    }
+
+    /// Sheet the file holds, `None` for a grid rule or a graph.
+    pub fn sheet(&self) -> Option<&SheetFile> {
+        match self {
+            Self::GpuGrid(_) | Self::Graph(_) => None,
+            Self::Sheet(file) => Some(file.as_ref()),
+        }
+    }
+
+    /// Graph the model builds as: the graph a graph file holds, or the graph a sheet lowers to. `None` for a grid
+    /// rule.
+    pub fn lowered_graph(&self) -> Option<&GraphFile> {
+        match self {
+            Self::GpuGrid(_) => None,
+            Self::Graph(file) => Some(file.as_ref()),
+            Self::Sheet(file) => Some(file.lowered()),
+        }
+    }
+
+    /// Returns the file's canonical text.
+    ///
+    /// For a sheet this is the sheet's own text, and the lowered graph's is [`GraphFile::to_toml`] on
+    /// [`Self::lowered_graph`].
+    pub fn to_toml(&self) -> String {
+        match self {
+            Self::GpuGrid(file) => file.to_toml(),
+            Self::Graph(file) => file.to_toml(),
+            Self::Sheet(file) => file.to_toml().to_owned(),
+        }
+    }
+
+    /// Returns the code that identifies the model: the rule's in the format [`GridRule::CODE_FORMAT`], or the
+    /// semantic text of the graph, or of the graph a sheet lowers to, in the format [`henad_graph::CODE_FORMAT`].
+    pub fn code(&self) -> ModelCode {
+        match self {
+            Self::GpuGrid(file) => file.code(),
+            Self::Graph(file) => file.code(),
+            Self::Sheet(file) => file.code(),
+        }
+    }
+
+    /// Returns the warnings of the graph's checker, in file order, each placed in the file.
+    ///
+    /// A grid rule has none. For a sheet, returns the warnings of the sheet's checker, each placed at its table.
+    ///
+    /// Note that the graph checker's warnings on the graph a sheet lowers to are left out. Each names a node of that
+    /// graph, such as the node of a result that no line reads. The lowering writes that node and the graph build
+    /// drops it. [`Self::lowered_graph`] reaches these warnings.
+    ///
+    /// A warning never blocks [`Self::entry`].
+    pub fn warnings(&self) -> Vec<CodeDiagnostic> {
+        match self {
+            Self::GpuGrid(_) => Vec::new(),
+            Self::Graph(file) => file.check().warnings().cloned().collect(),
+            Self::Sheet(file) => file.warnings().to_vec(),
+        }
+    }
+
+    /// Builds the model and returns its entry, whose source records [`Self::code`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors of [`GridRuleFile::entry`] for a grid rule. For a graph, returns [`ModelFileError::Graph`]
+    /// with the errors of its checker, then with the error of its host evaluator, which compiles every init pass, then
+    /// with the errors of [`GridProgram::compile`] or [`AgentProgram::compile`]. For a sheet, returns the same errors
+    /// of the graph it lowers to as [`ModelFileError::Sheet`], each placed by [`SheetFile::place_graph_diagnostic`].
+    /// A grid sheet with no property returns its [`SHEET_EMPTY`] warning as the one error, in place of the errors of
+    /// a graph with no lane and no pass.
+    pub fn entry(&self) -> Result<ModelEntry, ModelFileError> {
+        match self {
+            Self::GpuGrid(file) => file.entry(),
+            Self::Graph(file) => graph_entry(file, None, |diagnostic| diagnostic).map_err(ModelFileError::Graph),
+            Self::Sheet(file) => {
+                if let Some(empty) = file.warnings().iter().find(|warning| warning.message == SHEET_EMPTY) {
+                    let mut error = empty.clone();
+                    error.severity = DiagnosticSeverity::Error;
+                    return Err(ModelFileError::Sheet(vec![error]));
+                }
+                let additions = SheetAdditions {
+                    faults: file.fault_names(),
+                    probes: sheet_probes(file),
+                };
+                graph_entry(file.lowered(), Some(additions), |diagnostic| {
+                    file.place_graph_diagnostic(diagnostic)
+                })
+                .map_err(ModelFileError::Sheet)
+            }
+        }
+    }
+}
+
+/// Returns the probes every entry built from the sheet `file` counts the fires of: the probes of its change lines,
+/// [`SheetFile::fire_lines`].
+///
+/// The Editor's preview of a sheet compiles with the same probes, so a count of either run maps to its line through
+/// [`FireLines::counts_by_line`](henad_graph::sheet::FireLines::counts_by_line). Empty probes would turn counting off
+/// for every sheet.
+pub fn sheet_probes(file: &SheetFile) -> &Probes {
+    file.fire_lines().probes()
+}
+
+/// Parts of a sheet added to the compilation of the graph it lowers to.
+#[derive(Debug, Clone, Copy)]
+struct SheetAdditions<'a> {
+    /// Name in the author's words of each radius fold whose fault a run reports.
+    faults: &'a FaultNames,
+    /// Probes of the sheet's change lines.
+    probes: &'a Probes,
+}
+
+/// Builds the entry of `graph`, passing each error through `place`. A graph lowered from a sheet counts the fires of
+/// the probes of `additions`, and a graph of agents names each fault of a radius fold `additions` holds in its words.
+///
+/// # Errors
+///
+/// Returns the errors of the graph's checker, then the error of its host evaluator, which compiles every init pass,
+/// then the errors of [`GridProgram::compile`] or [`AgentProgram::compile`].
+fn graph_entry(
+    graph: &GraphFile,
+    additions: Option<SheetAdditions<'_>>,
+    place: impl Fn(CodeDiagnostic) -> CodeDiagnostic,
+) -> Result<ModelEntry, Vec<CodeDiagnostic>> {
+    let placed = |diagnostics: Vec<CodeDiagnostic>| diagnostics.into_iter().map(&place).collect::<Vec<_>>();
+    let report = graph.check();
+    if report.has_errors() {
+        return Err(placed(report.errors().cloned().collect()));
+    }
+    HostEvaluator::new(graph).map_err(|error| placed(error.diagnostics()))?;
+    if matches!(graph.document().world, World::Agents(_)) {
+        let program = match additions {
+            Some(additions) => {
+                AgentProgram::compile_with_probes_and_fault_names(graph, additions.probes, additions.faults)
+            }
+            None => AgentProgram::compile(graph),
+        };
+        return program.map(|program| program.entry()).map_err(placed);
+    }
+    let program = match additions {
+        Some(additions) => GridProgram::compile_with_probes(graph, additions.probes),
+        None => GridProgram::compile(graph),
+    };
+    program.map(|program| program.entry()).map_err(placed)
+}
+
+/// Returns a TOML error placed in `text`, whose line ends `line_ends` maps.
+fn toml_error(text: &str, line_ends: &LineEnds, error: &toml::de::Error) -> ModelFileError {
+    let diagnostic = CodeDiagnostic::error(error.message().trim_end().to_owned());
+    ModelFileError::Toml(Box::new(match error.span() {
+        Some(span) => diagnostic.at(text, line_ends.original_range(span)),
+        None => diagnostic,
+    }))
+}
+
+/// Returns a format error with `message` placed at `span` in `text`, whose line ends `line_ends` maps.
+fn placed(text: &str, line_ends: &LineEnds, message: String, span: Range<usize>) -> ModelFileError {
+    ModelFileError::Format(Box::new(
+        CodeDiagnostic::error(message).at(text, line_ends.original_range(span)),
+    ))
+}
+
+impl GridRuleFile {
+    /// Returns the model file of `rule`, its text the canonical text.
+    ///
+    /// The step's line ends are made `\n`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelFileError::Format`] when the step holds `'''` or an ASCII control character other than a tab and
+    /// a line end, since a literal string holds neither, when a parameter holds a float that is not finite, or when the
+    /// canonical text does not read back, as for a choice whose options
+    /// [`check_choice_options`](henad_core::helpers::check_choice_options) refuses.
+    pub fn from_rule(mut rule: GridRule) -> Result<Self, ModelFileError> {
+        rule.step = LineEnds::normalize(&rule.step).0;
+        check_step(&rule.step).map_err(|(message, _)| format_error(message))?;
+        for param in &rule.params {
+            if let ParamKind::F32 {
+                min,
+                max,
+                default,
+                step,
+            } = param.kind()
+                && ![*min, *max, *default, step.unwrap_or(0.0)]
+                    .iter()
+                    .all(|value| value.is_finite())
+            {
+                return Err(format_error(format!(
+                    "parameter '{}' contains a float that is not finite",
+                    param.id()
+                )));
+            }
+        }
+        Self::parse(&canonical_text(&rule))
+    }
+
+    /// Reads the model file held in `text`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelFileError::Format`] for a file of another format, version or kind than `gpu_grid`, which is
+    /// checked before anything else, or for a value a model file cannot hold, and [`ModelFileError::Toml`] for text
+    /// that is not a model file. Each diagnostic is placed in `text` when it has a place.
+    pub fn parse(text: &str) -> Result<Self, ModelFileError> {
+        let (read, line_ends) = LineEnds::normalize(text);
+        let toml_error = |error: toml::de::Error| toml_error(text, &line_ends, &error);
+        let placed = |message: String, span: Range<usize>| placed(text, &line_ends, message, span);
+
+        // The header first, so that a file of another version reads as one even when its keys are new.
+        let header = ModelHeader::read(&read).map_err(toml_error)?;
+        header
+            .check(&[KIND_GPU_GRID])
+            .map_err(|problem| placed(problem.message, problem.span))?;
+
+        let file: FileTable = toml::from_str(&read).map_err(toml_error)?;
+        let step = step_offset(&read, &file.step.wgsl).ok_or_else(|| {
+            placed(
+                "write the step as a literal string between `'''` to keep the WGSL as written".to_owned(),
+                file.step.wgsl.span(),
+            )
+        })?;
+        if let Err((message, at)) = check_step(file.step.wgsl.get_ref()) {
+            return Err(placed(message, step + at.start..step + at.end));
+        }
+
+        let mut places = Places {
+            id: file.id.span(),
+            grid: file.grid.span(),
+            states: Vec::with_capacity(file.states.len()),
+            params: Vec::with_capacity(file.params.len()),
+            step,
+        };
+        let mut params = Vec::with_capacity(file.params.len());
+        for param in file.params {
+            let span = param.span();
+            params.push(
+                param
+                    .into_inner()
+                    .into_descriptor()
+                    .map_err(|message| placed(message, span.clone()))?,
+            );
+            places.params.push(span);
+        }
+        let mut states = Vec::with_capacity(file.states.len());
+        for state in file.states {
+            let span = state.span();
+            states.push(
+                state
+                    .into_inner()
+                    .into_state()
+                    .map_err(|message| placed(message, span.clone()))?,
+            );
+            places.states.push(span);
+        }
+        let id = file.id.into_inner();
+        let grid = file.grid.into_inner();
+        let mut rule = GridRule::new(id.clone(), file.step.wgsl.into_inner());
+        rule.name = file.name.unwrap_or(id);
+        rule.description = file.description;
+        rule.params = params;
+        rule.states = states;
+        rule.boundary = match grid.boundary {
+            BoundaryName::Torus => Boundary::Torus,
+            BoundaryName::Bounded => Boundary::Bounded,
+        };
+        rule.width = grid.width;
+        rule.height = grid.height;
+        Ok(Self {
+            rule,
+            text: text.to_owned(),
+            places,
+            line_ends,
+        })
+    }
+
+    /// Rule the file holds.
+    pub fn rule(&self) -> &GridRule {
+        &self.rule
+    }
+
+    /// Returns the file's canonical text: every key in a fixed order, every value in one form, and the step verbatim.
+    pub fn to_toml(&self) -> String {
+        canonical_text(&self.rule)
+    }
+
+    /// Returns the code that identifies the rule, its canonical text in the format [`GridRule::CODE_FORMAT`].
+    pub fn code(&self) -> ModelCode {
+        ModelCode::new(GridRule::CODE_FORMAT, self.to_toml())
+    }
+
+    /// Compiles the rule and returns its entry, whose source records [`Self::code`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelFileError::Rule`] with the problems [`GridRule::compile`] finds. A problem in a declaration is
+    /// placed at its table or key, and a problem in the step at its line and column, in the text the rule was read
+    /// from, or in the canonical text of a rule that came from no file.
+    pub fn entry(&self) -> Result<ModelEntry, ModelFileError> {
+        if let Err(problems) = self.rule.check_declarations() {
+            return Err(ModelFileError::Rule(
+                problems
+                    .into_iter()
+                    .map(|(declaration, problem)| {
+                        match declaration.and_then(|declaration| self.places.of(declaration)) {
+                            Some(span) => self.place(problem, span),
+                            None => problem,
+                        }
+                    })
+                    .collect(),
+            ));
+        }
+        let step = self.places.step;
+        let compiled = self.rule.compile().map_err(|problems| {
+            ModelFileError::Rule(
+                problems
+                    .into_iter()
+                    .map(|mut problem| match problem.span.take() {
+                        Some(span) => self.place(problem, step + span.start..step + span.end),
+                        None => problem,
+                    })
+                    .collect(),
+            )
+        })?;
+        Ok(compiled.entry(self.code()))
+    }
+
+    /// Returns `problem` placed at `span`, a byte range of the text with its line ends made `\n`.
+    fn place(&self, problem: CodeDiagnostic, span: Range<usize>) -> CodeDiagnostic {
+        problem.at(
+            &self.text,
+            self.line_ends.original(span.start)..self.line_ends.original(span.end),
+        )
+    }
+}
+
+/// Checks that a literal string holds `step`.
+///
+/// # Errors
+///
+/// Returns the message and the bytes in `step` of the first `'''`, which ends a literal string, or of an ASCII control
+/// character other than a tab and a line end, which a literal string cannot hold.
+fn check_step(step: &str) -> Result<(), (String, Range<usize>)> {
+    if let Some(at) = step.find("'''") {
+        return Err((
+            "the step cannot contain `'''`: it ends a literal string in a model file".to_owned(),
+            at..at + 3,
+        ));
+    }
+    match step
+        .char_indices()
+        .find(|&(_, c)| matches!(c, '\u{0}'..='\u{8}' | '\u{B}'..='\u{1F}' | '\u{7F}'))
+    {
+        Some((at, c)) => Err((
+            format!(
+                "the step cannot contain the control character U+{:04X} in a model file",
+                u32::from(c)
+            ),
+            at..at + c.len_utf8(),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Returns a format error with `message` and no place.
+fn format_error(message: impl Into<String>) -> ModelFileError {
+    ModelFileError::Format(Box::new(CodeDiagnostic::error(message)))
+}
+
+/// Returns the byte offset in `text` of the first character of `value`, a string whose literal `text` holds, when the
+/// literal holds the string verbatim.
+fn step_offset(text: &str, value: &Spanned<String>) -> Option<usize> {
+    let span = value.span();
+    let literal = text.get(span.clone())?;
+    let delimiter = ["'''", "\"\"\"", "'", "\""]
+        .into_iter()
+        .find(|delimiter| literal.starts_with(delimiter))?;
+    let mut start = span.start + delimiter.len();
+    // TOML drops a line end right after the opening delimiter of a multi-line string.
+    if delimiter.len() == 3 && text[start..].starts_with('\n') {
+        start += 1;
+    }
+    text.get(start..start + value.get_ref().len())
+        .is_some_and(|written| written == value.get_ref())
+        .then_some(start)
+}
+
+/// Returns the canonical text of `rule`.
+fn canonical_text(rule: &GridRule) -> String {
+    let mut text = String::new();
+    let mut line = |key: &str, value: String| {
+        text.push_str(key);
+        text.push_str(" = ");
+        text.push_str(&value);
+        text.push('\n');
+    };
+    line("format", string(FORMAT));
+    line("format_version", FORMAT_VERSION.to_string());
+    line("kind", string(KIND_GPU_GRID));
+    line("id", string(&rule.id));
+    line("name", string(&rule.name));
+    line("description", string(&rule.description));
+    text.push_str("\n[grid]\n");
+    text.push_str(&format!("width = {}\nheight = {}\n", rule.width, rule.height));
+    let boundary = match rule.boundary {
+        Boundary::Torus => "torus",
+        Boundary::Bounded => "bounded",
+    };
+    text.push_str(&format!("boundary = {}\n", string(boundary)));
+    for state in &rule.states {
+        text.push_str("\n[[state]]\n");
+        text.push_str(&format!("label = {}\n", string(&state.label)));
+        let [red, green, blue, alpha] = state.color;
+        text.push_str(&format!("color = [{red}, {green}, {blue}, {alpha}]\n"));
+        if let Some(initial) = &state.initial {
+            text.push_str(&format!("initial = {}\n", string(initial)));
+        }
+    }
+    for param in &rule.params {
+        text.push_str("\n[[param]]\n");
+        write_param(&mut text, param);
+    }
+    text.push_str("\n[step]\nwgsl = '''\n");
+    text.push_str(&rule.step);
+    text.push_str("'''\n");
+    text
+}
+
+/// A model file as TOML holds it. [`ModelHeader`] checks the header's values.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileTable {
+    #[serde(rename = "format")]
+    _format: IgnoredAny,
+    #[serde(rename = "format_version")]
+    _format_version: IgnoredAny,
+    #[serde(rename = "kind")]
+    _kind: IgnoredAny,
+    id: Spanned<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: String,
+    grid: Spanned<GridTable>,
+    #[serde(default, rename = "state")]
+    states: Vec<Spanned<StateTable>>,
+    #[serde(default, rename = "param")]
+    params: Vec<Spanned<ParamTable>>,
+    step: StepTable,
+}
+
+/// The `[grid]` table.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GridTable {
+    width: u32,
+    height: u32,
+    #[serde(default)]
+    boundary: BoundaryName,
+}
+
+/// Value of the `boundary` key.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum BoundaryName {
+    #[default]
+    Torus,
+    Bounded,
+}
+
+/// A `[[state]]` table.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StateTable {
+    label: String,
+    color: Vec<u8>,
+    #[serde(default)]
+    initial: Option<String>,
+}
+
+impl StateTable {
+    /// Returns the state the table declares, or the message of a colour that is not 3 or 4 bytes.
+    fn into_state(self) -> Result<RuleState, String> {
+        let Self { label, color, initial } = self;
+        let color = match color[..] {
+            [red, green, blue] => [red, green, blue, 255],
+            [red, green, blue, alpha] => [red, green, blue, alpha],
+            _ => {
+                return Err(format!(
+                    "state '{label}' has a colour of {} bytes, expected 3 or 4",
+                    color.len()
+                ));
+            }
+        };
+        let mut state = RuleState::new(label, color);
+        state.initial = initial;
+        Ok(state)
+    }
+}
+
+/// The `[step]` table.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepTable {
+    wgsl: Spanned<String>,
+}

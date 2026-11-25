@@ -1,0 +1,249 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "three_strains"
+name = "Three strains"
+purpose = "Three infections that spread apart on one grid, each read at the neighbours of every cell."
+next_line = 10
+
+[world]
+made_of = "cells"
+width = 256
+height = 256
+edges = "wrap"
+
+[[cells.property]]
+id = "health_a"
+name = "Health A"
+type = "states"
+states = [
+  { id = "susceptible_a", name = "Susceptible A", color = "#151515" },
+  { id = "infected_a", name = "Infected A", color = "#FF5252" },
+  { id = "recovered_a", name = "Recovered A", color = "#448AFF" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 1101
+otherwise = "susceptible_a"
+
+[[cells.property.starts_as.row]]
+state = "infected_a"
+chance = { param = "initial_infected" }
+
+[[cells.property]]
+id = "health_b"
+name = "Health B"
+type = "states"
+states = [
+  { id = "susceptible_b", name = "Susceptible B", color = "#151515" },
+  { id = "infected_b", name = "Infected B", color = "#FF5252" },
+  { id = "recovered_b", name = "Recovered B", color = "#448AFF" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 2201
+otherwise = "susceptible_b"
+
+[[cells.property.starts_as.row]]
+state = "infected_b"
+chance = { param = "initial_infected" }
+
+[[cells.property]]
+id = "health_c"
+name = "Health C"
+type = "states"
+states = [
+  { id = "susceptible_c", name = "Susceptible C", color = "#151515" },
+  { id = "infected_c", name = "Infected C", color = "#FF5252" },
+  { id = "recovered_c", name = "Recovered C", color = "#448AFF" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 3301
+otherwise = "susceptible_c"
+
+[[cells.property.starts_as.row]]
+state = "infected_c"
+chance = { param = "initial_infected" }
+
+[[parameter]]
+id = "infection_chance"
+name = "Infection chance"
+type = "number"
+min = 0
+max = 1
+default = 0.2
+step = 0.01
+
+[[parameter]]
+id = "recovery_chance"
+name = "Recovery chance"
+type = "number"
+min = 0
+max = 1
+default = 0.05
+step = 0.01
+
+[[parameter]]
+id = "initial_infected"
+name = "Initial infected"
+type = "number"
+min = 0
+max = 1
+default = 0.02
+step = 0.01
+
+[[measure]]
+id = "infected_a"
+name = "Infected A"
+color = "#FF5252"
+rule = "count_in_state"
+over = "cells"
+property = "health_a"
+state = "infected_a"
+
+[[measure]]
+id = "infected_b"
+name = "Infected B"
+color = "#FFC107"
+rule = "count_in_state"
+over = "cells"
+property = "health_b"
+state = "infected_b"
+
+[[measure]]
+id = "infected_c"
+name = "Infected C"
+color = "#00E676"
+rule = "count_in_state"
+over = "cells"
+property = "health_c"
+state = "infected_c"
+
+[color.cells]
+rule = "by_state"
+property = "health_a"
+
+# Each tick, every cell
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9"]
+
+# Infected A neighbours = count of the 8 cells around me whose Health A is Infected A
+[card.line.l1]
+kind = "count"
+name = "Infected A neighbours"
+around = "cells_8"
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "health_a" }
+right = { state = "infected_a" }
+
+# Become Infected A from Susceptible A, with chance Infection chance for each infected neighbour
+[card.line.l2]
+kind = "become"
+key = 1102
+property = "health_a"
+new_state = "infected_a"
+start_state = "susceptible_a"
+
+[card.line.l2.condition]
+kind = "chance"
+chance = { param = "infection_chance" }
+tries = { result = "l1" }
+
+# Become Recovered A from Infected A, with chance Recovery chance
+[card.line.l3]
+kind = "become"
+key = 1103
+property = "health_a"
+new_state = "recovered_a"
+start_state = "infected_a"
+
+[card.line.l3.condition]
+kind = "chance"
+chance = { param = "recovery_chance" }
+
+# Infected B neighbours = count of the 8 cells around me whose Health B is Infected B
+[card.line.l4]
+kind = "count"
+name = "Infected B neighbours"
+around = "cells_8"
+
+[card.line.l4.whose]
+kind = "compare"
+test = "is"
+left = { their = "health_b" }
+right = { state = "infected_b" }
+
+# Become Infected B from Susceptible B, with chance Infection chance for each infected neighbour
+[card.line.l5]
+kind = "become"
+key = 2202
+property = "health_b"
+new_state = "infected_b"
+start_state = "susceptible_b"
+
+[card.line.l5.condition]
+kind = "chance"
+chance = { param = "infection_chance" }
+tries = { result = "l4" }
+
+# Become Recovered B from Infected B, with chance Recovery chance
+[card.line.l6]
+kind = "become"
+key = 2203
+property = "health_b"
+new_state = "recovered_b"
+start_state = "infected_b"
+
+[card.line.l6.condition]
+kind = "chance"
+chance = { param = "recovery_chance" }
+
+# Infected C neighbours = count of the 8 cells around me whose Health C is Infected C
+[card.line.l7]
+kind = "count"
+name = "Infected C neighbours"
+around = "cells_8"
+
+[card.line.l7.whose]
+kind = "compare"
+test = "is"
+left = { their = "health_c" }
+right = { state = "infected_c" }
+
+# Become Infected C from Susceptible C, with chance Infection chance for each infected neighbour
+[card.line.l8]
+kind = "become"
+key = 3302
+property = "health_c"
+new_state = "infected_c"
+start_state = "susceptible_c"
+
+[card.line.l8.condition]
+kind = "chance"
+chance = { param = "infection_chance" }
+tries = { result = "l7" }
+
+# Become Recovered C from Infected C, with chance Recovery chance
+[card.line.l9]
+kind = "become"
+key = 3303
+property = "health_c"
+new_state = "recovered_c"
+start_state = "infected_c"
+
+[card.line.l9.condition]
+kind = "chance"
+chance = { param = "recovery_chance" }

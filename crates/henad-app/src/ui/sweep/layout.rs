@@ -18,7 +18,8 @@ use egui::{
 use crate::icons::material_design_icons::{MDI_ALERT, MDI_PENCIL_OUTLINE};
 use crate::ui::mcs;
 use crate::ui::plural;
-use crate::ui::sweep::draft::{DraftMode, DraftSite, IssueKind};
+use crate::ui::sweep::draft::{DraftSite, ExploreMode, IssueKind};
+use crate::ui::text::text_width;
 
 /// Maximum width of the form column, in points. The rest of a wide tab goes to the Plan panel or stays empty.
 pub const FORM_MAX_WIDTH: f32 = 680.0;
@@ -159,11 +160,11 @@ impl SweepSection {
     /// Returns the section holding the row an issue of `site` belongs to, in a draft of `mode`.
     ///
     /// An issue of the whole sweep belongs to the Design or Search section.
-    pub fn of_site(site: DraftSite, mode: DraftMode) -> Self {
+    pub fn of_site(site: DraftSite, mode: ExploreMode) -> Self {
         match site {
             DraftSite::Sweep => match mode {
-                DraftMode::Sweep => Self::Design,
-                DraftMode::Search => Self::Search,
+                ExploreMode::Sweep => Self::Design,
+                ExploreMode::Search => Self::Search,
             },
             DraftSite::Factor(_) | DraftSite::Parameters => Self::Parameters,
             DraftSite::Design => Self::Design,
@@ -194,10 +195,10 @@ impl Reveal {
     /// Returns a reveal of the row an issue of `site` belongs to, in a draft of `mode`.
     ///
     /// An issue of the whole sweep reveals the Design or Search section's first row.
-    pub fn site(site: DraftSite, mode: DraftMode) -> Self {
+    pub fn site(site: DraftSite, mode: ExploreMode) -> Self {
         let row = match (site, mode) {
-            (DraftSite::Sweep, DraftMode::Sweep) => DraftSite::Design,
-            (DraftSite::Sweep, DraftMode::Search) => DraftSite::Search,
+            (DraftSite::Sweep, ExploreMode::Sweep) => DraftSite::Design,
+            (DraftSite::Sweep, ExploreMode::Search) => DraftSite::Search,
             (site, _) => site,
         };
         Self {
@@ -208,10 +209,10 @@ impl Reveal {
 
     /// Returns the reveal as a draft in `mode` draws it. The Design and Search sections swap with the mode, and a
     /// reveal of either section is applied to the section drawn.
-    pub fn in_mode(self, mode: DraftMode) -> Self {
+    pub fn in_mode(self, mode: ExploreMode) -> Self {
         let section = match (self.section, mode) {
-            (SweepSection::Design, DraftMode::Search) => SweepSection::Search,
-            (SweepSection::Search, DraftMode::Sweep) => SweepSection::Design,
+            (SweepSection::Design, ExploreMode::Search) => SweepSection::Search,
+            (SweepSection::Search, ExploreMode::Sweep) => SweepSection::Design,
             (section, _) => section,
         };
         Self { section, ..self }
@@ -927,19 +928,8 @@ pub fn segmented<T: Copy + PartialEq>(
 pub fn widest_label<'a>(ui: &Ui, labels: impl IntoIterator<Item = (&'a str, f32)>) -> f32 {
     labels
         .into_iter()
-        .map(|(label, before)| text_width(ui, label) + before)
+        .map(|(label, before)| text_width(ui, label, TextStyle::Body) + before)
         .fold(0.0, f32::max)
-}
-
-/// Returns the width of `text` in the body font, on one line.
-pub fn text_width(ui: &Ui, text: &str) -> f32 {
-    let font = FontSelection::Default.resolve(ui.style());
-    ui.fonts_mut(|fonts| {
-        fonts
-            .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
-            .size()
-            .x
-    })
 }
 
 /// Adds `button`, named `name` for assistive technology, and enabled while `enabled` is set.
@@ -953,14 +943,7 @@ pub fn add_button(ui: &mut Ui, enabled: bool, button: Button<'_>, name: &str) ->
 
 /// Returns the width of a small button showing `icon` alone, as [`icon_button`] adds it.
 pub fn icon_button_width(ui: &Ui, icon: &str) -> f32 {
-    let font = TextStyle::Button.resolve(ui.style());
-    let icon_width = ui.fonts_mut(|fonts| {
-        fonts
-            .layout_no_wrap(icon.to_owned(), font, Color32::PLACEHOLDER)
-            .size()
-            .x
-    });
-    icon_width + 2.0 * ui.spacing().button_padding.x
+    text_width(ui, icon, TextStyle::Button) + 2.0 * ui.spacing().button_padding.x
 }
 
 /// Adds a small button showing `icon` alone, named `name` and described by `tooltip`.
@@ -994,7 +977,7 @@ mod tests {
         Breakpoint, FormLayout, FormState, ISSUE_DELAY, IssueCount, MIN_LABEL_WIDTH, PLAN_PANEL_BREAKPOINT, Reveal,
         SectionHeading, SweepSection, heading_name, holds_back_issue,
     };
-    use crate::ui::sweep::draft::{DraftMode, DraftSite, GridAxis, IssueKind};
+    use crate::ui::sweep::draft::{DraftSite, ExploreMode, GridAxis, IssueKind};
 
     #[test]
     fn a_breakpoint_keeps_its_flag_between_its_two_widths() {
@@ -1111,26 +1094,26 @@ mod tests {
     #[test]
     fn an_issue_of_the_whole_sweep_belongs_to_the_design_or_the_search() {
         assert_eq!(
-            SweepSection::of_site(DraftSite::Sweep, DraftMode::Sweep),
+            SweepSection::of_site(DraftSite::Sweep, ExploreMode::Sweep),
             SweepSection::Design
         );
         assert_eq!(
-            SweepSection::of_site(DraftSite::Sweep, DraftMode::Search),
+            SweepSection::of_site(DraftSite::Sweep, ExploreMode::Search),
             SweepSection::Search
         );
         assert_eq!(
-            SweepSection::of_site(DraftSite::Seed, DraftMode::Sweep),
+            SweepSection::of_site(DraftSite::Seed, ExploreMode::Sweep),
             SweepSection::Seeds
         );
         assert_eq!(
-            SweepSection::of_site(DraftSite::Stop, DraftMode::Search),
+            SweepSection::of_site(DraftSite::Stop, ExploreMode::Search),
             SweepSection::RunLength
         );
     }
 
     #[test]
     fn each_new_site_belongs_to_the_section_that_draws_its_row() {
-        let section = |site| SweepSection::of_site(site, DraftMode::Sweep);
+        let section = |site| SweepSection::of_site(site, ExploreMode::Sweep);
         assert_eq!(section(DraftSite::Sampling), SweepSection::Outputs);
         assert_eq!(section(DraftSite::Outputs), SweepSection::Outputs);
         assert_eq!(section(DraftSite::DesignSeed), SweepSection::Seeds);
@@ -1147,21 +1130,21 @@ mod tests {
     #[test]
     fn a_reveal_of_the_whole_sweep_lands_on_the_first_section_of_its_mode() {
         assert_eq!(
-            Reveal::site(DraftSite::Sweep, DraftMode::Search),
+            Reveal::site(DraftSite::Sweep, ExploreMode::Search),
             Reveal {
                 section: SweepSection::Search,
                 site: Some(DraftSite::Search),
             }
         );
-        let design = Reveal::site(DraftSite::Sweep, DraftMode::Sweep);
+        let design = Reveal::site(DraftSite::Sweep, ExploreMode::Sweep);
         assert_eq!(design.site, Some(DraftSite::Design));
         assert_eq!(
-            design.in_mode(DraftMode::Search).section,
+            design.in_mode(ExploreMode::Search).section,
             SweepSection::Search,
             "a mode switch moves the reveal to the section drawn"
         );
         assert_eq!(
-            Reveal::section(SweepSection::Outputs).in_mode(DraftMode::Search),
+            Reveal::section(SweepSection::Outputs).in_mode(ExploreMode::Search),
             Reveal::section(SweepSection::Outputs)
         );
     }

@@ -5,6 +5,9 @@
 //! A reported value is therefore a few milliseconds stale, as the display texture already is.
 
 use std::mem::size_of;
+use std::ops::Range;
+
+use crate::snapshot::FireCounts;
 
 /// State of a stats readback after a poll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +18,17 @@ pub enum StatsPoll {
     Landed,
     /// No readback is in flight, and the latest one to finish failed and left the earlier values in place.
     Failed,
+}
+
+impl StatsPoll {
+    /// Returns the state of two readbacks taken together: pending while either is, then failed if either failed.
+    pub(crate) fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Pending, _) | (_, Self::Pending) => Self::Pending,
+            (Self::Failed, _) | (_, Self::Failed) => Self::Failed,
+            (Self::Landed, Self::Landed) => Self::Landed,
+        }
+    }
 }
 
 /// A GPU-side `u32` accumulator of `count` counters, plus the staging buffer used to read it back
@@ -31,6 +45,12 @@ pub struct CounterReadback {
     /// Whether the latest map to finish failed.
     failed: bool,
     values: Vec<u32>,
+    /// Tag of the latest copy into the staging buffer, given by [`Self::encode_copy_tagged`].
+    copy_tag: u64,
+    /// Tag of the copy the map in flight reads.
+    map_tag: u64,
+    /// Tag of the copy that [`Self::values`] holds.
+    values_tag: u64,
 }
 
 impl CounterReadback {
@@ -58,6 +78,9 @@ impl CounterReadback {
             copied: false,
             failed: false,
             values: vec![0; count],
+            copy_tag: 0,
+            map_tag: 0,
+            values_tag: 0,
         }
     }
 
@@ -75,6 +98,19 @@ impl CounterReadback {
         encoder.clear_buffer(&self.storage, 0, None);
     }
 
+    /// Clears the counters at `range` to zero, leaving the others. Record it before the pass that counts into them.
+    pub fn encode_clear_range(&self, encoder: &mut wgpu::CommandEncoder, range: std::ops::Range<usize>) {
+        let word = size_of::<u32>() as u64;
+        let end = range.end.min(self.values.len());
+        if range.start < end {
+            encoder.clear_buffer(
+                &self.storage,
+                range.start as u64 * word,
+                Some((end - range.start) as u64 * word),
+            );
+        }
+    }
+
     /// Copies the accumulated totals into the staging buffer. Record it after the model's
     /// reduce pass, in the same encoder, where wgpu inserts the barrier between the pass and the copy.
     ///
@@ -82,11 +118,20 @@ impl CounterReadback {
     /// mapped or pending a map is invalid. The sample is then dropped, and the stats repeat the older values with no
     /// error.
     pub fn encode_copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.encode_copy_tagged(encoder, 0);
+    }
+
+    /// Records the copy of [`Self::encode_copy`], and tags it with `tag`, which [`Self::values_tag`] returns once the
+    /// map of this copy lands.
+    ///
+    /// A copy skipped while a map is in flight leaves the tag of the copy before it.
+    pub(crate) fn encode_copy_tagged(&mut self, encoder: &mut wgpu::CommandEncoder, tag: u64) {
         if self.pending.is_some() {
             return;
         }
         encoder.copy_buffer_to_buffer(&self.storage, 0, &self.staging, 0, self.size());
         self.copied = true;
+        self.copy_tag = tag;
     }
 
     /// Starts the async map. Call it once, immediately after submitting the encoder that
@@ -96,11 +141,25 @@ impl CounterReadback {
             return;
         }
         self.copied = false;
+        self.map_tag = self.copy_tag;
         let (tx, rx) = flume::bounded(1);
         self.staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
             drop(tx.send(result));
         });
         self.pending = Some(rx);
+    }
+
+    /// Returns the accumulator's words, read through a staging buffer of their own and blocking on the GPU, or `None`
+    /// when the readback fails.
+    ///
+    /// The staging buffer of [`Self::begin_map`] and the values it holds are left alone.
+    pub(crate) fn read_blocking(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u32>> {
+        try_read_words(device, queue, &self.storage)
+    }
+
+    /// Returns the tag of the copy that [`Self::values`] holds, 0 before the first map lands.
+    pub(crate) fn values_tag(&self) -> u64 {
+        self.values_tag
     }
 
     /// Returns whether a map started by [`Self::begin_map`] has not been consumed yet.
@@ -162,6 +221,24 @@ impl CounterReadback {
         self.poll(device)
     }
 
+    /// Polls as [`Self::poll_blocking`] does when `block` holds, and as [`Self::poll`] does otherwise.
+    pub(crate) fn poll_or_block(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
+        if block {
+            self.poll_blocking(device)
+        } else {
+            self.poll(device)
+        }
+    }
+
+    /// Returns the counts of the fire range `fires` of the latest values, with the tag of their copy, or no counts
+    /// when the range is empty.
+    pub(crate) fn fire_counts(&self, fires: Range<usize>) -> FireCounts {
+        if fires.is_empty() {
+            return FireCounts::default();
+        }
+        FireCounts::new(self.values_tag, self.values.get(fires).unwrap_or_default().to_vec())
+    }
+
     fn status(&self) -> StatsPoll {
         if self.pending.is_some() {
             StatsPoll::Pending
@@ -203,6 +280,7 @@ impl CounterReadback {
         self.values.copy_from_slice(&words[..n]);
         drop(data);
         self.staging.unmap();
+        self.values_tag = self.map_tag;
 
         true
     }
@@ -217,6 +295,46 @@ impl CounterReadback {
     pub fn values_f32(&self) -> impl Iterator<Item = f32> + '_ {
         self.values.iter().copied().map(f32::from_bits)
     }
+}
+
+/// Returns the contents of `buffer` as raw words, blocking on the GPU until the copy lands.
+///
+/// `buffer` needs `COPY_SRC` usage. A parity test or an export calls this between steps, and the runner never does.
+///
+/// # Panics
+///
+/// Panics if the readback fails.
+pub(crate) fn read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Vec<u32> {
+    try_read_words(device, queue, buffer).expect("the GPU reads the buffer back")
+}
+
+/// Returns the contents of `buffer` as raw words, read through a staging buffer of their own and blocking on the GPU,
+/// or `None` when the readback fails.
+///
+/// `buffer` needs `COPY_SRC` usage.
+pub(crate) fn try_read_words(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer) -> Option<Vec<u32>> {
+    let size = buffer.size();
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("henad_gpu_buffer_readback"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(encoder.finish()));
+    let (tx, rx) = flume::bounded(1);
+    staging
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, move |result| drop(tx.send(result)));
+    // The wait runs the map's callback on native. A browser cannot wait, and the readback fails there.
+    device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+    rx.try_recv().ok()?.ok()?;
+    let words = bytemuck::cast_slice::<u8, u32>(&staging.slice(..).get_mapped_range().ok()?).to_vec();
+    staging.unmap();
+    Some(words)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -238,8 +356,7 @@ mod tests {
 
     #[test]
     fn a_completed_map_polls_as_landed() {
-        let Some(ctx) = headless_context("henad_readback_landed_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_completed_map_polls_as_landed: no adapter");
+        let Some(ctx) = headless_context("henad_readback_landed_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_landed_test", 3);
@@ -268,8 +385,7 @@ mod tests {
 
     #[test]
     fn a_failed_map_polls_as_failed_and_keeps_the_values() {
-        let Some(ctx) = headless_context("henad_readback_failed_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_failed_map_polls_as_failed_and_keeps_the_values: no adapter");
+        let Some(ctx) = headless_context("henad_readback_failed_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_failed_test", 3);
@@ -295,8 +411,7 @@ mod tests {
     /// would be a validation error.
     #[test]
     fn an_abandoned_map_leaves_the_next_readback_working() {
-        let Some(ctx) = headless_context("henad_readback_abandoned_test", wgpu::Features::empty()) else {
-            log::warn!("skipping an_abandoned_map_leaves_the_next_readback_working: no adapter");
+        let Some(ctx) = headless_context("henad_readback_abandoned_test") else {
             return;
         };
         let mut readback = CounterReadback::new(&ctx.device, "henad_readback_abandoned_test", 3);

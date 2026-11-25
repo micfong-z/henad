@@ -4,7 +4,8 @@ use crate::authoring::primitives::rng::mix_seed;
 use crate::explore::design_rng::DesignRng;
 use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot};
 use crate::explore::search::genome::SearchSpace;
-use crate::explore::search::{Candidate, Evaluation, Searcher};
+use crate::explore::search::{Aggregate, Candidate, Evaluation, Goal, Objective, Searcher};
+use crate::fnv::fnv1a64;
 use crate::params::ParamValue;
 
 /// Maximum number of asks that one drive makes before it gives up on the searcher finishing.
@@ -47,19 +48,53 @@ pub fn drive_batches(
         if batch.is_empty() {
             return asked;
         }
-        let evaluations: Vec<Evaluation> = batch
-            .iter()
-            .map(|candidate| Evaluation {
-                candidate_id: candidate.id,
-                outputs: (0..replicates)
-                    .map(|index| outputs(candidate, candidate.replicate_offset + index))
-                    .collect(),
-            })
-            .collect();
-        searcher.tell(&evaluations);
+        searcher.tell(&evaluate(&batch, replicates, &outputs));
         asked.push(batch);
     }
     panic!("the searcher was not done after {MAX_ASKS} asks");
+}
+
+/// Returns the evaluations of `batch`, each candidate with `replicates` replicates.
+///
+/// The replicate with index `replicate` reports `outputs(candidate, replicate)`, counting from the candidate's first
+/// replicate.
+pub fn evaluate(
+    batch: &[Candidate],
+    replicates: u64,
+    outputs: impl Fn(&Candidate, u64) -> Vec<Option<f64>>,
+) -> Vec<Evaluation> {
+    batch
+        .iter()
+        .map(|candidate| Evaluation {
+            candidate_id: candidate.id,
+            outputs: (0..replicates)
+                .map(|index| outputs(candidate, candidate.replicate_offset + index))
+                .collect(),
+        })
+        .collect()
+}
+
+/// Returns an objective over the column `Infected:max` with `goal` and `aggregate`.
+pub fn objective(goal: Goal, aggregate: Aggregate) -> Objective {
+    Objective {
+        column: "Infected:max".to_owned(),
+        goal,
+        aggregate,
+    }
+}
+
+/// Returns a hash of every candidate in `asked`: its id, its first replicate, its genes and its origin.
+pub fn trajectory_hash(asked: &[Candidate]) -> u64 {
+    let mut bytes = Vec::new();
+    for candidate in asked {
+        bytes.extend(candidate.id.to_le_bytes());
+        bytes.extend(candidate.replicate_offset.to_le_bytes());
+        for gene in candidate.genome.genes() {
+            bytes.extend(gene.to_bits().to_le_bytes());
+        }
+        bytes.extend(format!("{:?}", candidate.origin).bytes());
+    }
+    fnv1a64(&bytes)
 }
 
 /// Returns uniform noise in `[-0.5, 0.5)` for replicate `replicate` of candidate `candidate_id`.

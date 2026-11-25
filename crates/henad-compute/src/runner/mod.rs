@@ -2,6 +2,10 @@
 //!
 //! A loop says what work is due and when it next wants calling. A [`Driver`] decides how to wait:
 //! its own thread on native, the host's frame loop in a browser.
+//!
+//! A runner stops within a timeout. A loop handles its stop command only between two pumps, and a model step that
+//! never returns would hold the stopping thread for good. A thread that does not stop in time is detached, and
+//! [`RunnerShutdown::Detached`] returns its handle.
 
 use std::time::Duration;
 
@@ -32,6 +36,65 @@ pub const PUMP_BUDGET_MS: f64 = 6.0;
 /// It is longer than the interval while playing, since each publish copies the whole view.
 pub const RUN_TO_PUBLISH_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Most ticks a run to a tick samples its stats at before its target.
+///
+/// The samples travel in [`Snapshot::run_to_samples`]. Each sample on the device waits for a stats readback, so the
+/// count stays small whatever the length of the run.
+pub const MAX_RUN_TO_SAMPLES: u64 = 500;
+
+/// Evenly spaced ticks at which a run to a tick samples its stats, at most [`MAX_RUN_TO_SAMPLES`] of them.
+///
+/// The target itself is never a sample tick. The publish at the target covers it.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunToStride {
+    /// Number of ticks between two samples.
+    stride: u64,
+    /// Next tick to sample at.
+    next: u64,
+    /// Tick the run stops at.
+    target: u64,
+}
+
+impl RunToStride {
+    /// Returns the sample ticks of a run from `tick` to `target`.
+    pub(crate) fn new(tick: u64, target: u64) -> Self {
+        let stride = target.saturating_sub(tick).div_ceil(MAX_RUN_TO_SAMPLES).max(1);
+        Self {
+            stride,
+            next: tick.saturating_add(stride),
+            target,
+        }
+    }
+
+    /// Returns the number of steps from `tick` to the next sample tick, or `None` once no sample tick is left.
+    pub(crate) fn steps_to_next(&self, tick: u64) -> Option<u64> {
+        (self.next < self.target).then(|| self.next.saturating_sub(tick))
+    }
+
+    /// Returns whether `tick` is due for a sample, and moves on to the next sample tick when it is.
+    pub(crate) fn take_due(&mut self, tick: u64) -> bool {
+        if tick < self.next || tick >= self.target {
+            return false;
+        }
+        self.next = tick.saturating_add(self.stride);
+        true
+    }
+}
+
+/// Returns the target rate of a capped run, 1 tick per second for a rate that is not finite and positive.
+pub(crate) fn capped_tps(target_tps: f64) -> f64 {
+    if target_tps.is_finite() && target_tps > 0.0 {
+        target_tps
+    } else {
+        1.0
+    }
+}
+
+/// Returns the wall-clock time `steps` take at the capped rate of `target_tps`.
+pub(crate) fn capped_interval(target_tps: f64, steps: u32) -> Duration {
+    Duration::from_secs_f64(f64::from(steps) / capped_tps(target_tps))
+}
+
 /// Longest time one publish may spend preparing its view, including a network's layout.
 ///
 /// In a browser, the view is prepared inside the frame pump, so going past the pump's budget stalls the frame.
@@ -41,6 +104,36 @@ pub const MAX_VIEW_BUDGET_MS: f32 = PUMP_BUDGET_MS as f32;
 /// Longest time one publish may spend preparing its view, including a network's layout.
 #[cfg(not(target_arch = "wasm32"))]
 pub const MAX_VIEW_BUDGET_MS: f32 = f32::INFINITY;
+
+/// Time a runner's drop waits for its thread to stop before it detaches the thread.
+///
+/// A stop waits for the pump in progress, one batch of steps. A batch longer than this is rare at interactive
+/// scale.
+pub const DEFAULT_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Outcome of stopping a runner within a timeout.
+#[derive(Debug)]
+pub enum RunnerShutdown {
+    /// The loop stopped, and its thread, where it has one, was joined.
+    Joined,
+    /// The thread did not stop within the timeout. It runs on, detached, and stops once its pump returns.
+    Detached(DetachedRunner),
+}
+
+/// Thread of a runner that did not stop within its timeout.
+///
+/// Dropping it leaves the thread running. The browser's frame driver has no thread, and never returns one.
+#[derive(Debug)]
+pub struct DetachedRunner {
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl DetachedRunner {
+    /// Returns whether the thread has finished since it was detached.
+    pub fn is_finished(&self) -> bool {
+        self.handle.is_finished()
+    }
+}
 
 /// Next pump that a loop requests after one [`SimLoop::pump`].
 #[derive(Debug)]
@@ -136,8 +229,54 @@ pub fn claim_spare(slot: &SharedSlot) -> Option<Snapshot> {
 }
 
 /// Passes a freshly built snapshot to the slot.
-pub fn publish(slot: &SharedSlot, snapshot: Snapshot) {
+///
+/// The samples of a publish the host has not taken move to the front of `snapshot`'s samples.
+pub fn publish(slot: &SharedSlot, mut snapshot: Snapshot) {
     if let Ok(mut slot) = slot.lock() {
+        if let Some(untaken) = slot.fresh.as_mut()
+            && !untaken.run_to_samples.is_empty()
+        {
+            untaken.run_to_samples.append(&mut snapshot.run_to_samples);
+            std::mem::swap(&mut untaken.run_to_samples, &mut snapshot.run_to_samples);
+        }
         slot.spare = slot.fresh.replace(snapshot);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{capped_interval, capped_tps};
+    use std::time::Duration;
+
+    /// Batching must not multiply the tick rate by the batch size.
+    #[test]
+    fn batching_does_not_change_effective_tick_rate() {
+        for &tps in &[1.0, 30.0, 250.0, 1000.0] {
+            for &batch in &[1, 2, 10, 137, 1000] {
+                let interval = capped_interval(tps, batch).as_secs_f64();
+                let effective = f64::from(batch) / interval;
+                // A `Duration` holds whole nanoseconds, and the shortest interval here is a millisecond.
+                assert!(
+                    (effective - tps).abs() < tps * 1e-6,
+                    "tps {tps}, batch {batch}: effective {effective}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn interval_is_batch_size_over_tps() {
+        assert_eq!(capped_interval(30.0, 10), Duration::from_secs_f64(1.0 / 3.0));
+        assert_eq!(capped_interval(60.0, 1), Duration::from_secs_f64(1.0 / 60.0));
+    }
+
+    /// Guards against a `Duration::from_secs_f64` panic on a degenerate target rate.
+    #[test]
+    fn non_positive_tps_yields_a_finite_interval() {
+        for &tps in &[0.0, -5.0, f64::NAN, f64::INFINITY] {
+            let capped = capped_tps(tps);
+            assert!(capped.is_finite() && capped > 0.0, "tps {tps} gave {capped}");
+            assert!(capped_interval(tps, 4) > Duration::ZERO);
+        }
     }
 }

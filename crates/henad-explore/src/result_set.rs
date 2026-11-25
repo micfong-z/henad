@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::BTreeSet;
 use std::fmt;
-use std::io::{self, BufRead};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use henad_core::explore::fingerprint::schema_hash;
@@ -21,21 +23,23 @@ use henad_core::explore::search::SearchSpecError;
 use henad_core::explore::spec::SweepSpec;
 
 use henad_core::explore::value::parse_value;
+use henad_core::provenance::{ModelCode, ModelSource};
 
-use crate::output::manifest::{BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, RecordedBuild};
-use crate::output::read::{ReadError, parse_one, record_ends};
+use crate::output::manifest::{
+    BuildRole, Manifest, ManifestError, ManifestMode, ManifestModelCode, ManifestStatus, RecordedBuild, hex, parse_hex,
+};
+use crate::output::read::{CompleteRecords, ReadError, parse_one};
 use crate::output::runs_csv::{ID_COLUMNS, NOTE_COLUMN, OUTCOME_COLUMNS};
 use crate::output::search_tables::{
     ARCHIVE_ID_COLUMNS, EVALUATION_ID_COLUMNS, GENERATION_COLUMNS, OBJECTIVE_BATCH_COLUMNS, PATTERN_BATCH_COLUMNS,
     RANKING_ID_COLUMNS, SearchHistory,
 };
-use crate::output::series_csv::SERIES_ID_COLUMNS;
+use crate::output::series_csv::{SERIES_ID_COLUMNS, SERIES_TIME_COLUMN};
 use crate::output::{
     ARCHIVE_FILE, BATCHES_FILE, BEST_FILE, EVALUATIONS_FILE, GENERATIONS_FILE, MANIFEST_FILE, RUNS_FILE, SERIES_FILE,
 };
 use crate::search_run::{SearchPlan, SearchPlanError};
 use crate::spec_file::{SpecFile, SpecFileError};
-use crate::sweep::hex;
 
 /// Results of one sweep, read from an output directory or from its files' bytes.
 #[derive(Debug, Clone)]
@@ -224,28 +228,17 @@ impl ResultSet {
     ///
     /// Returns [`ResultSetError::Table`] when `series` cannot be read, its header does not list the manifest's stat
     /// columns, or a row is not one the sweep writes.
-    fn read_series(
-        &mut self,
-        mut series: impl BufRead,
-        path: &Path,
-        series_budget: usize,
-    ) -> Result<(), ResultSetError> {
+    fn read_series(&mut self, series: impl BufRead, path: &Path, series_budget: usize) -> Result<(), ResultSetError> {
         let width = self.stat_columns.len();
         let row_bytes = (width + 1) * size_of::<f64>();
-        let mut line = Vec::new();
-        if !read_line(&mut series, &mut line, path)? {
+        let Some(mut rows) = SeriesRows::open(series, path, &self.stat_columns)? else {
             self.mark_series_missing();
             return Ok(());
-        }
-        check_series_header(&line, &self.stat_columns, path)?;
+        };
         let mut budget_spent = false;
-        let mut values = Vec::with_capacity(width);
-        let mut record_number = 1;
         // Position of the run the last row went to. Its series is trimmed to its rows once another run's rows start.
         let mut last_position = None;
-        while read_line(&mut series, &mut line, path)? {
-            record_number += 1;
-            let (run_id, tick) = parse_series_row(&line, width, &mut values, path, record_number)?;
+        while let Some(SeriesRow { run_id, tick, values }) = rows.next_row()? {
             let Some(&position) = self.positions.get(&run_id) else {
                 continue;
             };
@@ -268,7 +261,7 @@ impl ResultSet {
                 continue;
             }
             self.series_bytes += row_bytes;
-            run.outcome.series.push(tick, &values);
+            run.outcome.series.push(tick, values);
         }
         if let Some(last) = last_position {
             self.runs[last].outcome.series.shrink_to_fit();
@@ -356,6 +349,24 @@ impl ResultSet {
         schema.id == self.manifest.model.id && hex(schema_hash(&schema)) == self.manifest.model.schema_hash
     }
 
+    /// Returns whether `source` runs the code that every session of the folder ran its runs with, the condition a
+    /// resume of the folder sets when either code is runtime code.
+    ///
+    /// Always `true` while the folder and `source` hold compiled code alone. A compiled build that changed shows in
+    /// [`Self::recorded_builds`] instead. [`Manifest::code_matches`] makes the same comparison.
+    pub fn code_matches(&self, source: &ModelSource) -> bool {
+        self.manifest.code_matches(source)
+    }
+
+    /// Returns the author text the manifest records, the canonical text of the sheet a model was built from, or `None`
+    /// for a model built from its code alone.
+    ///
+    /// The model's own code is the manifest's [`ManifestModel::code`](crate::output::manifest::ManifestModel::code),
+    /// and a replay runs that code with no author text.
+    pub fn author(&self) -> Option<ModelCode> {
+        self.manifest.model.author.as_ref().map(ManifestModelCode::to_code)
+    }
+
     /// Plans the recorded spec against `schema`.
     ///
     /// # Errors
@@ -415,7 +426,7 @@ impl ResultSet {
             params: schema
                 .params
                 .iter()
-                .map(|descriptor| parse_value(&descriptor.kind, value_of(descriptor.id)?).ok())
+                .map(|descriptor| parse_value(descriptor.kind(), value_of(descriptor.id())?).ok())
                 .collect::<Option<_>>()
                 .ok_or_else(mismatch)?,
             action_ticks: actions
@@ -533,24 +544,17 @@ pub fn read_directory_series(
             source,
         })
     })?;
-    let mut lines = io::BufReader::new(file);
     let mut read = DirectorySeries::default();
     let stat_width = stat_columns.len();
     let row_bytes = (stat_width + 1) * size_of::<f64>();
     let mut series_bytes = 0;
     let mut budget_spent = false;
-    let mut line = Vec::new();
-    let mut values = Vec::with_capacity(stat_width);
-    let mut record_number = 1;
     // Run the last row went to. Its series is trimmed to its rows once another run's rows start.
     let mut last_run = None;
-    if !read_line(&mut lines, &mut line, &path)? {
+    let Some(mut rows) = SeriesRows::open(io::BufReader::new(file), &path, stat_columns)? else {
         return Ok(read);
-    }
-    check_series_header(&line, stat_columns, &path)?;
-    while read_line(&mut lines, &mut line, &path)? {
-        record_number += 1;
-        let (run_id, tick) = parse_series_row(&line, stat_width, &mut values, &path, record_number)?;
+    };
+    while let Some(SeriesRow { run_id, tick, values }) = rows.next_row()? {
         if !run_ids.contains(&run_id) || read.dropped_runs.contains(&run_id) {
             continue;
         }
@@ -572,7 +576,7 @@ pub fn read_directory_series(
         read.series
             .entry(run_id)
             .or_insert_with(|| SeriesBuffer::new(stat_width))
-            .push(tick, &values);
+            .push(tick, values);
     }
     if let Some(series) = last_run.and_then(|last| read.series.get_mut(&last)) {
         series.shrink_to_fit();
@@ -611,12 +615,21 @@ fn picked_table(name: &str, bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// Checks that `line`, the header line of the `series.csv` at `path`, lists the id columns and then `stat_columns`.
-fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<(), ResultSetError> {
+/// Checks that `line`, the header line of the `series.csv` at `path`, lists the id columns, the `time` column of a
+/// model with a time scale, and then `stat_columns`.
+///
+/// Returns whether the header holds the `time` column. A header one column wider than the ids and the stats, with
+/// `time` after the ids, holds it, so a stat labelled `time` still reads in a header without one.
+fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Result<bool, ResultSetError> {
     let table_error = ResultSetError::Table;
     let text = String::from_utf8_lossy(line);
-    let header = parse_one(&text, 0..text.len(), path, 1).map_err(table_error)?;
+    let mut header = parse_one(&text, 0..text.len(), path, 1).map_err(table_error)?;
     let expected = SERIES_ID_COLUMNS.len() + stat_columns.len();
+    let timed = header.len() == expected + 1
+        && header.get(SERIES_ID_COLUMNS.len()).map(String::as_str) == Some(SERIES_TIME_COLUMN);
+    if timed {
+        header.remove(SERIES_ID_COLUMNS.len());
+    }
     if header.len() != expected {
         return Err(table_error(ReadError::FieldCount {
             path: path.to_owned(),
@@ -644,7 +657,77 @@ fn check_series_header(line: &[u8], stat_columns: &[String], path: &Path) -> Res
             }));
         }
     }
-    Ok(())
+    Ok(timed)
+}
+
+/// One row of a `series.csv`.
+struct SeriesRow<'r> {
+    run_id: u64,
+    tick: u64,
+    values: &'r [f64],
+}
+
+/// Complete rows of a `series.csv`, read one at a time after its header is checked.
+struct SeriesRows<'p, R> {
+    lines: R,
+    path: &'p Path,
+    /// Whether the rows hold a `time` field after the tick.
+    timed: bool,
+    width: usize,
+    line: Vec<u8>,
+    values: Vec<f64>,
+    record_number: usize,
+}
+
+impl<'p, R: BufRead> SeriesRows<'p, R> {
+    /// Reads the header of `lines`, the `series.csv` at `path`, and checks that it lists `stat_columns`.
+    ///
+    /// Returns `None` for a file without a complete header line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResultSetError::Table`] when `lines` cannot be read or its header does not list `stat_columns`.
+    fn open(mut lines: R, path: &'p Path, stat_columns: &[String]) -> Result<Option<Self>, ResultSetError> {
+        let mut line = Vec::new();
+        if !read_line(&mut lines, &mut line, path)? {
+            return Ok(None);
+        }
+        let timed = check_series_header(&line, stat_columns, path)?;
+        Ok(Some(Self {
+            lines,
+            path,
+            timed,
+            width: stat_columns.len(),
+            line,
+            values: Vec::with_capacity(stat_columns.len()),
+            record_number: 1,
+        }))
+    }
+
+    /// Reads the next complete row, or returns `None` past the last one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ResultSetError::Table`] when the file cannot be read or the row is not one a sweep writes.
+    fn next_row(&mut self) -> Result<Option<SeriesRow<'_>>, ResultSetError> {
+        if !read_line(&mut self.lines, &mut self.line, self.path)? {
+            return Ok(None);
+        }
+        self.record_number += 1;
+        let (run_id, tick) = parse_series_row(
+            &self.line,
+            self.timed,
+            self.width,
+            &mut self.values,
+            self.path,
+            self.record_number,
+        )?;
+        Ok(Some(SeriesRow {
+            run_id,
+            tick,
+            values: &self.values,
+        }))
+    }
 }
 
 /// Reads the next complete line of `lines` into `line`, and returns whether there was a complete line.
@@ -664,9 +747,13 @@ fn read_line(lines: &mut impl BufRead, line: &mut Vec<u8>, path: &Path) -> Resul
 /// Reads the run id, tick and `width` values of the series row `line` into `values`, an empty cell as a value that is
 /// not finite.
 ///
+/// `timed` says the row holds a `time` field after the tick. The field is checked as a number and left out, since a
+/// run's time follows from its ticks and its tick length.
+///
 /// Returns the run id and the tick.
 fn parse_series_row(
     line: &[u8],
+    timed: bool,
     width: usize,
     values: &mut Vec<f64>,
     path: &Path,
@@ -689,6 +776,13 @@ fn parse_series_row(
     };
     let run_id = number("run_id")?;
     let tick = number("tick")?;
+    let id_fields = SERIES_ID_COLUMNS.len() + usize::from(timed);
+    if timed {
+        let field = fields.next().unwrap_or_default();
+        if !field.is_empty() && field.parse::<f64>().is_err() {
+            return Err(bad_field(SERIES_TIME_COLUMN, field));
+        }
+    }
     values.clear();
     for field in fields {
         let value = if field.is_empty() {
@@ -702,8 +796,8 @@ fn parse_series_row(
         return Err(ResultSetError::Table(ReadError::FieldCount {
             path: path.to_owned(),
             record_number,
-            found: values.len() + 2,
-            expected: width + 2,
+            found: values.len() + id_fields,
+            expected: width + id_fields,
         }));
     }
     Ok((run_id, tick))
@@ -721,42 +815,23 @@ struct RunsColumnNames {
 /// first run.
 fn read_runs(bytes: &[u8], path: &Path, width: usize) -> Result<(RunsColumnNames, Vec<RunRow>), ResultSetError> {
     let table_error = ResultSetError::Table;
-    let ends = record_ends(bytes);
-    let complete = ends.last().copied().unwrap_or(0);
-    let text = std::str::from_utf8(&bytes[..complete]).map_err(|error| {
-        table_error(ReadError::Io {
-            path: path.to_owned(),
-            source: io::Error::new(io::ErrorKind::InvalidData, error),
-        })
-    })?;
-    let Some((&header_end, record_ends)) = ends.split_first() else {
+    let Some(complete) = CompleteRecords::read(bytes, path).map_err(table_error)? else {
         let columns = RunsColumnNames {
             value_columns: Vec::new(),
             reducer_columns: Vec::new(),
         };
         return Ok((columns, Vec::new()));
     };
-    let header = parse_one(text, 0..header_end, path, 1).map_err(table_error)?;
-    let column_positions = RunsColumnPositions::find(&header, path).map_err(table_error)?;
-    let mut records = Vec::with_capacity(record_ends.len());
-    let mut start = header_end;
-    for (index, &end) in record_ends.iter().enumerate() {
-        let record_number = index + 2;
-        let fields = parse_one(text, start..end, path, record_number).map_err(table_error)?;
-        if fields.len() != header.len() {
-            return Err(table_error(ReadError::FieldCount {
-                path: path.to_owned(),
-                record_number,
-                found: fields.len(),
-                expected: header.len(),
-            }));
-        }
+    let header = &complete.header;
+    let column_positions = RunsColumnPositions::find(header, path).map_err(table_error)?;
+    let mut records = Vec::with_capacity(complete.record_count());
+    for record in complete.records() {
+        let (record_number, fields, _) = record.map_err(table_error)?;
         records.push(
             column_positions
-                .record(&header, &fields, width, path, record_number)
+                .record(header, &fields, width, path, record_number)
                 .map_err(table_error)?,
         );
-        start = end;
     }
     let columns = RunsColumnNames {
         value_columns: header[column_positions.values.clone()].to_vec(),
@@ -844,7 +919,7 @@ impl RunsColumnPositions {
                 rep: integer(3)?,
                 seed: integer(4)?,
             },
-            run_key: u64::from_str_radix(&fields[5], 16).ok().ok_or_else(|| bad_field(5))?,
+            run_key: parse_hex(&fields[5]).ok_or_else(|| bad_field(5))?,
             status: fields[status].parse().ok().ok_or_else(|| bad_field(status))?,
             stop_reason: fields[status + 1].parse().ok().ok_or_else(|| bad_field(status + 1))?,
             ticks: integer(status + 2)?,
@@ -936,8 +1011,8 @@ pub enum ResultReplayError {
 impl fmt::Display for ResultReplayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Plan(_) | Self::Search(_) => f.write_str("the model refuses the spec of these results"),
-            Self::UnknownRun { run_id } => write!(f, "the results hold no run {run_id}"),
+            Self::Plan(_) | Self::Search(_) => f.write_str("the model rejects the spec of these results"),
+            Self::UnknownRun { run_id } => write!(f, "the results have no run {run_id}"),
             Self::Mismatch { run_id } => write!(f, "run {run_id} of the results does not match its plan"),
         }
     }
@@ -970,7 +1045,7 @@ mod tests {
     fn value_of(replay: &Replay, params: &[ParamDescriptor], id: &str) -> ParamValue {
         let position = params
             .iter()
-            .position(|param| param.id == id)
+            .position(|param| param.id() == id)
             .expect("the schema has the parameter");
         replay.params[position].clone()
     }
@@ -1017,7 +1092,12 @@ mod tests {
 
         // A later version of the model lists its two rates the other way round.
         let mut params = schema.params.to_vec();
-        let position = |id: &str| params.iter().position(|param| param.id == id).expect("a SIR parameter");
+        let position = |id: &str| {
+            params
+                .iter()
+                .position(|param| param.id() == id)
+                .expect("a SIR parameter")
+        };
         let (infection, recovery) = (position("infection_rate"), position("recovery_rate"));
         params.swap(infection, recovery);
         let reordered = ModelSchema {

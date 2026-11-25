@@ -1,12 +1,14 @@
 name: CI
 
-# No job reads the root README. The facade's README is compiled, and the guide includes the template's.
+# Two tiers. A push to any branch, and a pull request from a fork, run the quick tier: the jobs its change needs, and
+# the tests less the slow ones that `scripts/slow_tests.txt` lists. The nightly schedule and a dispatch run the full
+# tier: every job and every test. The release checklist dispatches it, and `scripts/ci_tiers.py` holds both tiers.
 on:
   push:
-    branches: [master]
-    paths-ignore: [README.md]
+    branches: ['**']
   pull_request:
-    paths-ignore: [README.md]
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 # Each event takes a group of its own. A push to `master` and the release checklist's dispatch on it would otherwise
@@ -19,8 +21,77 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decides which jobs run. `full` turns on every job. `rust` turns on the workspace's jobs, and is off for a change
+  # that only the docs site reads. A night with no new commit on `master` runs nothing, and a pull request from a branch
+  # of this repository runs nothing, since its push already ran.
+  scope:
+    name: scope
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      rust: ${{ steps.scope.outputs.rust }}
+      manifests: ${{ steps.scope.outputs.manifests }}
+      ports: ${{ steps.scope.outputs.ports }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          everything() {
+            printf 'full=%s\nrust=true\nmanifests=true\nports=true\n' "$1" >> "$GITHUB_OUTPUT"
+          }
+          case "$EVENT" in
+            schedule)
+              last="$(gh run list --workflow ci.yml --event schedule --status success --limit 1 \
+                --json headSha --jq '.[0].headSha // ""')"
+              if [ "$last" = "$GITHUB_SHA" ]; then
+                echo "No commit since the last nightly run."
+                exit 0
+              fi
+              everything true
+              exit 0
+              ;;
+            workflow_dispatch)
+              everything true
+              exit 0
+              ;;
+            pull_request)
+              if [ "$PR_REPO" = "$GITHUB_REPOSITORY" ]; then
+                echo "The push of this branch already ran."
+                exit 0
+              fi
+              base="$PR_BASE"
+              ;;
+            *)
+              base="$BEFORE"
+              # A new branch has no previous commit, and compares with master.
+              if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+                base=master
+              fi
+              ;;
+          esac
+          # A base that cannot be fetched, such as one a force-push dropped, runs every quick job.
+          if ! git fetch --no-tags --depth=1 origin "$base"; then
+            everything false
+            exit 0
+          fi
+          git diff --name-only FETCH_HEAD HEAD | tee "$RUNNER_TEMP/changed.txt"
+          echo full=false >> "$GITHUB_OUTPUT"
+          python3 scripts/ci_tiers.py scope < "$RUNNER_TEMP/changed.txt" | tee -a "$GITHUB_OUTPUT"
+
   lint:
     name: fmt + clippy + wasm + licenses
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -45,9 +116,9 @@ jobs:
       # Without atomics, so a `std::thread` reaching the web build fails here. henad-app then has
       # no thread pool, as docs.rs builds it, and the `web` job builds it the way it actually ships.
       - name: wasm typecheck
-        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
+        run: cargo check --locked -p henad-core -p henad-compute -p henad-models -p henad-graph -p henad-explore -p henad-app --all-features --lib --target wasm32-unknown-unknown
 
-      # The facade with no feature and with all four, without atomics, as docs.rs builds it. henad-cli sits behind a
+      # The facade with no feature and with all five, without atomics, as docs.rs builds it. henad-cli sits behind a
       # native target gate and never joins.
       - name: Facade wasm typecheck
         run: |
@@ -114,6 +185,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -121,13 +194,17 @@ jobs:
         include:
           - os: ubuntu-24.04
             require_gpu: "1"
+            python: python3
           - os: macos-15
             require_gpu: "1"
+            python: python3
           # In-box WARP shows up as a dx12 adapter at full default limits, no Agility SDK needed.
           - os: windows-2025
             require_gpu: "1"
+            python: python
     env:
       HENAD_REQUIRE_GPU: ${{ matrix.require_gpu }}
+      TIER: ${{ needs.scope.outputs.full == 'true' && 'full' || 'quick' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -152,17 +229,27 @@ jobs:
         run: cargo run --locked -p henad-cli -- --info
 
       - name: Test
-        run: cargo test --locked --workspace --all-targets --all-features
+        run: ${{ matrix.python }} scripts/ci_tiers.py test ${{ env.TIER }}
 
+      # Every line of the slow list skips exactly one test. A renamed test would otherwise leave both tiers.
+      - name: Slow list matches the tests
+        if: runner.os == 'Linux'
+        run: python3 scripts/ci_tiers.py check
+
+      # The quick tier runs the doc tests on Linux alone. They depend on no platform, and the facade's builds again.
       - name: Doc tests
+        if: env.TIER == 'full' || runner.os == 'Linux'
         run: cargo test --locked --workspace --doc
 
       # The README program. The workspace's doc tests turn on neither feature and compile the short crate doc alone.
       - name: Facade doc test
+        if: env.TIER == 'full' || runner.os == 'Linux'
         run: cargo test --locked -p henad --doc --features example-models,app
 
   ports:
     name: reference ports build
+    needs: scope
+    if: needs.scope.outputs.ports == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -213,6 +300,8 @@ jobs:
 
   web:
     name: trunk build
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -246,12 +335,13 @@ jobs:
           grep -q initThreadPool dist/henad-app.js
           ls dist/snippets/wasm-bindgen-rayon-*/src/workerHelpers.no-bundler.js
 
-  # The template, built against the crates as cargo packages them, in a copy outside any git work tree. The release
-  # checklist starts it before a publish. The wasm32 steps run on the template as shipped, `gpu_vote` included, before
+  # The template, built against the crates as cargo packages them, in a copy outside any git work tree. The full tier
+  # runs it, and the release checklist dispatches it before a publish. The wasm32 steps run on the template as shipped, `gpu_vote` included, before
   # any step changes the copy.
   downstream:
     name: downstream template
-    if: github.event_name == 'workflow_dispatch'
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-24.04
     # The steps grep cargo's log for a status word and a crate name together. A colour code would sit between them.
     env:
@@ -282,7 +372,7 @@ jobs:
         run: |
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify" cargo package --workspace --exclude henad-tutorial --locked
           CARGO_TARGET_DIR="$RUNNER_TEMP/verify-features" cargo package --workspace --exclude henad-tutorial --locked \
-            --features henad/example-models,henad/app,henad/cli,henad/testing
+            --features henad/example-models,henad/app,henad/cli,henad/testing,henad/model-files
           # The later steps read only the unpacked crates under `verify/package`. The two builds would hold several
           # gigabytes of the runner's disk while the template builds.
           rm -rf "$RUNNER_TEMP/verify/debug" "$RUNNER_TEMP/verify-features"
@@ -300,7 +390,7 @@ jobs:
           {
             echo
             echo "[patch.crates-io]"
-            for crate in henad henad-build henad-core henad-compute henad-explore henad-app henad-cli; do
+            for crate in henad henad-build henad-core henad-compute henad-graph henad-explore henad-app henad-cli; do
               echo "$crate = { path = \"$RUNNER_TEMP/verify/package/$crate-$version\" }"
             done
           } >> Cargo.toml
@@ -426,36 +516,24 @@ jobs:
           fi
           test "$(tail -n +2 "$RUNNER_TEMP/sweep/runs.csv" | wc -l)" -eq 4
 
-  # Packages every crate without building it, which catches a manifest that cargo refuses.
+  # Packages every crate without building it, which catches a manifest that cargo rejects. A change to a manifest or
+  # the lock runs it.
   package:
     name: cargo package
-    if: github.event_name == 'pull_request'
+    needs: scope
+    if: needs.scope.outputs.manifests == 'true'
     runs-on: ubuntu-24.04
-    # The paths filter lists a pull request's files through the REST API, which needs `pull-requests: read`.
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dorny/paths-filter@v3
-        id: manifests
-        with:
-          filters: |
-            changed:
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'crates/*/Cargo.toml'
-
       - name: Package
-        if: steps.manifests.outputs.changed == 'true'
         run: cargo package --workspace --exclude henad-tutorial --no-verify --locked
 
-  # Every feature of the facade builds alone, so none leans on another for an item it names. A pull request and the
-  # release checklist's dispatch run it.
+  # Every feature of the facade builds alone, so none leans on another for an item it names.
   features:
     name: facade features
-    if: github.event_name != 'push'
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -473,14 +551,15 @@ jobs:
       - name: Check
         run: |
           cargo check --locked -p henad
-          for feature in example-models app cli testing; do
+          for feature in example-models app cli testing model-files; do
             cargo check --locked -p henad --features "$feature"
           done
 
-  # Holds the declared `rust-version` true. A pull request and the release checklist's dispatch run it.
+  # Holds the declared `rust-version` true.
   msrv:
     name: msrv
-    if: github.event_name != 'push'
+    needs: scope
+    if: needs.scope.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -502,13 +581,13 @@ jobs:
       - name: Check
         run: |
           cargo +1.95 check --workspace --locked
-          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing
+          cargo +1.95 check --locked -p henad --features example-models,app,cli,testing,model-files
 
-  # The workspace's documentation, and every published crate's as docs.rs builds it. A pull request and the release
-  # checklist's dispatch run it.
+  # The workspace's documentation, and every published crate's as docs.rs builds it. The full tier runs it.
   docs:
     name: docs
-    if: github.event_name != 'push'
+    needs: scope
+    if: needs.scope.outputs.full == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5

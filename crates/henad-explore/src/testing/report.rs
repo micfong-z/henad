@@ -252,13 +252,13 @@ impl fmt::Display for SetReport {
         if !self.unknown_models.is_empty() {
             write!(
                 f,
-                " The settings name {} the set lacks.",
+                " The settings name {} missing from the set.",
                 models(self.unknown_models.len())
             )?;
         }
         writeln!(f)?;
         for id in &self.unknown_models {
-            writeln!(f, "The settings name model '{id}', which the set lacks.")?;
+            writeln!(f, "Model '{id}' in the settings is missing from the set.")?;
         }
         for report in &self.reports {
             write!(f, "{report}")?;

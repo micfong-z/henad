@@ -10,12 +10,11 @@ use henad_compute::fault::{BUILDING, Fault, install_panic_hook};
 use henad_compute::gpu::{GpuContext, GpuSimState, StatsPoll, stepping};
 use henad_compute::snapshot::GpuSnapshot;
 use henad_core::action::Fire;
-use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason};
 use henad_core::explore::plan::Plan;
-use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
+use henad_core::explore::spec::{ActionSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
 use henad_core::metadata::Backend;
 use henad_core::model::SimState;
@@ -23,13 +22,13 @@ use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
 use henad_models::example_models;
 
-use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionLayout, Executor, RunRequest, SweepControl};
+use crate::exec::{ActiveRuns, BatchEnd, ExecutionLayout, Executor, RunRequest, SweepControl};
 use crate::output::manifest::ManifestStatus;
 use crate::progress::NoProgress;
 use crate::sweep::{SweepEnd, SweepOptions};
 use crate::tests::support::{
-    Collected, ONE_TRACK, OutputTables, ScratchDir, entry, headless_device, manifest, planned, sweep, sweep_options,
-    sweep_with, ticks_seen, tracks,
+    Collected, ONE_TRACK, OutputTables, ScratchDir, assert_covers, entry, factorial, fixed, headless_device,
+    lane_count, manifest, planned, run_batch, sweep, sweep_options, sweep_with, ticks_seen, tracks, untimed, values,
 };
 
 /// Fault a [`HarnessState`] injects at a tick.
@@ -56,6 +55,8 @@ struct Misbehavior {
     readback_delay: u32,
     /// Whether every action is rejected.
     refuses_actions: bool,
+    /// Steps a submission holds once the first step has run, one before, in place of the steps of the wrapped state.
+    submission_steps: Option<u32>,
 }
 
 /// Counts over every state that an entry from [`instrument`] built.
@@ -71,6 +72,8 @@ struct StateCounts {
     refused_actions: AtomicUsize,
     /// Tick that each state had recorded steps to when it was dropped.
     final_ticks: Mutex<Vec<u64>>,
+    /// Steps of each call that recorded any, over every state.
+    chunks: Mutex<Vec<u32>>,
 }
 
 /// GPU state that forwards to the state of a real model, and misbehaves as its [`Misbehavior`] specifies.
@@ -135,6 +138,19 @@ impl GpuSimState for HarnessState {
         }
         self.state.encode_steps(encoder, count, timestamps);
         self.counts.highest_tick.fetch_max(end, Ordering::Relaxed);
+        if count > 0
+            && let Ok(mut chunks) = self.counts.chunks.lock()
+        {
+            chunks.push(count);
+        }
+    }
+
+    fn submission_steps(&mut self, block: bool) -> u32 {
+        match self.misbehavior.submission_steps {
+            Some(_) if self.state.tick() == 0 => 1,
+            Some(steps) => steps,
+            None => self.state.submission_steps(block),
+        }
     }
 
     fn encode_action(&mut self, encoder: &mut wgpu::CommandEncoder, index: usize) -> bool {
@@ -231,19 +247,9 @@ fn instrument(
 
 /// Runs every run of `plan` on `executor`, and returns the outcomes with their timing zeroed.
 fn outcomes(executor: &Executor<'_>, plan: &Plan) -> Vec<RunOutcome> {
-    let requests: Vec<RunRequest<'_>> = plan.runs().map(|run| RunRequest::planned(plan, run)).collect();
     let mut collected = Collected::default();
-    let end = executor.run_batch(&requests, &mut collected).expect("the batch runs");
-    assert_eq!(end, BatchEnd::Complete);
-    collected
-        .0
-        .into_iter()
-        .map(|outcome| RunOutcome {
-            build_ms: 0.0,
-            wall_ms: 0.0,
-            ..outcome
-        })
-        .collect()
+    run_batch(executor, plan, &mut collected);
+    collected.0.iter().map(untimed).collect()
 }
 
 /// Returns the executor of `model` over `measure` on `layout`.
@@ -256,37 +262,17 @@ fn executor<'e>(
     Executor::new(model, Some(ctx), Arc::clone(measure), layout, SweepControl::new()).expect("a device")
 }
 
-fn fixed_values(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
-
-/// Returns a block of every combination of `factors`.
-fn factorial(factors: Vec<FactorSpec>) -> BlockSpec {
-    BlockSpec {
-        design: DesignKind::Factorial,
-        factors,
-        design_seed: None,
-    }
-}
-
-fn values(levels: &[&str]) -> LevelSpec {
-    LevelSpec::Values(levels.iter().map(|&level| level.to_owned()).collect())
-}
-
 /// Returns a spec of 4 configs of 2 replicates over `model`, varying `param` and the tick of `action`, stopped by
 /// `stop` and sampled every 3 ticks.
 fn interleaved_spec(
     model: &str,
-    fixed: &[(&str, &str)],
+    fixed_pairs: &[(&str, &str)],
     param: (&str, &[&str]),
     action: (&str, &[&str]),
     stop: &str,
 ) -> SweepSpec {
     let mut spec = SweepSpec::new(model);
-    spec.fixed = fixed_values(fixed);
+    spec.fixed = fixed(fixed_pairs);
     spec.run.steps = 30;
     spec.run.replicates = 2;
     spec.run.stop = Some(StopSpec::parse(stop, 0).expect("a valid condition"));
@@ -346,7 +332,7 @@ fn interleaved_gpu_runs_match_sequential_ones() {
         let model = entry(&spec.model, Some(&ctx));
         let [one, four] = [1, 4].map(|count| {
             let output_dir = scratch.path().join(format!("{}-{count}", spec.model));
-            let concurrency = Concurrency::Fixed(count.try_into().expect("a track count above 0"));
+            let concurrency = lane_count(count);
             let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
             assert_eq!(report.outline.layout.gpu_tracks, count);
             assert_eq!((report.counts.rows, report.counts.ok), (8, 8), "{}", spec.model);
@@ -389,7 +375,7 @@ fn interleaved_gpu_boids_runs_commit_in_plan_order() {
     };
     let model = entry("gpu_boids", Some(&ctx));
     let mut spec = SweepSpec::new("gpu_boids");
-    spec.fixed = fixed_values(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]);
+    spec.fixed = fixed(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]);
     spec.run.steps = 30;
     spec.run.replicates = 2;
     spec.measure.stats_every = 3;
@@ -402,7 +388,7 @@ fn interleaved_gpu_boids_runs_commit_in_plan_order() {
     let scratch = ScratchDir::new("gpu-boids-interleaved");
     let [one, four] = [1, 4].map(|count| {
         let output_dir = scratch.path().join(format!("tracks-{count}"));
-        let concurrency = Concurrency::Fixed(count.try_into().expect("a track count above 0"));
+        let concurrency = lane_count(count);
         let report = sweep(&model, Some(&ctx), &spec, &output_dir, concurrency);
         assert_eq!(report.outline.layout.gpu_tracks, count);
         assert_eq!((report.counts.rows, report.counts.ok), (4, 4));
@@ -475,10 +461,10 @@ fn a_pipelined_gpu_sample_matches_a_blocking_one() {
     let Some(ctx) = headless_device() else {
         return;
     };
-    for (id, fixed, action) in PIPELINED_CASES {
+    for (id, fixed_pairs, action) in PIPELINED_CASES {
         let model = entry(id, Some(&ctx));
         let mut spec = SweepSpec::new(id);
-        spec.fixed = fixed_values(fixed);
+        spec.fixed = fixed(fixed_pairs);
         spec.run.steps = 20;
         spec.run.replicates = 2;
         spec.measure.stats_every = 1;
@@ -504,18 +490,12 @@ fn a_pipelined_gpu_sample_matches_a_blocking_one() {
 /// exactly.
 #[test]
 fn every_gpu_model_that_replays_has_a_track_case() {
-    let mut registered: Vec<String> = example_models()
-        .iter()
-        .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
-        .map(|model| model.id().to_owned())
-        .collect();
-    registered.sort_unstable();
-    let mut interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
-    interleaved.sort_unstable();
-    let mut pipelined: Vec<String> = PIPELINED_CASES.iter().map(|&(id, _, _)| id.to_owned()).collect();
-    pipelined.sort_unstable();
-    assert_eq!(interleaved, registered, "interleaved_gpu_runs_match_sequential_ones");
-    assert_eq!(pipelined, registered, "a_pipelined_gpu_sample_matches_a_blocking_one");
+    let replays = |model: &ModelEntry| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly;
+    let interleaved: Vec<String> = interleaved_cases().into_iter().map(|spec| spec.model).collect();
+    let interleaved: Vec<&str> = interleaved.iter().map(String::as_str).collect();
+    assert_covers(&interleaved, replays, "interleaved_gpu_runs_match_sequential_ones");
+    let pipelined: Vec<&str> = PIPELINED_CASES.iter().map(|&(id, _, _)| id).collect();
+    assert_covers(&pipelined, replays, "a_pipelined_gpu_sample_matches_a_blocking_one");
 }
 
 #[test]
@@ -524,9 +504,9 @@ fn an_interleaved_queue_executes_every_step() {
         return;
     };
     let fixed_by_model = |id: &str| match id {
-        "gpu_sir" | "gpu_game_of_life" => fixed_values(&[("grid_width", "64"), ("grid_height", "64")]),
-        "gpu_ants" => fixed_values(&[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")]),
-        "gpu_boids" => fixed_values(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]),
+        "gpu_sir" | "gpu_game_of_life" => fixed(&[("grid_width", "64"), ("grid_height", "64")]),
+        "gpu_ants" => fixed(&[("num_agents", "1000"), ("world_width", "64"), ("world_height", "64")]),
+        "gpu_boids" => fixed(&[("num_agents", "2000"), ("world_width", "400"), ("world_height", "400")]),
         _ => panic!("{id} has no case"),
     };
     let models: Vec<ModelEntry> = example_models()
@@ -574,6 +554,33 @@ fn an_interleaved_queue_executes_every_step() {
     }
 }
 
+/// A track holds each submission to the state's submission steps: one step at tick 0, then five at a time up to the
+/// sample at tick 23.
+#[test]
+fn a_track_keeps_to_the_submission_steps() {
+    let Some(ctx) = headless_device() else {
+        return;
+    };
+    let counts = Arc::new(StateCounts::default());
+    let model = instrument(entry("gpu_sir", Some(&ctx)), &ctx, &counts, |_| Misbehavior {
+        submission_steps: Some(5),
+        ..Misbehavior::default()
+    });
+    let mut spec = SweepSpec::new(model.id());
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.run.steps = 23;
+    spec.measure.stats_every = 23;
+    spec.measure.series_every = 23;
+    let (plan, measure) = planned(&model, Some(&ctx), &spec);
+    let finished = outcomes(&executor(&model, &ctx, &measure, tracks(1)), &plan);
+    assert_eq!(finished.len(), 1);
+    assert_eq!((finished[0].status, finished[0].ticks), (RunStatus::Ok, 23));
+    assert_eq!(
+        *counts.chunks.lock().expect("the chunks are recorded"),
+        [1, 5, 5, 5, 5, 2]
+    );
+}
+
 #[test]
 fn gpu_admission_respects_the_memory_budget() {
     let Some(ctx) = headless_device() else {
@@ -582,7 +589,7 @@ fn gpu_admission_respects_the_memory_budget() {
     let counts = Arc::new(StateCounts::default());
     let model = instrument(entry("gpu_sir", Some(&ctx)), &ctx, &counts, |_| Misbehavior::default());
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 100;
     spec.run.replicates = 6;
     spec.measure.stats_every = 10;
@@ -609,7 +616,7 @@ fn an_out_of_memory_build_waits_for_a_track_to_finish() {
     let counts = Arc::new(StateCounts::default());
     let model = instrument(entry("gpu_sir", Some(&ctx)), &ctx, &counts, |_| Misbehavior::default());
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 100;
     spec.run.replicates = 6;
     spec.measure.stats_every = 10;
@@ -665,7 +672,7 @@ fn a_gpu_fault_in_one_track_leaves_the_others_running() {
     };
     install_panic_hook();
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 30;
     spec.run.replicates = 2;
     spec.measure.stats_every = 3;
@@ -724,7 +731,7 @@ fn an_untraced_gpu_fault_fails_every_live_run() {
         return;
     };
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 30;
     spec.run.stop = Some(StopSpec::parse("Susceptible >= 0", 0).expect("a valid condition"));
     spec.measure.stats_every = 3;
@@ -768,7 +775,7 @@ fn a_stop_discards_the_speculative_steps() {
         return;
     };
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[
+    spec.fixed = fixed(&[
         ("grid_width", "32"),
         ("grid_height", "32"),
         ("recovery_rate", "0.2"),
@@ -834,7 +841,7 @@ fn a_stop_discards_the_speculative_steps() {
     assert_eq!(stopped.series.rows().collect::<Vec<_>>(), kept);
     assert_eq!(
         stopped.note.as_deref(),
-        Some(format!("model refused action 'seed_outbreak' at tick {}", stop_tick - 2).as_str()),
+        Some(format!("model rejected action 'seed_outbreak' at tick {}", stop_tick - 2).as_str()),
         "only the action before the stop is noted"
     );
 }
@@ -845,7 +852,7 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
         return;
     };
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 400;
     spec.run.replicates = 4;
     spec.measure.stats_every = 10;
@@ -863,7 +870,7 @@ fn a_lost_device_leaves_a_directory_a_resume_completes() {
     let lost_dir = scratch.path().join("lost");
     let active_runs = ActiveRuns::new();
     let options = SweepOptions {
-        concurrency: Concurrency::Fixed(2.try_into().expect("2 is above 0")),
+        concurrency: lane_count(2),
         active_runs: Some(active_runs.clone()),
         ..sweep_options(false)
     };
@@ -909,7 +916,7 @@ fn gpu_tracks_hold_on_a_pause_and_end_on_an_abort() {
     };
     let model = entry("gpu_sir", Some(&ctx));
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = fixed_values(&[("grid_width", "32"), ("grid_height", "32")]);
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.steps = 100_000_000;
     spec.run.replicates = 8;
     spec.measure.stats_every = 1000;

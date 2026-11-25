@@ -57,6 +57,9 @@ A range is written `min:max:step` and includes both ends.
 Henad computes each value from its position, as `min + i * step`.
 Rounding errors do not build up along the range, and `0:1:0.1` gives eleven values with the last one exactly 1.
 An integer parameter can leave out the step, and then steps by 1.
+A parameter that `--params` marks `format=percent` takes a range or a value with a `%` sign after it, as in `--vary initial_infected_pct=1%:5%:1%`, which gives the values of `0.01:0.05:0.01`.
+A range puts the sign after every part or after none, and a `%` sign on any other parameter is an error naming the parameter.
+`runs.csv` and the manifest's copy of the spec hold the fractions.
 
 A list takes the values separated by commas, written the way `--set` takes them:
 
@@ -87,6 +90,26 @@ The first `--vary` changes slowest, like the outer of two nested loops.
 With `--zip`, the values pair up by position, and config `i` takes value `i` of every parameter.
 Every `--vary` then needs the same number of values.
 
+### Varying the tick length
+
+A model whose ticks stand for a length of time has a hidden [tick length](../reference/model-files.md#time-scale) parameter, `tick_length`, the length of one tick in its unit of time.
+`--params` lists it and marks it `hidden`, and a sweep varies it like any other parameter.
+The SIR sheet in Henad's repository states its changes as rates per day, so its epidemic should look the same in days at any tick that is short enough:
+
+``` bash
+cargo run --release -p henad-cli -- --model-file crates/henad-graph/sheets/sir.toml \
+  --vary tick_length=1,0.5,0.25,0.125 --reps 3 --steps 640 --out sir-ticks
+```
+
+`series.csv` holds a `time` column after `tick`, the tick times the run's tick length, so the four tick lengths compare day by day.
+A curve that still moves when the tick halves says the tick is long for the model's rates.
+At the sheet's rates the gap to the shortest tick roughly halves with each halving, and a tick of a quarter day is close to it.
+A model of chances per tick does not follow the tick length: its curve keeps its shape in ticks and squeezes in days.
+
+The tick length changes how much time one tick covers, so the runs reach different times after the same number of steps.
+Reducers such as `argmax` still report a tick, and a run meant to end at a given time takes `--steps` of that time divided by the tick length.
+`runs.csv` holds each run's `tick_length` beside its other parameters.
+
 ### Sampling the ranges
 
 The number of combinations grows fast.
@@ -111,6 +134,7 @@ A random design picks among them with equal chances.
 A Latin hypercube gives each stratum the lowest value it covers, and takes each value equally often, to within one config.
 The values a parameter takes then depend on the number of configs alone, and the design seed only decides which configs take them.
 An integer range with no step is the set of every integer in it, such as `--vary initial_outbreak_size=1:50` for Virus on a Network.
+A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, takes the same set, so a sampled design or a search draws whole numbers alone.
 
 The draws come from a **design seed**, and the plan prints it beside the block:
 
@@ -511,6 +535,7 @@ sir-sweep/
 
 `series.csv`
 : The series of every run, one row per run and sampled tick.
+  A model with a tick length adds a `time` column after `tick`, the tick times that run's tick length.
 
 `summary.csv`
 : One row per config, with the mean, standard deviation, count and 95% confidence interval of every reducer over the replicates.
@@ -538,9 +563,10 @@ All three CSV files come out the same byte for byte at any `--concurrent`, apart
 
 !!! note "GPU boids does not replay"
 
-    `gpu_boids` is the one model whose runs differ between two sweeps with the same settings.
+    `gpu_boids` is the one example model whose runs differ between two sweeps with the same settings.
     Its neighbour index leaves the order of the boids within a cell open, and the order changes from run to run.
     Its manifest records `replays_exactly` as `false`, and the app's Results tab notes beside a run that the opened run might differ from its row.
+    The boids sheet and node graph starter, and the bounded confidence sheet, do not replay either, as [results across devices](../reference/model-files.md#results-across-devices) describes.
 
 ### CPU lanes
 
@@ -582,12 +608,12 @@ With `auto`, a model of 1,048,576 cells or agents or more gets a single track, s
 `--concurrent N` sets the number of tracks yourself, and `--gpu-memory` caps the bytes of GPU memory that the runs on the tracks hold together.
 A run starts only once it fits beside the runs already on the GPU.
 A run that fits beside no other run steps alone.
-The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer that the GPU allows acts as the cap.
+The graphics API reports no total for a GPU's memory, and without `--gpu-memory` the largest buffer that the GPU allows is the cap.
 A run that still finds the GPU out of memory waits for another run to finish, and the sweep runs one track fewer from then on.
 
 With several tracks, the time the sweep spends visiting them is split evenly between their runs.
 A run's `wall_ms`, its `steps_per_s` and its `--timeout` all count only that share.
-Pass `--concurrent 1` when the time of each run matters.
+Pass `--concurrent 1` when you need the time of each run.
 
 A fault in one run ends that run alone, and the other tracks carry on.
 A GPU error that Henad cannot trace to one run fails every run on a track at the time, and `--retry-failed` on a [resume](#resuming-a-sweep) runs them again.
@@ -613,11 +639,18 @@ The plan counts the runs that the directory holds and the runs left:
 
 A resume first checks that the directory holds the same sweep.
 The model and its declarations, the configs, the steps, the sampling, the stop condition and reducers, the actions, the seeds and the shard all have to match, and a resume of anything else is rejected.
+A model's time unit and tick-length parameter count among its declarations.
 Only the replicate count and the timeout can change.
 The manifest's `sessions` lists every process that wrote runs, with three builds each: Henad's build, the binary's build and the build of the crate that registered the model.
 A build records its commit, whether the sources differed from the commit, and a hash of the sources.
 A resume warns when Henad's build or the model's build differs from a build that a session recorded, and goes ahead.
 An uncommitted edit to a kernel counts as a different build, since its source hash changes.
+A model composed at run time is stricter, and a resume of such a model under other code is rejected.
+The error names the code that the directory's runs ran and the code that resumes.
+When the model comes from a `--model-file`, the error opens with a line naming that file.
+A runtime model's code is identified by the hash of its text.
+Start a new directory for the edited model, or undo the edit.
+A [model file](#sweeping-a-model-file) resumes with the same `--model-file`.
 The [CLI reference](../reference/cli.md#builds) lists the fields and the rule that compares two builds.
 
 The resume then repairs what a cut-off write left behind.
@@ -666,9 +699,12 @@ cargo run --release --locked -p henad-cli -- --merge shard-0 shard-1 shard-2 sha
 ```
 
 `--merge` checks that the directories hold different shards of one plan, all at one replicate count.
+The shards' models also have to share one time unit and tick-length parameter.
 It interleaves `runs.csv` and `series.csv` back into run order, rebuilds `summary.csv`, and lists the merged directories in the manifest under `merged_shards`.
 The merged CSV files are the same as those of the sweep run in one piece, apart from the timing columns.
 A merge warns when the shards ran different builds of Henad or of the model.
+It rejects shards of a model composed at run time that ran different code, as a resume does.
+The error then opens with the `--model-file` paths that each shard's command line gave.
 
 Build every shard, and every later resume, from one commit with `--locked`.
 Cargo then builds from the committed `Cargo.lock` and fails rather than change it.
@@ -709,6 +745,51 @@ When every task is done, merge the shards:
 target/release/henad-cli --merge sir-sweep/shard-* --out sir-sweep/merged
 ```
 
+## Sweeping a model file
+
+A [model file](../reference/model-files.md) holds a model as data and runs without a build: a grid rule, with the step of one cell written in WGSL, a graph model or a sheet.
+`--model-file` loads one, and its model then sweeps like any other:
+
+``` bash
+cargo run --release -p henad-cli -- life_rule \
+  --model-file crates/henad-explore/specs/models/life_rule.toml \
+  --vary density=0.1:0.5:0.1 --reps 5 --steps 500 --out life-sweep
+```
+
+The model's id is the file's `id` key, here `life_rule`.
+With one `--model-file` and no spec, the id can be left out of the command line.
+A spec file names the model by the same id, and the command line passes the file beside the spec, as in `--spec life_sweep.toml --model-file life_rule.toml --out life-sweep`.
+A grid rule runs on the GPU, and its runs step on [GPU tracks](#gpu-tracks).
+
+The step is checked while the file is read, before anything runs.
+A problem stops the command with its place in the file, such as `life_rule.toml:39:5: error: loops are not allowed in a grid rule. Step functions must be bounded`.
+
+The manifest records the file's canonical text and the hash of that text, and a resume or a merge accepts only that code.
+Pass the same `--model-file` to every resume and to every shard.
+A resume with an edited step, or a merge of shards that ran two versions of the file, is rejected before it writes anything, and the error names both hashes.
+Start a new directory for the edited model, or undo the edit.
+Comments outside the step, the order of the keys and the form of a number are left out of the code, and changing them keeps the directory resumable.
+
+A file whose id is that of a model the CLI already offers, such as `gpu_game_of_life`, replaces that model for the one command, and a note on stderr says so.
+
+A [sheet](../reference/model-files.md#sheets) sweeps the same way, with its parameters named by their ids:
+
+``` bash
+cargo run --release -p henad-cli -- sheet_game_of_life \
+  --model-file crates/henad-graph/sheets/game_of_life.toml \
+  --vary initial_density=0.1:0.5:0.1 --reps 5 --steps 500 --out life-sheet-sweep
+```
+
+Only the code of the graph the sheet lowers to decides a resume.
+A sheet edited only outside that code resumes, and any edit that changes the code is rejected.
+[Code identity of a sheet](../reference/model-files.md#code-identity-of-a-sheet) lists the parts of a sheet outside the code.
+The manifest also records the sheet's text, and a resume records the text it ran.
+The sheet in the manifest is then the one the latest session read.
+Its code is the code of every earlier session.
+A resume from the graph the sheet lowers to, which has the same code and no sheet, keeps the sheet the directory recorded.
+In the desktop app, open the directory in the Results tab and press <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> to see the sheet again.
+The Sweep tab sweeps a sheet once Apply in the Editor tab installs it, and an edit made since then waits for the next Apply.
+
 ## Reading the results
 
 The app's [Results tab](app.md#results-tab) plots a results directory with no code.
@@ -718,7 +799,7 @@ Open the directory there with <span class="ui" markdown>:material-folder-open-ou
 cargo run --release --bin henad-app -- --open sir-sweep
 ```
 
-In its **Response** view, pick **Infected, max** as the **Output** to plot the mean peak against the infection rate, with a 95% confidence interval on each point.
+In its **Response** view, pick **Infected, maximum** as the **Output** to plot the mean peak against the infection rate, with a 95% confidence interval on each point.
 In its **Series** view, pick **Infected** as the **Stat** to draw the mean epidemic curve of each infection rate, with a band over the replicates.
 
 Any tool that reads CSV can load the results.

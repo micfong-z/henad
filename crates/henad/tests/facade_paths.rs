@@ -107,7 +107,7 @@ fn neighbourhood() -> (usize, ComponentStats) {
 #[test]
 fn a_gpu_action_is_built_from_a_pass() {
     let action = scatter_action();
-    assert_eq!(action.desc.id, "scatter", "the descriptor keeps its id");
+    assert_eq!(action.desc.id(), "scatter", "the descriptor keeps its id");
     assert!(action.pass.bindings.is_empty(), "the pass binds nothing");
 }
 
@@ -152,11 +152,14 @@ mod named_only {
     type PayloadTypes = (
         henad::gpu::Alloc,
         henad::gpu::PassBindings,
+        henad::gpu::PassKind,
+        henad::gpu::HostWork,
         henad::explore::BatchStanding,
         henad::explore::EvaluatedCandidate,
         henad::explore::EvaluationReading,
         henad::explore::ConfigFault,
         henad::explore::RefusedConfig,
+        henad::explore::ShortfallWords,
         henad::explore::ProgressUpdate,
         henad::explore::SummaryError,
         henad::explore::SearchPlan,
@@ -165,7 +168,143 @@ mod named_only {
         henad::explore::design_csv::DesignTableValueError,
         henad::explore::design_rng::DesignRng,
         henad::action::RefusedActions<'static>,
+        henad::params::ChoiceOptions,
+        henad::CodeOrigin,
+        henad::ModelCode,
+        henad::explore::ManifestModelCode,
+        henad::CodeDiagnostic,
+        henad::DiagnosticSeverity,
     );
+
+    /// Days in one month, through the unit of time a sheet's Time line names.
+    fn days_in_a_month() -> f64 {
+        henad::TimeUnit::Month.days()
+    }
+
+    /// Time at tick 4 of a model whose ticks are a quarter of a day, through the time scale a model declares.
+    fn a_day_in_quarter_days() -> f64 {
+        henad::TimeScale::time_at(4, 0.25) * henad::TimeScale::new(henad::TimeUnit::Day, "tick_length").unit.days()
+    }
+
+    /// Work budgets that [`henad::gpu::Demand::shortfalls`] holds a model to.
+    const WORK_BUDGETS: [u64; 2] = [henad::gpu::SUBMISSION_WORK_BUDGET, henad::gpu::HOST_WORK_BUDGET];
+
+    /// Types of the grid rules that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type RuleTypes = (
+        henad::rules::GridRule,
+        henad::rules::RuleState,
+        henad::rules::RuleDeclaration,
+        henad::rules::CompiledGridRule,
+        henad::rules::ModelFile,
+        henad::rules::GridRuleFile,
+        henad::rules::ModelFileError,
+        henad::rules::WgslFile<'static>,
+        henad::rules::ComposedWgsl,
+    );
+
+    /// Types of the graph models that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type GraphTypes = (
+        henad::graph::GraphFile,
+        henad::graph::GraphFileError,
+        henad::graph::check::CheckReport,
+        henad::graph::host::HostEvaluator,
+        henad::graph::edit::GraphBuilder,
+        henad::graph::starters::Starter,
+        henad::graph::wgsl::GridProgram,
+        henad::graph::wgsl::GeneratedShader,
+        henad::graph::sheet::ParsedSheet,
+        henad::graph::sheet::SheetFileError,
+        henad::graph::sheet::edit::SheetBuilder,
+        henad::graph::sheet::edit::SheetEdit,
+        henad::graph::keys::KeyStream,
+        henad::graph::normal::Origin,
+        henad::graph::sheet::document::SheetDocument,
+        henad::graph::sheet::SheetWriteError,
+        henad::graph::sheet::sentence::Sentences<'static>,
+        henad::graph::sheet::check::SheetReport,
+        henad::graph::sheet::check::SheetDiagnostic,
+        henad::graph::sheet::relations::CardRelations<'static>,
+    );
+
+    /// Types of the sheets that a host built with the `model-files` feature names.
+    #[cfg(feature = "model-files")]
+    type SheetTypes = (
+        henad::graph::sheet::SheetFile,
+        henad::graph::sheet::SheetErrors,
+        henad::graph::sheet::LineMap,
+        henad::graph::sheet::NodeOrigin,
+        henad::graph::sheet::NodeOwner,
+        henad::graph::sheet::SheetPlaces,
+        henad::graph::sheet::TablePlaces,
+    );
+
+    /// Values of the `kind` key of a graph and of a sheet, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const GRAPH_KINDS: [&str; 2] = [henad::graph::KIND_GRAPH, henad::graph::KIND_SHEET];
+
+    /// Returns whether every sheet starter builds an entry through its model file, recording the sheet's code, for a
+    /// host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn sheet_starters_build() -> bool {
+        henad::graph::sheet::starters().iter().all(|starter| {
+            henad::rules::ModelFile::parse(starter.text).is_ok_and(|file| {
+                file.sheet().is_some()
+                    && file
+                        .entry()
+                        .is_ok_and(|entry| entry.source().code_hash() == Some(file.code().hash()))
+            })
+        })
+    }
+
+    /// Returns whether every graph starter reads and checks without an error, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn graph_starters_check() -> bool {
+        henad::graph::starters::starters()
+            .iter()
+            .all(|starter| henad::graph::GraphFile::parse(starter.text).is_ok_and(|file| !file.check().has_errors()))
+    }
+
+    /// Returns the entry of the Life starter, read back from its model file, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    fn life_entry() -> Result<henad::ModelEntry, henad::rules::ModelFileError> {
+        let file = henad::rules::ModelFile::from_rule(henad::rules::GridRule::life())?;
+        henad::rules::ModelFile::parse(&file.to_toml())?.entry()
+    }
+
+    /// Limits of a grid rule, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const RULE_LIMITS: [usize; 3] = [
+        henad::rules::MAX_STEP_BYTES,
+        henad::rules::MAX_STATES,
+        henad::rules::MAX_PARAMS,
+    ];
+
+    /// Step of the Life starter, for a host built with `model-files`.
+    #[cfg(feature = "model-files")]
+    const LIFE_STEP: &str = henad::rules::LIFE_STEP;
+
+    /// Returns the composed text of `text`, or its diagnostics.
+    #[cfg(feature = "model-files")]
+    fn composed(text: &str) -> Result<String, Vec<henad::CodeDiagnostic>> {
+        henad::rules::compose_wgsl(
+            henad::rules::WgslFile {
+                path: "shader.wgsl",
+                text,
+            },
+            &[],
+        )
+        .map(henad::rules::ComposedWgsl::into_text)
+    }
+
+    /// Returns the thread of `runner` when it does not stop within the time a drop waits.
+    fn detached(runner: henad::runner::SimThread) -> Option<henad::runner::DetachedRunner> {
+        match runner.stop(henad::runner::DEFAULT_STOP_TIMEOUT) {
+            henad::runner::RunnerShutdown::Joined => None,
+            henad::runner::RunnerShutdown::Detached(detached) => Some(detached),
+        }
+    }
 
     /// Number of steps that one command buffer of a GPU state may hold, for a host that encodes its own command
     /// buffers.

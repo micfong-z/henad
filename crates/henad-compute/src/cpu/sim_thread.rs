@@ -3,25 +3,19 @@
 //! A capped run steps a batch of ticks at a target rate in ticks per second (TPS), and an uncapped one steps as fast
 //! as it can. [`crate::runner`] decides whether the loop runs on its own thread or from the host's frame loop.
 
-use crate::fault::FaultSink;
+use crate::fault::{Fault, FaultSink};
 use henad_core::action::Schedule;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
+use henad_core::send_sync::WasmNotSend;
 
-use crate::runner::{Driver, Pace, RUN_TO_PUBLISH_INTERVAL, SharedSlot, SimLoop, SnapshotSlot};
-use crate::snapshot::{CpuLayers, GridSnapshot, PointSnapshot, Snapshot, SnapshotView};
+use crate::runner::{
+    DEFAULT_STOP_TIMEOUT, Driver, Pace, RUN_TO_PUBLISH_INTERVAL, RunToStride, RunnerShutdown, SharedSlot, SimLoop,
+    SnapshotSlot, capped_interval,
+};
+use crate::snapshot::{CpuLayers, FireCounts, GridSnapshot, PointSnapshot, Snapshot, SnapshotView, StatSample};
 use std::time::Duration;
 use web_time::Instant;
-
-/// Returns the wall-clock seconds between capped batches.
-fn capped_batch_interval_secs(target_tps: f64, ticks_per_snapshot: u32) -> f64 {
-    let tps = if target_tps.is_finite() && target_tps > 0.0 {
-        target_tps
-    } else {
-        1.0
-    };
-    f64::from(ticks_per_snapshot.max(1)) / tps
-}
 
 /// Callback run after every publish, for an idle UI to come and collect the snapshot.
 ///
@@ -81,7 +75,7 @@ pub enum SimCommand {
     ///
     /// `Play`, `Pause` and `StepOnce` cancel it. A tick at or behind the current one pauses at once.
     RunTo(u64),
-    /// Stop the loop. A runner sends it when dropped.
+    /// Stop the loop. A runner sends it when stopped or dropped.
     Shutdown,
 }
 
@@ -147,6 +141,10 @@ struct Loop {
     fired_through: Option<u64>,
     /// Tick a pending [`SimCommand::RunTo`] stops at.
     run_to_target: Option<u64>,
+    /// Ticks the pending run to a tick samples its stats at.
+    run_to_stride: Option<RunToStride>,
+    /// Stats sampled since the last publish.
+    run_to_samples: Vec<StatSample>,
 }
 
 impl SimLoop for Loop {
@@ -221,6 +219,7 @@ impl SimLoop for Loop {
             }
             SimCommand::RunTo(target) => {
                 self.run_to_target = Some(target);
+                self.run_to_stride = Some(RunToStride::new(self.state.tick(), target));
                 self.running = false;
                 self.reset_tps_window();
             }
@@ -273,6 +272,37 @@ impl SimLoop for Loop {
 }
 
 impl Loop {
+    /// Returns a paused loop over `state`, capped at `target_tps`, and the slot holding `first` as its first publish.
+    fn new(state: Box<dyn SimState>, first: Snapshot, target_tps: f64, wake: Option<WakeFn>) -> (Self, SharedSlot) {
+        let slot = SnapshotSlot::with_initial(first);
+        let now = Instant::now();
+        let sim = Self {
+            state,
+            slot: SharedSlot::clone(&slot),
+            wake,
+            running: false,
+            target_tps,
+            uncapped: false,
+            ticks_per_snapshot: 1,
+            step_count: 0,
+            tps_timer: now,
+            actual_tps: 0.0,
+            last_publish: now,
+            serial: 0,
+            layout_on: false,
+            relax_paused: false,
+            ticked: false,
+            engine_ms: None,
+            next_step_at: now,
+            schedule: Schedule::default(),
+            fired_through: None,
+            run_to_target: None,
+            run_to_stride: None,
+            run_to_samples: Vec::new(),
+        };
+        (sim, slot)
+    }
+
     /// Keeps publishing while paused, so the layout can keep relaxing if requested. Otherwise returns [`Pace::Idle`].
     fn relax_while_paused(&mut self) -> Pace {
         if !(self.layout_on && self.relax_paused) {
@@ -292,6 +322,12 @@ impl Loop {
         let steps = u64::from(uncapped_steps_for(self.engine_ms, 1)).min(remaining);
         for _ in 0..steps {
             self.timed_step();
+            let tick = self.state.tick();
+            if self.run_to_stride.as_mut().is_some_and(|stride| stride.take_due(tick)) {
+                // A model can compute its stats in `prepare_view`, so the sample prepares the view as a publish does.
+                self.state.prepare_view();
+                self.run_to_samples.push(StatSample::new(tick, self.state.stats()));
+            }
         }
         if steps == remaining {
             self.run_to_target = None;
@@ -307,7 +343,7 @@ impl Loop {
     }
 
     fn batch_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs_f64(capped_batch_interval_secs(self.target_tps, self.ticks_per_snapshot))
+        capped_interval(self.target_tps, self.ticks_per_snapshot)
     }
 
     /// Pulls the next deadline in to at most one batch interval from now. It never moves the deadline later.
@@ -342,7 +378,7 @@ impl Loop {
     fn fire_due(&mut self) {
         self.fired_through = Some(self.state.tick());
         for refused in self.schedule.run_due(&mut *self.state) {
-            log::warn!("Model refused action '{}' at tick {}", refused.id, refused.tick);
+            log::warn!("Model rejected action '{}' at tick {}", refused.id, refused.tick);
         }
     }
 
@@ -386,7 +422,8 @@ impl Loop {
         // Actions and setting changes also publish, and must not move the nodes of a paused network.
         let relax = self.layout_on && (self.ticked || self.relax_paused);
         self.ticked = false;
-        let snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial, relax);
+        let mut snap = build_snapshot(spare, &mut *self.state, self.actual_tps, engine_ms, self.serial, relax);
+        snap.run_to_samples = std::mem::take(&mut self.run_to_samples);
         crate::runner::publish(&self.slot, snap);
         // After the lock, so waking the UI can never make it block on us.
         if let Some(wake) = &self.wake {
@@ -415,42 +452,59 @@ impl SimThread {
     ///
     /// `wake` is `None` only for a headless caller that polls on its own schedule.
     ///
-    /// A panic out of the loop is stored in `faults`. The GPU runner reads the same sink off its `GpuContext`.
+    /// A panic out of the loop is stored in `faults`.
     pub fn new(mut state: Box<dyn SimState>, target_tps: f64, wake: Option<WakeFn>, faults: FaultSink) -> Self {
         // The first snapshot gives the UI something to draw before play is pressed.
-        let slot = SnapshotSlot::with_initial(build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
-        let now = Instant::now();
-        let sim = Loop {
-            state,
-            slot: SharedSlot::clone(&slot),
-            wake: wake.clone(),
-            running: false,
-            target_tps,
-            uncapped: false,
-            ticks_per_snapshot: 1,
-            step_count: 0,
-            tps_timer: now,
-            actual_tps: 0.0,
-            last_publish: now,
-            serial: 0,
-            layout_on: false,
-            relax_paused: false,
-            ticked: false,
-            engine_ms: None,
-            next_step_at: now,
-            schedule: Schedule::default(),
-            fired_through: None,
-            run_to_target: None,
-        };
+        let first = build_snapshot(None, &mut *state, 0.0, 0.0, 0, false);
+        let (sim, slot, on_fault) = Self::parts(state, first, target_tps, wake, faults);
+        let driver = Driver::spawn(sim, on_fault);
+        Self { driver, slot }
+    }
 
-        let driver = Driver::spawn(sim, move |fault| {
+    /// Starts a paused runner over `state` in `pool`, capped at `target_tps` ticks per second.
+    ///
+    /// The first snapshot, the loop's start, each pump and each command run on a worker of `pool`. A model step that
+    /// never returns then holds workers of `pool` alone, and the global pool stays whole. `wake` and `faults` are as
+    /// for [`Self::new`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_in(
+        pool: std::sync::Arc<rayon::ThreadPool>,
+        mut state: Box<dyn SimState>,
+        target_tps: f64,
+        wake: Option<WakeFn>,
+        faults: FaultSink,
+    ) -> Self {
+        let first = pool.install(|| build_snapshot(None, &mut *state, 0.0, 0.0, 0, false));
+        let (sim, slot, on_fault) = Self::parts(state, first, target_tps, wake, faults);
+        let driver = Driver::spawn_in(pool, sim, on_fault);
+        Self { driver, slot }
+    }
+
+    /// Returns the loop over `state` from its `first` snapshot, the slot it publishes to and the handler that stores a
+    /// panic out of the loop in `faults`.
+    fn parts(
+        state: Box<dyn SimState>,
+        first: Snapshot,
+        target_tps: f64,
+        wake: Option<WakeFn>,
+        faults: FaultSink,
+    ) -> (Loop, SharedSlot, impl FnOnce(Fault) + WasmNotSend + 'static) {
+        let (sim, slot) = Loop::new(state, first, target_tps, wake.clone());
+        let on_fault = move |fault| {
             faults.set_once(fault);
             if let Some(wake) = &wake {
                 wake();
             }
-        });
+        };
+        (sim, slot, on_fault)
+    }
 
-        Self { driver, slot }
+    /// Stops the loop, and joins its thread once it stops or detaches the thread after `timeout`.
+    ///
+    /// The loop stops between two pumps. A model step that never returns keeps the detached thread running, and
+    /// [`RunnerShutdown::Detached`] returns its handle.
+    pub fn stop(mut self, timeout: Duration) -> RunnerShutdown {
+        self.driver.shutdown(SimCommand::Shutdown, timeout)
     }
 
     /// Sends a command to the loop.
@@ -502,9 +556,15 @@ impl SimThread {
     }
 }
 
+/// Stops the loop as [`SimThread::stop`] does with [`DEFAULT_STOP_TIMEOUT`], and logs a detached thread.
 impl Drop for SimThread {
     fn drop(&mut self) {
-        self.driver.shutdown(SimCommand::Shutdown);
+        if let RunnerShutdown::Detached(_) = self.driver.shutdown(SimCommand::Shutdown, DEFAULT_STOP_TIMEOUT) {
+            log::warn!(
+                "The simulation thread did not stop within {} s, and runs on detached",
+                DEFAULT_STOP_TIMEOUT.as_secs_f64()
+            );
+        }
     }
 }
 
@@ -517,7 +577,7 @@ fn refill<T: Copy>(dst: &mut Vec<T>, src: &[T]) {
 ///
 /// `reuse` comes back from the UI thread through `recycle`, and a publish is then a copy without a fresh
 /// multi-megabyte allocation. Every view is consulted, so a composite model publishes its field and its agents.
-fn build_snapshot(
+pub(super) fn build_snapshot(
     reuse: Option<Snapshot>,
     state: &mut dyn SimState,
     actual_tps: f64,
@@ -537,20 +597,24 @@ fn build_snapshot(
         Some(SnapshotView::Cpu(layers)) => layers,
         _ => CpuLayers::default(),
     };
-    let mut cells = recycled.grid.map(|g| g.cells).unwrap_or_default();
+    let (mut cells, mut grid_palette) = match recycled.grid {
+        Some(g) => (g.cells, g.palette),
+        None => (Vec::new(), Vec::new()),
+    };
     let mut spare_edges = recycled.edges;
-    let (mut pos_x, mut pos_y, mut color) = match recycled.points {
-        Some(p) => (p.pos_x, p.pos_y, p.color),
-        None => (Vec::new(), Vec::new(), Vec::new()),
+    let (mut pos_x, mut pos_y, mut color, mut point_palette) = match recycled.points {
+        Some(p) => (p.pos_x, p.pos_y, p.color, p.palette),
+        None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
     };
 
     let grid = state.grid_view().map(|gv| {
         refill(&mut cells, gv.cells);
+        refill(&mut grid_palette, gv.palette);
         GridSnapshot {
             width: gv.width,
             height: gv.height,
             cells: std::mem::take(&mut cells),
-            palette: gv.palette,
+            palette: std::mem::take(&mut grid_palette),
         }
     });
 
@@ -558,13 +622,14 @@ fn build_snapshot(
         refill(&mut pos_x, pv.pos_x);
         refill(&mut pos_y, pv.pos_y);
         refill(&mut color, pv.color.unwrap_or(&[]));
+        refill(&mut point_palette, pv.palette);
         PointSnapshot {
             pos_x: std::mem::take(&mut pos_x),
             pos_y: std::mem::take(&mut pos_y),
             world_w: pv.world_w,
             world_h: pv.world_h,
             color: std::mem::take(&mut color),
-            palette: pv.palette,
+            palette: std::mem::take(&mut point_palette),
         }
     });
 
@@ -577,7 +642,7 @@ fn build_snapshot(
             refill(&mut snap.color, ev.color.unwrap_or(&[]));
             snap.version = ev.version;
         }
-        snap.palette = ev.palette;
+        refill(&mut snap.palette, ev.palette);
         snap.directed = ev.directed;
         snap
     });
@@ -594,626 +659,14 @@ fn build_snapshot(
         view_ms,
         view,
         stats: state.stats(),
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod pacing_timing_tests {
-    use super::{SimCommand, SimThread};
-    use crate::fault::{FaultSink, STEPPING};
-    use crate::snapshot::Snapshot;
-    use henad_core::action::{Schedule, Scheduled};
-    use henad_core::model::SimState;
-    use henad_core::params::ParamValue;
-    use henad_core::view::StatEntry;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-    use web_time::Instant;
-
-    /// Longest time a test waits for the loop to reach the state it expects.
-    const DEADLINE: Duration = Duration::from_secs(10);
-
-    /// Polls `condition` until it holds, and returns whether it held before [`DEADLINE`].
-    fn wait_until(condition: impl Fn() -> bool) -> bool {
-        let deadline = Instant::now() + DEADLINE;
-        loop {
-            if condition() {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                return false;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-    }
-
-    struct Counter(Arc<AtomicU64>);
-
-    impl SimState for Counter {
-        fn step(&mut self) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
-        fn tick(&self) -> u64 {
-            self.0.load(Ordering::Relaxed)
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn population(&self) -> u64 {
-            0
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// Counts steps as [`Counter`] does, and records the tick each action runs at.
-    struct ActionRecorder {
-        ticks: Arc<AtomicU64>,
-        fired: Arc<Mutex<Vec<u64>>>,
-    }
-
-    impl SimState for ActionRecorder {
-        fn step(&mut self) {
-            self.ticks.fetch_add(1, Ordering::Relaxed);
-        }
-        fn tick(&self) -> u64 {
-            self.ticks.load(Ordering::Relaxed)
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn act(&mut self, _index: usize) -> bool {
-            self.fired.lock().expect("action log").push(self.tick());
-            true
-        }
-        fn population(&self) -> u64 {
-            0
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// Records every layout switch that the loop passes on to the state.
-    struct LayoutSwitches(Arc<Mutex<Vec<bool>>>);
-
-    impl SimState for LayoutSwitches {
-        fn step(&mut self) {}
-        fn tick(&self) -> u64 {
-            0
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn set_layout(&mut self, on: bool, _budget_ms: f32) -> bool {
-            self.0.lock().expect("switch log").push(on);
-            true
-        }
-        fn population(&self) -> u64 {
-            0
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// Counts its steps as its tick, and how many times the layout is switched and relaxes.
-    struct Relaxes {
-        ticks: u64,
-        switches: Arc<AtomicU64>,
-        relaxes: Arc<AtomicU64>,
-    }
-
-    impl Relaxes {
-        /// Returns a thread over a new state, with its count of layout switches and its count of relaxes.
-        fn spawn() -> (SimThread, Arc<AtomicU64>, Arc<AtomicU64>) {
-            let switches = Arc::new(AtomicU64::new(0));
-            let relaxes = Arc::new(AtomicU64::new(0));
-            let state = Self {
-                ticks: 0,
-                switches: Arc::clone(&switches),
-                relaxes: Arc::clone(&relaxes),
-            };
-            let thread = SimThread::new(Box::new(state), 50.0, None, FaultSink::new());
-            (thread, switches, relaxes)
-        }
-    }
-
-    impl SimState for Relaxes {
-        fn step(&mut self) {
-            self.ticks += 1;
-        }
-        fn tick(&self) -> u64 {
-            self.ticks
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn set_layout(&mut self, _on: bool, _budget_ms: f32) -> bool {
-            // Released, so a test that sees the switch also sees every relax before it.
-            self.switches.fetch_add(1, Ordering::Release);
-            true
-        }
-        fn relax_layout(&mut self) {
-            self.relaxes.fetch_add(1, Ordering::Relaxed);
-        }
-        fn population(&self) -> u64 {
-            0
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// A model author's bug, from the engine's point of view.
-    struct DivideByZero(u64);
-
-    impl SimState for DivideByZero {
-        fn step(&mut self) {
-            let zero: u64 = std::hint::black_box(0);
-            self.0 = 1 / zero;
-        }
-        fn tick(&self) -> u64 {
-            self.0
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn population(&self) -> u64 {
-            0
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// A panicking kernel must not take the thread with it and leave the UI polling a viewport
-    /// that never updates again. The panic still prints. This test is noisy by design.
-    #[test]
-    fn a_panicking_step_lands_in_the_sink_instead_of_killing_the_thread() {
-        let faults = FaultSink::new();
-        let wakes = Arc::new(AtomicU64::new(0));
-        let counter = Arc::clone(&wakes);
-
-        let mut thread = SimThread::new(
-            Box::new(DivideByZero(0)),
-            1000.0,
-            Some(Arc::new(move || {
-                counter.fetch_add(1, Ordering::Relaxed);
-            })),
-            faults.clone(),
-        );
-        thread.play();
-
-        for _ in 0..200 {
-            if faults.is_set() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let fault = faults.take().expect("the panic should have reached the sink");
-        assert_eq!(fault.during, STEPPING);
-        assert!(fault.to_string().contains("divide by zero"), "{fault}");
-        // Without the wake the UI would sit idle and never come and look.
-        assert!(wakes.load(Ordering::Relaxed) > 0, "the UI was never woken");
-    }
-
-    #[test]
-    fn capped_batching_holds_the_target_rate() {
-        let ticks = Arc::new(AtomicU64::new(0));
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 50.0, None, FaultSink::new());
-        thread.send(SimCommand::SetTicksPerSnapshot(10));
-        thread.play();
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        thread.pause();
-
-        let n = ticks.load(Ordering::Relaxed);
-        assert!((20..=150).contains(&n), "ran {n} ticks in 1s at 50 TPS");
-    }
-
-    /// Blocks until `wakes` reaches `want`, or gives up.
-    fn wait_for_wakes(wakes: &Arc<AtomicU64>, want: u64) -> u64 {
-        for _ in 0..200 {
-            let seen = wakes.load(Ordering::Relaxed);
-            if seen >= want {
-                return seen;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        wakes.load(Ordering::Relaxed)
-    }
-
-    /// Waits out a window in which a loop that has stopped has to stay still.
-    ///
-    /// Only a check that nothing happens needs it, and each caller has already seen the loop stop.
-    fn settle() {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    /// A pause reports a rate of zero, as the GPU runner does, and a step after a long pause is not
-    /// divided by the whole pause.
-    #[test]
-    fn a_pause_and_a_step_after_it_report_no_rate() {
-        let ticks = Arc::new(AtomicU64::new(0));
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 1000.0, None, FaultSink::new());
-
-        thread.play();
-        // A TPS window is a second wide, and nothing is reported until one closes.
-        assert!(
-            snapshot_where(&mut thread, |snap| snap.actual_tps > 0.0).is_some(),
-            "the window never closed, so the test proves nothing"
-        );
-
-        thread.pause();
-        // Every snapshot of the running sim since the window closed reports a rate. The first snapshot without a rate
-        // is the one the pause published.
-        let paused = snapshot_where(&mut thread, |snap| snap.actual_tps == 0.0).expect("a paused sim reported a rate");
-
-        // A single step must not be divided by this stale window.
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        thread.step_once();
-        let stepped = snapshot_at(&mut thread, paused.tick + 1).expect("a step publishes");
-        assert_eq!(stepped.actual_tps, 0.0, "one step over a long pause reported a rate");
-    }
-
-    /// Switching the layout off must reach the state.
-    /// Otherwise the next publish would still run the layout, and a paused network would keep moving whenever an
-    /// action or a step publishes.
-    #[test]
-    fn switching_the_layout_off_reaches_the_state() {
-        let switches = Arc::new(Mutex::new(Vec::new()));
-        let mut thread = SimThread::new(
-            Box::new(LayoutSwitches(Arc::clone(&switches))),
-            50.0,
-            None,
-            FaultSink::new(),
-        );
-        thread.send(SimCommand::SetLayout {
-            on: true,
-            budget_ms: 1.0,
-            while_paused: false,
-        });
-        thread.send(SimCommand::SetLayout {
-            on: false,
-            budget_ms: 1.0,
-            while_paused: false,
-        });
-        let log = || switches.lock().expect("switch log").clone();
-        assert!(wait_until(|| log().len() >= 2), "only {:?} reached the state", log());
-        assert_eq!(log(), [true, false]);
-    }
-
-    /// While paused, the layout moves on a step, and otherwise only when asked to relax while paused.
-    #[test]
-    fn a_paused_layout_relaxes_on_a_step_or_when_asked() {
-        let (mut thread, switches, relaxes) = Relaxes::spawn();
-        let count = || relaxes.load(Ordering::Relaxed);
-        let layout = |while_paused| SimCommand::SetLayout {
-            on: true,
-            budget_ms: 1.0,
-            while_paused,
-        };
-        assert!(
-            thread.take_snapshot().is_some(),
-            "a new thread publishes its first state"
-        );
-
-        thread.send(layout(false));
-        assert!(
-            snapshot_where(&mut thread, |_| true).is_some(),
-            "a layout switch publishes"
-        );
-        assert_eq!(count(), 0, "a paused publish relaxed");
-
-        thread.step_once();
-        assert!(snapshot_at(&mut thread, 1).is_some(), "a step publishes");
-        assert_eq!(count(), 1, "a step relaxes once and no more");
-
-        thread.send(layout(true));
-        assert!(
-            wait_until(|| count() >= 3),
-            "relaxing while paused stopped at {}",
-            count()
-        );
-
-        thread.send(layout(false));
-        // The switch reaches the state while the loop handles the command, and no relax runs after it.
-        assert!(
-            wait_until(|| switches.load(Ordering::Acquire) == 3),
-            "the switch never reached the state"
-        );
-        let stopped = count();
-        settle();
-        assert_eq!(count(), stopped, "the layout kept relaxing once told to stop");
-    }
-
-    /// A run to a tick ends paused, and a paused layout relaxes after it as it does after Pause.
-    #[test]
-    fn a_paused_layout_keeps_relaxing_after_a_run_to() {
-        let (mut thread, _, relaxes) = Relaxes::spawn();
-        let count = || relaxes.load(Ordering::Relaxed);
-
-        thread.send(SimCommand::SetLayout {
-            on: true,
-            budget_ms: 1.0,
-            while_paused: true,
-        });
-        thread.run_to(5);
-        // The target's snapshot is published after the run has stopped, so every relax from here on is a paused one.
-        assert!(
-            snapshot_at(&mut thread, 5).is_some(),
-            "the run never published its target"
-        );
-        let reached = count();
-        assert!(
-            wait_until(|| count() > reached),
-            "the layout stopped relaxing at the run's target"
-        );
-    }
-
-    /// A snapshot nobody is told about is a snapshot nobody draws. A step has to wake the UI, or the
-    /// viewport refreshes only once the mouse moves.
-    #[test]
-    fn a_publish_while_paused_wakes_the_ui() {
-        let ticks = Arc::new(AtomicU64::new(0));
-        let wakes = Arc::new(AtomicU64::new(0));
-        let counter = Arc::clone(&wakes);
-
-        let mut thread = SimThread::new(
-            Box::new(Counter(Arc::clone(&ticks))),
-            50.0,
-            Some(Arc::new(move || {
-                counter.fetch_add(1, Ordering::Relaxed);
-            })),
-            FaultSink::new(),
-        );
-
-        thread.step_once();
-        assert!(
-            wait_for_wakes(&wakes, 1) >= 1,
-            "a single step published without waking the UI"
-        );
-
-        // Pause force-publishes a final snapshot too.
-        let before = wakes.load(Ordering::Relaxed);
-        thread.pause();
-        assert!(
-            wait_for_wakes(&wakes, before + 1) > before,
-            "pausing published a final snapshot without waking the UI"
-        );
-    }
-
-    /// Takes snapshots until one satisfies `wanted`, or gives up after [`DEADLINE`].
-    fn snapshot_where(thread: &mut SimThread, wanted: impl Fn(&Snapshot) -> bool) -> Option<Snapshot> {
-        let deadline = Instant::now() + DEADLINE;
-        while Instant::now() < deadline {
-            if let Some(snap) = thread.take_snapshot()
-                && wanted(&snap)
-            {
-                return Some(snap);
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        None
-    }
-
-    /// Takes snapshots until one reports `tick`, or gives up after [`DEADLINE`].
-    fn snapshot_at(thread: &mut SimThread, tick: u64) -> Option<Snapshot> {
-        snapshot_where(thread, |snap| snap.tick == tick)
-    }
-
-    /// Returns a schedule of one action at each of `ticks`, in the order given.
-    fn schedule_at(ticks: &[u64]) -> Schedule {
-        let entries = ticks
-            .iter()
-            .map(|&tick| Scheduled {
-                index: 0,
-                id: "mark".to_owned(),
-                tick,
-            })
-            .collect();
-        Schedule::from_entries(entries)
-    }
-
-    /// Returns a thread over an [`ActionRecorder`] state capped at 1000 TPS, its tick and its action log.
-    fn action_recorder() -> (SimThread, Arc<AtomicU64>, Arc<Mutex<Vec<u64>>>) {
-        let ticks = Arc::new(AtomicU64::new(0));
-        let fired = Arc::new(Mutex::new(Vec::new()));
-        let state = ActionRecorder {
-            ticks: Arc::clone(&ticks),
-            fired: Arc::clone(&fired),
-        };
-        let thread = SimThread::new(Box::new(state), 1000.0, None, FaultSink::new());
-        (thread, ticks, fired)
-    }
-
-    fn fired_ticks(fired: &Arc<Mutex<Vec<u64>>>) -> Vec<u64> {
-        fired.lock().expect("action log").clone()
-    }
-
-    #[test]
-    fn run_to_stops_at_the_target_and_pauses() {
-        let ticks = Arc::new(AtomicU64::new(0));
-        // Capped at 1 TPS, so only an uncapped run reaches the target in time.
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 1.0, None, FaultSink::new());
-        thread.run_to(20_000);
-        let reached = snapshot_at(&mut thread, 20_000).expect("the run never published its target");
-        assert_eq!(reached.actual_tps, 0.0, "a paused run reported a rate");
-        settle();
-        assert_eq!(ticks.load(Ordering::Relaxed), 20_000, "the run went past its target");
-        assert!(thread.take_snapshot().is_none(), "a paused run kept publishing");
-
-        thread.run_to(10);
-        assert!(
-            snapshot_at(&mut thread, 20_000).is_some(),
-            "a run to a tick behind the current one pauses and publishes"
-        );
-        settle();
-        assert_eq!(ticks.load(Ordering::Relaxed), 20_000);
-    }
-
-    #[test]
-    fn a_schedule_fires_once_per_tick_after_the_step_reaching_it() {
-        let (mut thread, ticks, fired) = action_recorder();
-        thread.set_schedule(schedule_at(&[3, 1, 3, 9, 10, 25, 60]));
-        thread.run_to(10);
-        assert!(snapshot_at(&mut thread, 10).is_some());
-        assert_eq!(
-            fired_ticks(&fired),
-            [1, 3, 3, 9, 10],
-            "the step reaching the target fires its actions"
-        );
-
-        thread.step_once();
-        thread.step_once();
-        assert!(snapshot_at(&mut thread, 12).is_some());
-        assert_eq!(
-            fired_ticks(&fired),
-            [1, 3, 3, 9, 10],
-            "the target's actions fired twice"
-        );
-
-        thread.play();
-        assert!(
-            wait_until(|| ticks.load(Ordering::Relaxed) >= 30),
-            "the sim never played"
-        );
-        // Ten seconds ahead at 1000 TPS. The run to it stops Play long before the sim gets there.
-        let end = ticks.load(Ordering::Relaxed) + 10_000;
-        thread.run_to(end);
-        assert!(snapshot_at(&mut thread, end).is_some());
-        assert_eq!(fired_ticks(&fired), [1, 3, 3, 9, 10, 25, 60]);
-    }
-
-    #[test]
-    fn set_schedule_fires_what_is_due_now() {
-        let (mut thread, ticks, fired) = action_recorder();
-        assert!(
-            thread.take_snapshot().is_some(),
-            "a new thread publishes its first state"
-        );
-        thread.set_schedule(schedule_at(&[0, 1, 0]));
-        assert!(snapshot_at(&mut thread, 0).is_some(), "setting a schedule publishes");
-        assert_eq!(
-            fired_ticks(&fired),
-            [0, 0],
-            "both actions due at tick 0 fire before any step"
-        );
-        assert_eq!(ticks.load(Ordering::Relaxed), 0);
-
-        thread.step_once();
-        assert!(snapshot_at(&mut thread, 1).is_some());
-        assert_eq!(fired_ticks(&fired), [0, 0, 1]);
-    }
-
-    /// A second schedule must not fire the actions of the tick the loop sits at. That tick has fired already.
-    #[test]
-    fn a_replaced_schedule_never_fires_a_tick_again() {
-        let (mut thread, _, fired) = action_recorder();
-        thread.set_schedule(schedule_at(&[0, 4]));
-        thread.set_schedule(schedule_at(&[0, 4, 9]));
-        thread.run_to(4);
-        assert!(snapshot_at(&mut thread, 4).is_some());
-        assert_eq!(
-            fired_ticks(&fired),
-            [0, 4],
-            "a second schedule at tick 0 fired it again"
-        );
-
-        thread.set_schedule(schedule_at(&[4, 9]));
-        thread.run_to(9);
-        assert!(snapshot_at(&mut thread, 9).is_some());
-        assert_eq!(
-            fired_ticks(&fired),
-            [0, 4, 9],
-            "a schedule at a tick a step reached fired it again"
-        );
-
-        // Tick 12 fired nothing, and has had its turn all the same.
-        thread.run_to(12);
-        assert!(snapshot_at(&mut thread, 12).is_some());
-        thread.set_schedule(schedule_at(&[12, 13]));
-        thread.step_once();
-        assert!(snapshot_at(&mut thread, 13).is_some());
-        assert_eq!(fired_ticks(&fired), [0, 4, 9, 13]);
-    }
-
-    #[test]
-    fn play_cancels_a_run_to() {
-        let ticks = Arc::new(AtomicU64::new(0));
-        let mut thread = SimThread::new(Box::new(Counter(Arc::clone(&ticks))), 20.0, None, FaultSink::new());
-        thread.run_to(u64::MAX);
-        // A thousand ticks take 50 s at the cap, so reaching them within the deadline means the run is uncapped.
-        assert!(
-            wait_until(|| ticks.load(Ordering::Relaxed) > 1000),
-            "the run to a tick never ran uncapped"
-        );
-
-        thread.play();
-        // Once Play resets the TPS window, the next rate measured is the capped one. An uncapped run would report
-        // thousands of ticks per second.
-        let playing = snapshot_where(&mut thread, |snap| snap.actual_tps > 0.0 && snap.actual_tps <= 60.0);
-        thread.pause();
-        assert!(playing.is_some(), "Play never brought the sim back to its 20 TPS cap");
+        fire_counts: FireCounts::default(),
+        run_to_samples: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_UNCAPPED_STEPS, UNCAPPED_PUMP_MS, capped_batch_interval_secs, uncapped_steps_for};
-
-    /// Batching must not multiply the tick rate by the batch size.
-    #[test]
-    fn batching_does_not_change_effective_tick_rate() {
-        for &tps in &[1.0, 30.0, 250.0, 1000.0] {
-            for &batch in &[1, 2, 10, 137, 1000] {
-                let interval = capped_batch_interval_secs(tps, batch);
-                let effective = f64::from(batch) / interval;
-                assert!(
-                    (effective - tps).abs() < 1e-9,
-                    "tps {tps}, batch {batch}: effective {effective}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn interval_is_batch_size_over_tps() {
-        assert!((capped_batch_interval_secs(30.0, 10) - 1.0 / 3.0).abs() < 1e-12);
-        assert!((capped_batch_interval_secs(60.0, 1) - 1.0 / 60.0).abs() < 1e-12);
-    }
-
-    /// Guards against a `Duration::from_secs_f64` panic on a degenerate target rate.
-    #[test]
-    fn non_positive_tps_yields_a_finite_interval() {
-        for &tps in &[0.0, -5.0, f64::NAN, f64::INFINITY] {
-            let secs = capped_batch_interval_secs(tps, 4);
-            assert!(secs.is_finite() && secs > 0.0, "tps {tps} gave {secs}");
-            assert!(std::time::Duration::from_secs_f64(secs) > std::time::Duration::ZERO);
-        }
-    }
-
-    #[test]
-    fn zero_ticks_per_snapshot_is_treated_as_one() {
-        assert!((capped_batch_interval_secs(50.0, 0) - capped_batch_interval_secs(50.0, 1)).abs() < 1e-12);
-    }
+    use super::{MAX_UNCAPPED_STEPS, UNCAPPED_PUMP_MS, uncapped_steps_for};
 
     /// The frame is returned to the host between pumps, so a pump has to be worth a frame's work.
     #[test]
@@ -1248,250 +701,5 @@ mod tests {
         assert_eq!(uncapped_steps_for(None, 100), 1);
         assert_eq!(uncapped_steps_for(Some(0.0), 1), MAX_UNCAPPED_STEPS);
         assert!(uncapped_steps_for(Some(0.0), 100) <= MAX_UNCAPPED_STEPS);
-    }
-}
-
-#[cfg(test)]
-mod snapshot_tests {
-    use super::build_snapshot;
-    use crate::snapshot::SnapshotView;
-    use henad_core::model::SimState;
-    use henad_core::params::ParamValue;
-    use henad_core::view::{EdgeView, GridView, PointView, StatEntry};
-
-    const PALETTE: &[[u8; 4]] = &[[1, 2, 3, 4], [5, 6, 7, 8]];
-
-    /// A model with nodes and edges.
-    struct Graph {
-        pos: Vec<f32>,
-        src: Vec<u32>,
-        dst: Vec<u32>,
-        color: Vec<u8>,
-        version: u64,
-    }
-
-    impl Graph {
-        fn new(edges: usize, version: u64) -> Self {
-            Self {
-                pos: vec![0.0; 8],
-                src: (0..edges as u32).collect(),
-                dst: (0..edges as u32).map(|i| i + 1).collect(),
-                color: vec![0; edges],
-                version,
-            }
-        }
-    }
-
-    impl SimState for Graph {
-        fn step(&mut self) {}
-        fn tick(&self) -> u64 {
-            0
-        }
-        fn point_view(&self) -> Option<PointView<'_>> {
-            Some(PointView {
-                pos_x: &self.pos,
-                pos_y: &self.pos,
-                world_w: 1.0,
-                world_h: 1.0,
-                color: None,
-                palette: PALETTE,
-            })
-        }
-        fn edge_view(&self) -> Option<EdgeView<'_>> {
-            Some(EdgeView {
-                src: &self.src,
-                dst: &self.dst,
-                color: Some(&self.color),
-                palette: PALETTE,
-                directed: false,
-                version: self.version,
-            })
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn population(&self) -> u64 {
-            self.pos.len() as u64
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    /// A model with a field and agents. `build_snapshot` has to publish both.
-    struct Composite {
-        cells: Vec<u8>,
-        pos_x: Vec<f32>,
-        pos_y: Vec<f32>,
-        color: Vec<u8>,
-        with_color: bool,
-    }
-
-    impl Composite {
-        fn new(agents: usize, with_color: bool) -> Self {
-            Self {
-                cells: vec![1; 12],
-                pos_x: (0..agents).map(|i| i as f32).collect(),
-                pos_y: (0..agents).map(|i| i as f32 * 2.0).collect(),
-                color: (0..agents).map(|i| (i % 2) as u8).collect(),
-                with_color,
-            }
-        }
-    }
-
-    impl SimState for Composite {
-        fn step(&mut self) {}
-        fn tick(&self) -> u64 {
-            0
-        }
-        fn grid_view(&self) -> Option<GridView<'_>> {
-            Some(GridView {
-                width: 4,
-                height: 3,
-                cells: &self.cells,
-                palette: PALETTE,
-            })
-        }
-        fn point_view(&self) -> Option<PointView<'_>> {
-            Some(PointView {
-                pos_x: &self.pos_x,
-                pos_y: &self.pos_y,
-                world_w: 4.0,
-                world_h: 3.0,
-                color: self.with_color.then_some(&self.color),
-                palette: PALETTE,
-            })
-        }
-        fn stats(&self) -> Vec<StatEntry> {
-            Vec::new()
-        }
-        fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
-            false
-        }
-        fn population(&self) -> u64 {
-            self.pos_x.len() as u64
-        }
-        fn heap_bytes(&self) -> usize {
-            0
-        }
-    }
-
-    fn layers(view: &SnapshotView) -> &crate::snapshot::CpuLayers {
-        match view {
-            SnapshotView::Cpu(l) => l,
-            SnapshotView::Gpu(_) => panic!("expected a CPU snapshot"),
-        }
-    }
-
-    /// Publishing reaches `point_view` when there is a grid too. Otherwise a composite model silently
-    /// drops every agent.
-    #[test]
-    fn a_composite_model_publishes_both_layers() {
-        let mut state = Composite::new(3, true);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0, false);
-        let layers = layers(&snap.view);
-
-        let grid = layers.grid.as_ref().expect("field layer was dropped");
-        assert_eq!((grid.width, grid.height), (4, 3));
-        assert_eq!(grid.cells.len(), 12);
-
-        let points = layers.points.as_ref().expect("agent layer was dropped");
-        assert_eq!(points.pos_x, vec![0.0, 1.0, 2.0]);
-        assert_eq!(points.pos_y, vec![0.0, 2.0, 4.0]);
-        assert_eq!(points.color, vec![0, 1, 0]);
-    }
-
-    /// An absent lane must arrive empty. The renderer treats an empty lane as uniform.
-    #[test]
-    fn a_model_without_a_color_lane_publishes_an_empty_one() {
-        let mut state = Composite::new(2, false);
-        let snap = build_snapshot(None, &mut state, 0.0, 0.0, 0, false);
-        let points = layers(&snap.view).points.as_ref().expect("agent layer was dropped");
-        assert!(points.color.is_empty());
-        assert_eq!(points.pos_x.len(), 2);
-    }
-
-    /// The colour lane has to recycle alongside the position lanes.
-    #[test]
-    fn recycling_reuses_the_color_lane_across_a_length_change() {
-        let mut big = Composite::new(64, true);
-        let first = build_snapshot(None, &mut big, 0.0, 0.0, 0, false);
-        let capacity = layers(&first.view)
-            .points
-            .as_ref()
-            .map(|p| p.color.capacity())
-            .unwrap_or_default();
-        assert!(capacity >= 64);
-
-        let mut small = Composite::new(5, true);
-        let second = build_snapshot(Some(first), &mut small, 0.0, 0.0, 0, false);
-        let points = layers(&second.view).points.as_ref().expect("agent layer was dropped");
-        assert_eq!(points.color, vec![0, 1, 0, 1, 0]);
-        assert_eq!(points.color.capacity(), capacity, "the color lane reallocated");
-        assert_eq!(points.pos_x.len(), 5);
-    }
-
-    #[test]
-    fn an_unchanged_edge_list_is_handed_back_untouched() {
-        let mut model = Graph::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
-        let ptr = layers(&first.view).edges.as_ref().expect("edges").src.as_ptr();
-
-        // The version is unchanged, so nothing is copied.
-        model.src[0] = 999;
-        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2, false);
-        let edges = layers(&second.view).edges.as_ref().expect("edges");
-        assert_eq!(edges.src.as_ptr(), ptr, "the edge list reallocated");
-        assert_eq!(edges.src[0], 0, "an unchanged version was copied anyway");
-    }
-
-    #[test]
-    fn a_changed_edge_list_is_refilled_into_the_same_room() {
-        let mut model = Graph::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
-        let capacity = layers(&first.view).edges.as_ref().expect("edges").src.capacity();
-
-        model.version = 8;
-        model.src[0] = 999;
-        let second = build_snapshot(Some(first), &mut model, 0.0, 0.0, 2, false);
-        let edges = layers(&second.view).edges.as_ref().expect("edges");
-        assert_eq!(edges.src[0], 999, "the change did not reach the snapshot");
-        assert_eq!(edges.version, 8);
-        assert_eq!(edges.src.capacity(), capacity, "the edge list reallocated");
-    }
-
-    #[test]
-    fn an_edge_list_that_changed_length_is_refilled() {
-        let mut model = Graph::new(500, 7);
-        let first = build_snapshot(None, &mut model, 0.0, 0.0, 1, false);
-
-        let mut shorter = Graph::new(3, 7);
-        let second = build_snapshot(Some(first), &mut shorter, 0.0, 0.0, 2, false);
-        let edges = layers(&second.view).edges.as_ref().expect("edges");
-        assert_eq!(edges.src.len(), 3, "a shorter list was passed through whole");
-    }
-
-    #[test]
-    fn a_model_without_edges_publishes_none() {
-        let mut graph = Graph::new(4, 1);
-        let first = build_snapshot(None, &mut graph, 0.0, 0.0, 1, false);
-        assert!(layers(&first.view).edges.is_some());
-
-        let mut plain = Composite::new(4, true);
-        let second = build_snapshot(Some(first), &mut plain, 0.0, 0.0, 2, false);
-        assert!(
-            layers(&second.view).edges.is_none(),
-            "the edge layer outlived its model"
-        );
-    }
-
-    #[test]
-    fn the_serial_is_whatever_the_publish_was_given() {
-        let mut model = Graph::new(2, 1);
-        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 41, false).serial, 41);
-        assert_eq!(build_snapshot(None, &mut model, 0.0, 0.0, 42, false).serial, 42);
     }
 }

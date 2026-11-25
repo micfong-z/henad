@@ -30,7 +30,7 @@ use henad_core::metadata::Backend;
 use henad_core::params::ParamValue;
 
 use crate::cursor::{CursorState, RunCursor};
-use crate::probe::ProbeReport;
+use crate::probe::{ProbeReport, ShortfallWords};
 
 /// Number of jobs of one step for each thread of a lane.
 pub const JOBS_PER_THREAD: usize = 4;
@@ -533,6 +533,12 @@ pub struct Executor<'a> {
     gpu_memory_budget: Option<u64>,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
     track_depth: GpuTrackDepth,
+    /// Wording of the reasons the device cannot build a run of a GPU model, `None` for [`ModelEntry::shortfalls`].
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code, reason = "a browser steps no GPU track"))]
+    shortfall_words: Option<ShortfallWords>,
+    /// Thread pool each run of a GPU model is built in, `None` for rayon's global pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    build_pool: Option<Arc<rayon::ThreadPool>>,
 }
 
 impl<'a> Executor<'a> {
@@ -587,6 +593,9 @@ impl<'a> Executor<'a> {
             pools,
             gpu_memory_budget: None,
             track_depth: GpuTrackDepth::default(),
+            shortfall_words: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            build_pool: None,
         })
     }
 
@@ -597,6 +606,30 @@ impl<'a> Executor<'a> {
     /// left out.
     pub fn with_timeout(self, timeout: Option<Duration>) -> Self {
         Self { timeout, ..self }
+    }
+
+    /// Returns the executor with each run of a GPU model built in `pool`, or in rayon's global pool for `None`.
+    ///
+    /// The runs of a CPU model are built in the pools of their lanes either way.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_build_pool(self, pool: Option<Arc<rayon::ThreadPool>>) -> Self {
+        Self {
+            build_pool: pool,
+            ..self
+        }
+    }
+
+    /// Returns the executor with each run of a GPU model checked against the device before its build.
+    ///
+    /// A run the device cannot build ends as [`RunStatus::Refused`], with the reasons from `words`, or from
+    /// [`ModelEntry::shortfalls`] for `None`, in its note. The run is never built.
+    ///
+    /// [`RunStatus::Refused`]: henad_core::explore::outcome::RunStatus::Refused
+    pub fn with_shortfall_words(self, words: Option<ShortfallWords>) -> Self {
+        Self {
+            shortfall_words: words,
+            ..self
+        }
     }
 
     /// Returns the executor with each run listed in `active_runs` from its build to its end.
@@ -748,6 +781,15 @@ pub(crate) fn run_in_pool<R: Send>(pool: &rayon::ThreadPool, task: impl FnOnce()
     pool.install(task)
 }
 
+/// Runs `build` on a worker of `pool`, or on the calling thread when `pool` is `None`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn run_in_build_pool<R: Send>(pool: Option<&rayon::ThreadPool>, build: impl FnOnce() -> R + Send) -> R {
+    match pool {
+        Some(pool) => run_in_pool(pool, build),
+        None => build(),
+    }
+}
+
 /// Runs `task` on the calling thread. A browser cannot start a lane's thread, so no lane pool is built there.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn run_in_pool<R>(_pool: &rayon::ThreadPool, task: impl FnOnce() -> R) -> R {
@@ -862,14 +904,13 @@ mod tests {
     use henad_core::export::StatColumns;
     use henad_core::metadata::Backend;
     use henad_core::params::ParamValue;
-    use henad_models::example_models;
 
     use super::{
         ActiveRuns, BatchEnd, Concurrency, ExecutionBudget, ExecutionError, ExecutionLayout, Executor,
         LARGE_GPU_POPULATION, ReorderBuffer, RunRequest, RunSink, SliceSize, SweepControl, choose_layout,
     };
     use crate::probe::ProbeReport;
-    use crate::tests::support::{lanes, tracks};
+    use crate::tests::support::{entry, lanes, tracks};
 
     fn probe(parallel_jobs: Option<usize>, population: u64, heap_bytes: u64) -> ProbeReport {
         ProbeReport {
@@ -1161,10 +1202,6 @@ mod tests {
         }
     }
 
-    fn entry(id: &str) -> ModelEntry {
-        example_models().get(id).cloned().expect("the model is registered")
-    }
-
     /// Returns a plan over `entry` with three grid sizes and `replicates` replicates of `steps` steps each.
     fn plan(entry: &ModelEntry, steps: u64, replicates: u64) -> (Plan, Arc<MeasurePlan>) {
         let mut spec = SweepSpec::new(entry.id().to_owned());
@@ -1212,7 +1249,7 @@ mod tests {
 
     #[test]
     fn a_batch_commits_the_same_outcomes_in_request_order_at_any_lane_count() {
-        let entry = entry("sir");
+        let entry = entry("sir", None);
         let (plan, measure) = plan(&entry, 40, 3);
         let global = rayon::current_num_threads();
         let alone = run(&entry, &plan, &measure, lanes(1, global));
@@ -1232,7 +1269,7 @@ mod tests {
 
     #[test]
     fn an_abort_ends_every_lane() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let (plan, measure) = plan(&entry, 1_000_000, 4);
         let requests = requests(&plan);
         for layout in [lanes(1, rayon::current_num_threads()), lanes(3, 1)] {
@@ -1281,7 +1318,7 @@ mod tests {
 
     #[test]
     fn an_abort_lands_within_a_slice_of_a_heavy_run_after_a_light_one() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let mut spec = SweepSpec::new("game_of_life");
         spec.run.steps = 20_000;
         spec.measure.stats_every = 1000;
@@ -1329,7 +1366,7 @@ mod tests {
 
     #[test]
     fn a_paused_single_lane_holds_no_worker_of_the_global_pool() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let (plan, measure) = plan(&entry, 1_000_000, 1);
         let control = SweepControl::new();
         let active_runs = ActiveRuns::new();
@@ -1393,7 +1430,7 @@ mod tests {
 
     #[test]
     fn a_panicking_sink_aborts_every_lane() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let (plan, measure) = plan(&entry, 200, 4);
         let requests = requests(&plan);
         let control = SweepControl::new();
@@ -1408,7 +1445,7 @@ mod tests {
 
     #[test]
     fn a_panicking_lane_ends_the_batch_with_an_error() {
-        let plain = entry("game_of_life");
+        let plain = entry("game_of_life", None);
         let (plan, measure) = plan(&plain, 20, 2);
         // The build panics past the registry's catch, as a fault in the executor itself would.
         let panicking = plain.wrap_factory(|_| {
@@ -1428,7 +1465,7 @@ mod tests {
 
     #[test]
     fn runs_committed_before_an_abort_are_a_prefix_of_the_requests() {
-        let entry = entry("game_of_life");
+        let entry = entry("game_of_life", None);
         let (plan, measure) = plan(&entry, 2000, 4);
         let requests = requests(&plan);
         let control = SweepControl::new();

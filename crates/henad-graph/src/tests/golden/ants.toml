@@ -1,0 +1,433 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "ants"
+name = "Ant foraging"
+purpose = "Stigmergy: a colony finds a short path to food through trails alone. Look for a trail forming between the nest and the food, around the rocks, and deliveries rising steadily."
+next_line = 17
+
+[world]
+made_of = "agents"
+width = 200
+height = 200
+edges = "walls"
+
+[[agents]]
+id = "ant"
+name = "Ant"
+count = 2000
+max_count = 5000000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "on_ground"
+property = "ground"
+state = "nest"
+
+[[agents.property]]
+id = "heading"
+name = "Heading"
+type = "heading"
+
+[[agents.property]]
+id = "cargo"
+name = "Cargo"
+type = "states"
+states = [
+  { id = "searching", name = "Searching", color = "#E8E8F0" },
+  { id = "carrying_food", name = "Carrying food", color = "#3DD58C" },
+]
+
+[agents.property.starts_as]
+rule = "value"
+value = { state = "searching" }
+
+[[agents.property]]
+id = "reward_held"
+name = "Reward held"
+type = "number"
+
+[agents.property.starts_as]
+rule = "value"
+value = { param = "site_reward" }
+
+[ground]
+blocked = [
+  { property = "ground", state = "obstacle" },
+]
+
+[[ground.property]]
+id = "ground"
+name = "Ground"
+type = "states"
+states = [
+  { id = "open", name = "Open", color = "#0E0E12" },
+  { id = "obstacle", name = "Obstacle", color = "#5A5A62" },
+  { id = "food", name = "Food", color = "#3DD58C" },
+  { id = "nest", name = "Nest", color = "#F2E45C" },
+]
+
+[ground.property.starts_as]
+rule = "painted"
+base = "open"
+
+[[ground.property.starts_as.shape]]
+shape = "ellipse"
+state = "obstacle"
+center = [0.5, 0.725]
+size = [0.56, 0.1]
+angle = 45
+
+[[ground.property.starts_as.shape]]
+shape = "ellipse"
+state = "obstacle"
+center = [0.45, 0.275]
+size = [0.56, 0.1]
+angle = 45
+
+[[ground.property.starts_as.shape]]
+shape = "cell"
+state = "food"
+center = [0.125, 0.125]
+
+[[ground.property.starts_as.shape]]
+shape = "cell"
+state = "nest"
+center = [0.875, 0.875]
+
+[[ground.property]]
+id = "to_food"
+name = "To food"
+type = "number"
+marks = "largest"
+kept_per_tick = { param = "trail_kept_per_tick" }
+
+[ground.property.starts_as]
+rule = "value"
+value = 0
+
+[[ground.property]]
+id = "to_home"
+name = "To home"
+type = "number"
+marks = "largest"
+kept_per_tick = { param = "trail_kept_per_tick" }
+
+[ground.property.starts_as]
+rule = "value"
+value = 0
+
+[[event]]
+id = "delivery"
+name = "Delivery"
+means = "An ant carrying food reaches the Nest"
+
+[[parameter]]
+id = "trail_falloff"
+name = "Trail falloff"
+type = "number"
+min = 0.5
+max = 1
+default = 0.9
+step = 0.01
+means = "Share of a neighbouring trail an ant passes on when it lays"
+
+[[parameter]]
+id = "site_reward"
+name = "Site reward"
+type = "number"
+min = 0.1
+max = 10
+default = 1
+step = 0.1
+means = "Trail strength an ant adds immediately after reaching the food or the nest"
+
+[[parameter]]
+id = "momentum"
+name = "Momentum"
+type = "number"
+min = 0
+max = 1
+default = 0.8
+step = 0.01
+means = "Chance an ant with no trail ahead keeps going straight"
+
+[[parameter]]
+id = "random_step_chance"
+name = "Random step chance"
+type = "number"
+min = 0
+max = 1
+default = 0.1
+step = 0.01
+means = "Chance an ant steps to a random open cell instead of following the trail"
+
+[[parameter]]
+id = "trail_kept_per_tick"
+name = "Trail kept per tick"
+type = "number"
+min = 0.9
+max = 1
+default = 0.999
+step = 0.001
+means = "Share of each trail left after a tick's fading"
+
+[[measure]]
+id = "carrying_food"
+name = "Carrying food"
+color = "#3DD58C"
+rule = "count_in_state"
+over = "ant"
+property = "cargo"
+state = "carrying_food"
+
+[[measure]]
+id = "deliveries"
+name = "Deliveries"
+color = "#F2E45C"
+rule = "event_count"
+event = "delivery"
+
+[[measure]]
+id = "total_trail"
+name = "Total trail"
+color = "#2E8BE8"
+rule = "total"
+over = "ground"
+
+[measure.value]
+kind = "calculate"
+formula = "my.to_food + my.to_home"
+
+[color.ant]
+rule = "by_state"
+property = "cargo"
+
+[color.ground]
+rule = "by_state"
+property = "ground"
+shade_state = "open"
+shades = [
+  { property = "to_food", color = "#E88C2E" },
+  { property = "to_home", color = "#2E8BE8" },
+]
+scale = "log"
+decades = 3
+
+[[button]]
+id = "reset_colony"
+name = "Reset colony"
+
+[[button.does]]
+rule = "start_again"
+thing = "ant"
+
+[[button.does]]
+rule = "set_everywhere"
+property = "to_food"
+value = 0
+
+[[button.does]]
+rule = "set_everywhere"
+property = "to_home"
+value = 0
+
+[[card]]
+id = "ant_tick"
+every = "ant"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9", "l12", "l16"]
+
+[card.line.l1]
+kind = "pick_cell"
+name = "Food way"
+key = 3584366203
+around = "cells_8"
+open_only = true
+pick = "most"
+ranked_by = "to_food"
+
+[card.line.l2]
+kind = "pick_cell"
+name = "Home way"
+key = 2724843826
+around = "cells_8"
+open_only = true
+pick = "most"
+ranked_by = "to_home"
+
+[card.line.l3]
+kind = "leave"
+ground_property = "to_home"
+
+[card.line.l3.amount]
+kind = "calculate"
+formula = "trail_falloff * l2.amount + my.reward_held"
+
+[card.line.l3.condition]
+kind = "compare"
+test = "is"
+left = { my = "cargo" }
+right = { state = "searching" }
+
+[card.line.l4]
+kind = "leave"
+ground_property = "to_food"
+
+[card.line.l4.amount]
+kind = "calculate"
+formula = "trail_falloff * l1.amount + my.reward_held"
+
+[card.line.l4.condition]
+kind = "compare"
+test = "is"
+left = { my = "cargo" }
+right = { state = "carrying_food" }
+
+[card.line.l5]
+kind = "depending_on"
+name = "Way"
+property = "cargo"
+branches = { searching = { result = "l1" }, carrying_food = { result = "l2" } }
+
+[card.line.l6]
+kind = "look_at_cell"
+name = "Ahead"
+which = "ahead"
+
+[card.line.l7]
+kind = "choose"
+name = "Next cell"
+key = 2211984297
+otherwise = { result = "l5" }
+
+[[card.line.l7.row]]
+value = { result = "l6" }
+
+[card.line.l7.row.condition]
+kind = "all_of"
+
+[[card.line.l7.row.condition.items]]
+kind = "compare"
+test = "is"
+left = { result = "l5", part = "amount" }
+right = 0
+
+[[card.line.l7.row.condition.items]]
+result = "l6"
+part = "open"
+
+[[card.line.l7.row.condition.items]]
+kind = "chance"
+chance = { param = "momentum" }
+
+[[card.line.l7.row]]
+
+[card.line.l7.row.value]
+kind = "pick_cell"
+around = "cells_8"
+open_only = true
+pick = "random"
+
+[card.line.l7.row.condition]
+kind = "chance"
+chance = { param = "random_step_chance" }
+
+[card.line.l8]
+kind = "move"
+mode = "to"
+value = { result = "l7" }
+
+[card.line.l9]
+kind = "when"
+lines = ["l10", "l11"]
+
+[card.line.l9.condition]
+kind = "all_of"
+
+[[card.line.l9.condition.items]]
+kind = "compare"
+test = "is"
+left = { my = "cargo" }
+right = { state = "searching" }
+
+[[card.line.l9.condition.items]]
+kind = "compare"
+test = "is"
+left = { result = "l7", property = "ground" }
+right = { state = "food" }
+
+[card.line.l10]
+kind = "become"
+property = "cargo"
+new_state = "carrying_food"
+start_state = "any_state"
+
+[card.line.l10.condition]
+kind = "always"
+
+[card.line.l11]
+kind = "set"
+property = "reward_held"
+value = { param = "site_reward" }
+
+[card.line.l11.condition]
+kind = "always"
+
+[card.line.l12]
+kind = "when"
+lines = ["l13", "l14", "l15"]
+
+[card.line.l12.condition]
+kind = "all_of"
+
+[[card.line.l12.condition.items]]
+kind = "compare"
+test = "is"
+left = { my = "cargo" }
+right = { state = "carrying_food" }
+
+[[card.line.l12.condition.items]]
+kind = "compare"
+test = "is"
+left = { result = "l7", property = "ground" }
+right = { state = "nest" }
+
+[card.line.l13]
+kind = "become"
+property = "cargo"
+new_state = "searching"
+start_state = "any_state"
+
+[card.line.l13.condition]
+kind = "always"
+
+[card.line.l14]
+kind = "set"
+property = "reward_held"
+value = { param = "site_reward" }
+
+[card.line.l14.condition]
+kind = "always"
+
+[card.line.l15]
+kind = "record"
+event = "delivery"
+
+[card.line.l15.condition]
+kind = "always"
+
+[card.line.l16]
+kind = "set"
+property = "reward_held"
+value = 0
+
+[card.line.l16.condition]
+kind = "always"

@@ -59,29 +59,12 @@ pub fn raise(adapter: &wgpu::Adapter, base: &wgpu::Limits, needs: GpuNeeds) -> w
 #[cfg(test)]
 mod tests {
     use super::{GpuNeeds, raise};
-
-    /// Returns the default adapter, or `None` when this machine has no adapter.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `HENAD_REQUIRE_GPU` is set and no adapter is available.
-    fn adapter() -> Option<wgpu::Adapter> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()));
-        if let Err(err) = &adapter {
-            assert!(
-                !crate::gpu::tests::support::gpu_required(),
-                "HENAD_REQUIRE_GPU is set but no wgpu adapter is available: {err}"
-            );
-        }
-        adapter.ok()
-    }
+    use crate::gpu::tests::support::headless_adapter;
 
     /// Requesting more than the adapter offers fails `request_device` outright, so this is the safety property.
     #[test]
     fn nothing_is_asked_for_past_what_the_adapter_offers() {
-        let Some(adapter) = adapter() else {
-            log::warn!("skipping nothing_is_asked_for_past_what_the_adapter_offers: no adapter");
+        let Some(adapter) = headless_adapter() else {
             return;
         };
         let available = adapter.limits();
@@ -99,8 +82,7 @@ mod tests {
     /// The three size limits are the whole point, so a baseline request must move them.
     #[test]
     fn size_limits_reach_what_the_adapter_reports() {
-        let Some(adapter) = adapter() else {
-            log::warn!("skipping size_limits_reach_what_the_adapter_reports: no adapter");
+        let Some(adapter) = headless_adapter() else {
             return;
         };
         let available = adapter.limits();
@@ -116,8 +98,7 @@ mod tests {
     /// A host with no models must get a device no wider than the one models are tested against.
     #[test]
     fn needing_nothing_leaves_the_count_at_the_baseline() {
-        let Some(adapter) = adapter() else {
-            log::warn!("skipping needing_nothing_leaves_the_count_at_the_baseline: no adapter");
+        let Some(adapter) = headless_adapter() else {
             return;
         };
         let base = wgpu::Limits::default();
@@ -130,8 +111,7 @@ mod tests {
 
     #[test]
     fn a_need_above_the_baseline_raises_only_the_count() {
-        let Some(adapter) = adapter() else {
-            log::warn!("skipping a_need_above_the_baseline_raises_only_the_count: no adapter");
+        let Some(adapter) = headless_adapter() else {
             return;
         };
         let base = wgpu::Limits::default();

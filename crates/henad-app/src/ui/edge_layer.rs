@@ -4,7 +4,8 @@
 //! Only the edge list is copied to the GPU, and only when it changes.
 
 use crate::shader_bindings::edges::Uniforms;
-use crate::ui::agent_layer::{AGENT_SIZE_PT, palette_lut};
+use crate::state::UiPool;
+use crate::ui::agent_layer::{AGENT_SIZE_PT, alpha_pipeline, palette_lut, vertex_uniform_entry};
 use henad_compute::snapshot::EdgeSnapshot;
 
 /// Alpha at the source of a directed edge.
@@ -67,6 +68,8 @@ pub struct EdgeLayer {
     directed: bool,
     /// Version and length of the edge list currently in `instances`.
     uploaded: Option<(u64, usize)>,
+    /// Palette of the edge list currently in `instances`.
+    uploaded_palette: Vec<[u8; 4]>,
     /// Instances packed for the next copy to the GPU, reused across uploads.
     scratch: Vec<u32>,
 }
@@ -96,20 +99,7 @@ impl EdgeLayer {
         };
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("henad_edge_bind_group_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                storage(1),
-                storage(2),
-            ],
+            entries: &[vertex_uniform_entry(0), storage(1), storage(2)],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -119,38 +109,17 @@ impl EdgeLayer {
         });
 
         let make = |label: &str, entry_point: &str, topology: wgpu::PrimitiveTopology| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some(entry_point),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: (WORDS * 4) as u64,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &INSTANCE_ATTRS,
-                    })],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            let vertex = wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(entry_point),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (WORDS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &INSTANCE_ATTRS,
+                })],
+            };
+            alpha_pipeline(device, label, &pipeline_layout, vertex, topology, target_format)
         };
         let pipeline = make("henad_edge_pipeline", "vs_main", wgpu::PrimitiveTopology::LineList);
         let arrow_pipeline = make(
@@ -179,6 +148,7 @@ impl EdgeLayer {
             count: 0,
             directed: false,
             uploaded: None,
+            uploaded_palette: Vec::new(),
             scratch: Vec::new(),
         };
         layer.bind(pos_x, pos_y);
@@ -215,31 +185,34 @@ impl EdgeLayer {
         }));
     }
 
-    /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version.
-    pub fn upload(&mut self, edges: &EdgeSnapshot) {
+    /// Copies the edge list into the GPU instance buffer, unless the buffer already holds the same version in the
+    /// same palette. The edges are packed on workers of `pool`.
+    pub fn upload(&mut self, edges: &EdgeSnapshot, pool: &UiPool) {
         self.directed = edges.directed;
         let n = edges.src.len().min(edges.dst.len());
-        if self.uploaded == Some((edges.version, n)) {
+        if self.uploaded == Some((edges.version, n)) && self.uploaded_palette == edges.palette {
             return;
         }
         self.uploaded = Some((edges.version, n));
+        self.uploaded_palette.clone_from(&edges.palette);
         self.count = 0;
         if n == 0 || !self.grow_to(n) {
             return;
         }
 
-        let lut = palette_lut(edges.palette);
+        let lut = palette_lut(&edges.palette);
         let (src, dst, color) = (&edges.src, &edges.dst, &edges.color);
         self.scratch.clear();
         self.scratch.resize(n * WORDS, 0);
-        {
+        let scratch = &mut self.scratch;
+        pool.install(|| {
             use rayon::prelude::*;
-            self.scratch.par_chunks_mut(WORDS).enumerate().for_each(|(e, words)| {
+            scratch.par_chunks_mut(WORDS).enumerate().for_each(|(e, words)| {
                 words[0] = src[e];
                 words[1] = dst[e];
                 words[2] = lut[usize::from(color.get(e).copied().unwrap_or(0))];
             });
-        }
+        });
         self.queue
             .write_buffer(&self.instances, 0, bytemuck::cast_slice(&self.scratch));
         self.count = u32::try_from(n).unwrap_or(u32::MAX);

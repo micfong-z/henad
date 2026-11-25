@@ -5,12 +5,24 @@
 //! A model contributes shaders, seed data and metadata, and every wgpu object is built here.
 
 pub mod agent_engine;
+pub(crate) mod agent_spec;
+mod built_pass;
 pub mod capacity;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub mod compose;
 mod contracts;
 pub mod fault;
 pub mod grid_engine;
+pub(crate) mod grid_spec;
 pub mod limits;
+mod press;
 pub mod primitives;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub mod runtime_grid;
+pub(crate) mod shader_spec;
+pub(crate) mod sides;
 pub mod sim_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stepping;
@@ -21,11 +33,29 @@ pub mod view;
 mod tests;
 
 pub use agent_engine::GpuAgentState;
-pub use capacity::Demand;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use agent_spec::{
+    AgentActionSpec, AgentBufferSpec, AgentDisplaySpec, AgentHooks, AgentPassId, AgentPassSpec, AgentReduceSpec,
+    AgentRun, GpuAgentSpec,
+};
+pub use capacity::{Demand, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET};
 pub use grid_engine::GpuGridState;
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use grid_spec::{
+    GpuGridSpec, GridActionSpec, GridBufferSpec, GridHooks, GridPassCtx, GridPassId, GridPassSpec, GridPress,
+    RerunUploads,
+};
 pub use limits::GpuNeeds;
 pub use primitives::readback::StatsPoll;
-pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid};
+pub use primitives::spatial_hash::{GpuSpatialHash, HashGrid, LargestBucket};
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use shader_spec::{ShaderBinding, ShaderSpec};
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use sides::{BufferSide, SideRow, SideTable};
 pub use sim_thread::{GpuSimState, GpuStats};
 pub use view::agents::GpuAgents;
 pub use view::display::{DisplayTarget, GpuDisplay};
@@ -107,7 +137,7 @@ impl GpuContext {
         let sink = send_wrapper::SendWrapper::new(sink);
         device.on_uncaptured_error(std::sync::Arc::new(move |error: wgpu::Error| {
             log::error!("unhandled GPU error: {error}");
-            sink.set_once(Fault::device("running on the GPU", error));
+            sink.set_once(Fault::device("running the simulation", error));
         }));
         let lost = Arc::new(AtomicBool::new(false));
         let callback_lost = Arc::clone(&lost);

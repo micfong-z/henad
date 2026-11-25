@@ -1,0 +1,265 @@
+# A random walk as a graph model: each tick, each agent takes `sub_steps` steps of `step_size` in random directions,
+# carried through a Repeat.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_random_walk"
+name = "Random Walk"
+description = "Agents wander a torus, each taking several random steps per tick"
+
+[graph]
+topology = "agents"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_random_walk"
+name = "Random Walk (GPU)"
+description = "Agents wander a torus, each taking several random steps per tick, stepped entirely on the GPU"
+
+[agents]
+count = 10000
+max_count = 1000000
+width = 1000.0
+height = 1000.0
+
+[[palette]]
+id = "heading"
+colors = [
+  [228, 55, 72, 255],
+  [240, 122, 40, 255],
+  [255, 193, 7, 255],
+  [139, 195, 74, 255],
+  [30, 168, 124, 255],
+  [0, 158, 200, 255],
+  [0, 122, 245, 255],
+  [142, 84, 216, 255],
+]
+
+[[lane]]
+id = "pos"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+role = "position"
+
+[[lane]]
+id = "last"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+
+[[param]]
+id = "sub_steps"
+label = "Steps per Tick"
+kind = "u32"
+min = 0
+max = 16
+default = 4
+
+[[param]]
+id = "step_size"
+label = "Step Size"
+kind = "f32"
+min = 0.1
+max = 20.0
+default = 2.0
+step = 0.1
+
+[[stat]]
+label = "Mean Position"
+from = "n41.mean"
+color = [0, 122, 245, 255]
+
+[[pass]]
+id = "scatter"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+draw_order = ["n3", "n4"]
+
+[[pass.node]]
+id = "n1"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n2"
+op = "vec.split"
+in.v = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "stream.float"
+in.max = "n2.x"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n4"
+op = "stream.float"
+in.max = "n2.y"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n5"
+op = "vec.make"
+in.x = "n3"
+in.y = "n4"
+
+[[pass.node]]
+id = "n6"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n5"
+
+[[pass]]
+id = "walk"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "pos"
+
+[[pass.node]]
+id = "n21"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n22"
+op = "region.repeat"
+config.max = 16
+config.acc = [
+  { name = "position", type = "vec2f", combine = "carry" },
+  { name = "step", type = "vec2f", combine = "carry" },
+]
+in.count = { param = "sub_steps" }
+in.when = { bool = true }
+in.init.position = "n20"
+in.init.step = { vec2f = [0.0, 0.0] }
+
+[[pass.node]]
+id = "n23"
+op = "rand.float"
+config.key = 2134536642
+in.max = { f32 = 6.2831855 }
+region = "n22"
+
+[[pass.node]]
+id = "n24"
+op = "vec.from_angle"
+in.angle = "n23"
+in.length = { param = "step_size" }
+region = "n22"
+
+[[pass.node]]
+id = "n25"
+op = "math.add"
+in.a = "n22.prev.position"
+in.b = "n24"
+region = "n22"
+
+[[pass.node]]
+id = "n26"
+op = "space.wrap"
+in.v = "n25"
+in.world = "n21"
+region = "n22"
+
+[[pass.node]]
+id = "n27"
+op = "region.put"
+config.acc = "position"
+in.value = "n26"
+in.when = { bool = true }
+region = "n22"
+
+[[pass.node]]
+id = "n28"
+op = "region.put"
+config.acc = "step"
+in.value = "n24"
+in.when = { bool = true }
+region = "n22"
+
+[[pass.node]]
+id = "n29"
+op = "lane.set"
+config.lane = "pos"
+in.value = "n22.position"
+
+[[pass.node]]
+id = "n30"
+op = "lane.set"
+config.lane = "last"
+in.value = "n22.step"
+
+[[pass]]
+id = "heading"
+stage = "view"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n35"
+op = "lane.get"
+config.lane = "last"
+
+[[pass.node]]
+id = "n36"
+op = "space.heading_octant"
+in.v = "n35"
+
+[[pass.node]]
+id = "n37"
+op = "view.color"
+config.palette = "heading"
+in.index = "n36"
+
+[[pass]]
+id = "positions"
+stage = "stats"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n40"
+op = "lane.get"
+config.lane = "pos"
+
+[[pass.node]]
+id = "n41"
+op = "stat.mean"
+config.chunk_acc = "f64"
+in.value = "n40"
+
+[editor]
+version = 1
+next_id = 42
+node.n1 = { pos = [40.0, 40.0] }
+node.n2 = { pos = [246.0, 40.0] }
+node.n3 = { pos = [482.0, 40.0] }
+node.n4 = { pos = [482.0, 149.0] }
+node.n5 = { pos = [789.0, 40.0] }
+node.n6 = { pos = [1047.0, 40.0] }
+node.n20 = { pos = [40.0, 40.0] }
+node.n21 = { pos = [40.0, 128.0] }
+node.n22 = { pos = [257.0, 40.0], output_pos = [2092.0, 40.0] }
+node.n23 = { pos = [709.0, 40.0] }
+node.n24 = { pos = [1007.0, 40.0] }
+node.n25 = { pos = [1312.0, 40.0] }
+node.n26 = { pos = [1564.0, 40.0] }
+node.n27 = { pos = [1840.0, 40.0] }
+node.n28 = { pos = [1312.0, 148.0] }
+node.n29 = { pos = [2345.0, 40.0] }
+node.n30 = { pos = [2345.0, 128.0] }
+node.n35 = { pos = [40.0, 40.0] }
+node.n36 = { pos = [257.0, 40.0] }
+node.n37 = { pos = [600.0, 40.0] }
+node.n40 = { pos = [40.0, 40.0] }
+node.n41 = { pos = [257.0, 40.0] }

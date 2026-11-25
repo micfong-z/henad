@@ -5,9 +5,9 @@ use web_time::Instant;
 
 use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{
-    HeatmapTiles, color_bar, format_significant, heat_color, labeled_combo, level_formatter, refresh_due,
+    HeatmapTiles, cache_stale, color_bar, format_significant, heat_color, labeled_combo, level_formatter,
 };
-use crate::ui::results::response::{output_combo, pins_row};
+use crate::ui::results::response::{fit_pins, pins_row, reducer_combo};
 use crate::ui::results::store::{HeatColor, HeatGrid, HeatQuery, ResultsStore};
 use crate::ui::show_plot;
 
@@ -144,7 +144,7 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut HeatmapView, sid
                 ui.selectable_value(&mut view.y_axis, axis, axes[axis].label.as_str());
             }
         });
-        output_combo(ui, "henad_results_heatmap_output", store, &mut view.output);
+        reducer_combo(ui, "henad_results_heatmap_output", store, &mut view.output);
         let color_text = view.color_by.label();
         labeled_combo(ui, "Color by", "henad_results_heatmap_color", color_text, |ui| {
             for color_by in [
@@ -174,10 +174,7 @@ impl HeatmapView {
                 .unwrap_or(sides[1]);
         }
         self.output = self.output.min(store.reducer_columns().len() - 1);
-        self.pins.resize(store.axes().len(), None);
-        for (pin, axis) in self.pins.iter_mut().zip(store.axes()) {
-            *pin = pin.filter(|&level| level < axis.levels.len());
-        }
+        fit_pins(&mut self.pins, store.axes());
     }
 
     /// Returns the grid of `query`, computed again when the query changes, and at most once per
@@ -188,10 +185,12 @@ impl HeatmapView {
     /// [`REFRESH_INTERVAL`]: crate::ui::results::plot::REFRESH_INTERVAL
     fn grid(&mut self, ctx: &egui::Context, store: &ResultsStore, query: &HeatQuery) -> Option<&HeatGrid> {
         let stale = self.cache.as_ref().is_some_and(|cache| {
-            if cache.query != *query || cache.revision == store.revision() {
-                return cache.query != *query;
-            }
-            refresh_due(ctx, cache.computed_at)
+            cache_stale(
+                ctx,
+                cache.query != *query,
+                cache.revision != store.revision(),
+                cache.computed_at,
+            )
         });
         if stale {
             self.cache = None;

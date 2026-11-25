@@ -1,0 +1,225 @@
+# GPU traps that already cost real debugging
+
+Each of these failed silently or misleadingly once. The engine now handles all of them, so the note
+is about not undoing them.
+
+- **A timestamp stamped on an empty compute pass is never written.** The symptom is a `start` of 0
+  and an absurd elapsed time (an absolute GPU tick, ~4e14 ns). `gpu/agent_engine.rs` puts the
+  opening stamp on the index rebuild's counting pass when there is an index, and on the first
+  declared pass when there is not.
+- **One oversized submission silently returns zeros.** Enough passes in a single command buffer
+  trips the OS GPU watchdog — no error, no panic, and every later readback reads zero. Batch at 64
+  steps per submission, as `GpuAgentState::run_batched` and the real runner do. This first showed up
+  as a flaky test. The kit's `FullSubmission` compares one full submission of each GPU model that
+  replays exactly with single steps run before it. 64 steps can still be too many when a step's work
+  depends on where agents stand: a crowd in one cell walks every agent. Every host holds each
+  command buffer to `GpuSimState::submission_steps`. A graph of agents with a radius fold sizes
+  it from the largest bucket of its index, measured after the first step
+  (`agents/henad-compute.md`). A host that submits 64 steps without asking undoes that. The kit's
+  `FullSubmission` and `SampledSlice` submit 64 on purpose, at the model's defaults. The sweep's
+  GPU tracks (`henad-explore/src/exec/gpu.rs`) keep the bound per run. Each command buffer holds
+  the steps of one run, and two runs' buffers are never merged. N runs of 64 steps in one buffer
+  would trip the watchdog again.
+- **`max_storage_buffers_per_shader_stage` is 8** in `wgpu::Limits::default()` and in the WebGPU
+  baseline. `limits.rs::raise` asks for exactly what the models need, the `GpuNeeds` a host reads
+  from its set through `ModelSet::gpu_needs()` before any device exists. Each GPU entry declares its
+  own from its pass list — no constant, because wgpu's own advice is to request only what you need
+  and a constant would be either short of a future model or dead headroom. For the example models
+  it comes to 8, since `gpu_ants`'s step pass sits at exactly 8. `raise` takes the needs rather
+  than knowing them: henad-compute cannot see which models a host offers.
+  The kit's `BaselineBuild`, run by the registry tests on a `Limits::default()` device from
+  `headless_test_device`, holds the line, and asserts in the same breath that `capacity.rs` agrees.
+  Build and declared demand pin each other, and an over-reported pass count fails there.
+  `every_gpu_entry_needs_the_bindings_its_widest_pass_binds` pins each entry's `GpuNeeds` to its
+  demand. Note wgpu on Metal shares one argument table across storage + uniform + vertex, so a
+  check counting only storage buffers can pass locally and fail there.
+- **A generated graph shader packs lanes against a fixed budget, never the device's limit.**
+  henad-graph's compiler packs a graph's lanes into shared buffers only when a shader would bind
+  more than `limits::MAX_STORAGE_BINDINGS` (8) storage buffers, whatever the device offers, and
+  one file compiles to the same WGSL on every machine. A packed buffer is held to
+  `MAX_PACKED_BUFFER_BYTES` (128 MiB) at the domain's largest count the file sets, for the same
+  reason. Packing to the device's own limit would make the shaders, and the text a fault quotes,
+  differ between a laptop and a browser (`agents/henad-graph-wgsl.md`, "Lane buffers and packing").
+- **`Limits::default()` is not the hardware, and its _size_ limits are what bound a run.** The
+  baseline caps one storage binding at 128 MiB, one buffer at 256 MiB and a texture side at 8192,
+  where an M4 Pro offers 4 GiB, 14.3 GB and 16384. `limits.rs::raise` takes all three to whatever
+  the adapter reports. Unlike the buffer count, these are deliberately machine-dependent: how big a
+  run can be is a property of the hardware however we ask.
+- **The display texture is a sampled view, never a mirror of the grid.** One texel per cell caps
+  the grid at `max_texture_dimension_2d` and costs 4 bytes per cell, which at 16384² is 1.07 GB of
+  RGBA for something drawn into a ~1000 px panel. `display_scale.rs` caps each axis at
+  `MAX_DISPLAY_DIM`, a display pass dispatches per _texel_ and reads the cell at
+  `texel * grid / tex`, and `viewport.rs` samples the CPU grid the same way on upload. Both are
+  identity below the cap.
+- **A model over the device's limit is refused before it is built.** `gpu/capacity.rs` computes a
+  model's buffer sizes, texture dimensions and per-pass storage-binding counts from what it already
+  declares, and checks them first. The app disables Build and both engines assert with a readable
+  message. That covers sizes and binding counts. The cheap half.
+- **Everything else the device rejects reaches the UI instead of the process.** wgpu's default
+  handler panics on any error no scope claims. `gpu::fault::catching_on` wraps model construction in
+  error scopes for all three `ErrorFilter`s, and `GpuContext::new` installs `on_uncaptured_error` as
+  the floor under every path no scope covers, egui's own rendering included. Contracts `capacity.rs`
+  cannot see (uniform layout, an allocation the device has no memory for) now reach the UI as a
+  modal, and `contracts.rs` turns a workgroup size or a buffer label the device would accept into a
+  panic at construction. Do not undo either half — remove the handler and the next validation error
+  ends the process. Note error scopes are **thread-local**, so a scope pushed on the UI thread never
+  sees what a sim thread does. The sink exists to cover that asymmetry.
+- **A panicking kernel is caught too, and its location needs help.** `runner/thread.rs` wraps
+  `run()` once at thread start, outside the loop, so the catch costs nothing per tick. Rayon
+  catches a worker's panic and re-raises it on the caller with `resume_unwind`, which does not run
+  the panic hook again, so `fault.rs` keeps a global fallback alongside its thread-local record.
+  Drop the fallback and every `step_cell` panic loses its `file:line`. The fallback keeps each
+  `(message, site)` once, moved to the newest place when recorded again, and a catch reads it
+  without removing it. A FIFO of every panic let one kernel's burst of identical panics, or a
+  parallel test's, push out the site a catch was about to read
+  (`a_burst_of_one_panic_keeps_the_sites_of_others`).
+- **Two clocks that must be reset together.** `gpu/sim_thread.rs` gates its stats refresh on
+  `last_stats_publish` but divides by `tps_timer`; resetting one without the other reports a whole
+  batch over a near-zero window as a plausible-looking TPS. Go through `reset_tps_window`.
+- **A stats sample encoded while the previous readback is pending is dropped.** `CounterReadback`
+  skips its copy while a map is in flight, and the stats repeat the older values with no error.
+  `stepping::submit_slice` debug-asserts against it, and `stepping::sample_stats` and
+  `sim_thread::snapshot_blocking` collect a readback still in flight before they encode their own.
+  The runner publishes a batch's snapshot once its readback lands and before the next batch. A
+  snapshot published earlier carries the previous readback's stats under its own tick. A poll that
+  gives up a map unmaps the staging buffer. A buffer left mapped or pending makes the next copy
+  into it a validation error and fails every later map. A host that pipelines its samples learns
+  from the `StatsPoll` that `poll_stats_readback` returns whether the latest one landed or failed.
+  The GPU tracks in `henad-explore/src/exec/gpu.rs` record no sample while one reads back, and
+  assert it outside their error scopes, where a panic would pass for a failed run.
+- **A lost device fails quietly first.** After `Device::destroy` or a driver loss, polls and waits
+  still succeed, and builds and readbacks fail as ordinary validation errors. wgpu reports the loss
+  only through the device-lost callback, and for a destroyed device only once a poll finds its
+  queue empty. `GpuContext::new` installs that callback and `GpuContext::is_lost` reads it. The GPU
+  tracks drain the device and check it before writing any run that failed on the GPU. Otherwise
+  every run left is written as `gpu_error` instead of being left for `--resume`. `stepping::wait`
+  and `stepping::sample_stats` return `FaultKind::DeviceLost` once it is set, and a `Simulation`
+  returns it in place of the errors the loss caused. Otherwise `--export-stats` and the benchmark
+  step on a lost device and report the last stats it read.
+- **A naga span of a composed module is not a place in the file.** naga_oil keeps a module's index
+  above bit 21 of every span (`SPAN_SHIFT`, private in naga_oil, copied in `gpu/compose.rs`), and
+  parses each file behind an import header whose length it keeps to itself. It keeps each line but
+  writes every imported name decorated, so a column after one is off. `compose.rs` masks the index,
+  reads the header's length back from an anchor function whose line naga_oil leaves alone,
+  recomputes naga_oil's preprocessed text through its public `Preprocessor`, and maps a column by
+  aligning the tokens of the line naga read with the line as written, through naga_oil's
+  `Tokenizer`. A column counts characters. A validation error lists its spans from the function to
+  the expression at fault, and is placed by the last. `naga_oil_span_encoding_is_unchanged` and the
+  place tests of `gpu/tests/runtime_grid.rs` fail when naga_oil changes any of it.
+- **Metal compiles every shader with fast math.** wgpu 30's Metal backend sets only
+  `preserveInvariance` on `MTLCompileOptions`, and Metal's default turns fast math on, so the device
+  may contract a multiply and an add into one rounding, reassociate a chain of adds, and replace a
+  division with a multiply by the reciprocal. The same arithmetic then rounds differently in two
+  code shapes: a Repeat of `prev * 1.1 + f32(k)` and its five copies with `k` as literals differ in
+  the last bit of some cells on an Apple M4 Pro (record #66). naga's MSL of both, compiled with
+  `MTLMathMode.safe`, equals itself and the host bit for bit, and compiled with Metal's default
+  reproduces wgpu's words exactly (record #67). Integer arithmetic and comparisons are
+  unaffected, and so are the draws of henad-graph's tests. A graph equals a stock port on one device
+  when both write the same float expression, as `gpu_sir_exact.toml` and `gpu_sir` do with `pow`.
+  henad-graph's `a_float_repeat_body_equals_its_hand_chained_copies_on_the_device` and henad-models'
+  `a_float_repeat_over_agents_equals_its_hand_chained_copies_bit_for_bit` are `#[ignore]`d for it,
+  as probes of a device and no gate. Contraction is no Metal peculiarity. Both tests also fail on
+  lavapipe on aarch64 (Mesa 25.0.7, LLVM 19), where LLVM contracts the multiply and the add, and
+  the device then differs from the host. The contract: a graph or sheet on a grid replays exactly
+  with one seed on one device, and so does one of agents unless a tick pass's `agent.radius_fold`
+  holds a `carry`, a float `sum`, or reads its `k` or a `prev.<acc>` (`fold_order_matters` in
+  `wgsl/agents.rs` clears `replays_exactly`). The device's index lists a cell's agents in the order
+  its atomics resolve. That order changes between runs, and a float sum in another order rounds
+  differently. The boids sheet and starter and the bounded confidence sheet are such models, and
+  `the_replay_flag_follows_the_radius_folds` holds every other starter and sheet starter to
+  replaying. The app says so in Compare runs (`runs_do_not_replay`) and beside Results' Open
+  (`INEXACT_REPLAY`). In a model that replays, a computation over whole numbers alone gives the
+  same result on every device and the host evaluator, and float results may differ in their last
+  places between devices and between two shapes of one computation. A whole number worked out from
+  floats can differ where the floats do. On an Apple M4 Pro the contraction probe of henad-models'
+  `graph_ants_parity.rs` (record #68) found `a * b + c` written as one expression and as two `let`s
+  rounded alike, both fused, on every one of 6216 inputs where a fused and a rounded result differ,
+  so a `let` boundary does not stop contraction. A field
+  that adds up (henad-graph's `combine = "sum"`) keeps to a power-of-two resolution 2^-k for this:
+  the deposit's product by 2^k and the merge's `f32(word) * 2^-k` are exact below 2^24, so a
+  contraction of the merge's add has nothing to round differently, and the integer `atomicAdd` in
+  between is unaffected. A resolution such as 0.001 would round in both products.
+- **wgpu checks no shader's workgroup memory against the device.** A generated reduce shader with
+  `var<workgroup>` past `max_compute_workgroup_storage_size` built on Metal with no error and
+  counted wrong: 66560 bytes on a 16 KiB device reported 8192 for a stat of 4096 cells. A uniform
+  block past `max_uniform_buffer_binding_size` builds too and fails only at `create_bind_group`,
+  with no place in the file. `Demand::shortfalls` refuses both before a build from the sizes a
+  `GridPassSpec` declares, so a generated pass sets `uniform_bytes` and `workgroup_bytes`.
+- **A workgroup barrier needs uniform control flow, and naga does not check it.** WGSL requires
+  every invocation of a workgroup to reach each `workgroupBarrier()`, and a barrier after an early
+  `return` of the invocations past the last element breaks that. naga's validation in
+  `compose_wgsl` accepted such a step of henad-graph's WGSL compiler, so no build refuses one and
+  its result on a device is undefined. No step of the compiler returns early: a grid step's bounds
+  check and an agents field update's slot check wrap the body in a block, and the counter tallies'
+  barriers sit at the top level of `main` (`agents/henad-graph-wgsl.md`). henad-graph's
+  `no_step_returns_early` and `each_counter_flushes_once_per_workgroup_after_a_top_level_barrier`
+  hold the text, and henad-models'
+  `every_probed_shader_keeps_its_barriers_in_uniform_control_flow` holds every barrier of the probed
+  shaders (the graph starters, and the sheets as a model file compiles them) at the top level of
+  `main`.
+- **WARP crashes while it compiles a storage atomic after a barrier inside an `if` from FXC.**
+  Windows' software adapter (Microsoft Basic Render Driver, the adapter of CI's Windows runner)
+  compiles a compute pipeline at its first dispatch, and
+  `d3d10warp!ComputeShaderTransformer::ConstructLoadStoreSets` writes out of bounds when an atomic
+  on a storage buffer follows a `workgroupBarrier()` inside the same `if`. A barrier inside an `if`
+  with no storage atomic after it in the block compiles, and so do the atomics after a barrier at
+  the top level of `main`. The process dies with `STATUS_ACCESS_VIOLATION` (0xc0000005), with no
+  error and no panic, and a uniform condition does not help. The probe tallies of henad-graph once
+  held both their barriers inside `if (params.henad_count_fires != 0u)`, the second followed by the
+  flush into `counters`, and every test that stepped a sheet with fire counts died on Windows. On
+  dx12, wgpu compiles HLSL with FXC (`d3dcompiler_47.dll`), Direct3D's older compiler, unless it can
+  load `dxcompiler.dll`, which no user has by default. Through DXC the same shaders run. Every
+  barrier henad-graph's compiler writes now sits at the top level of `main`. The same FXC path
+  returns a negative zero for `abs(-0.0)` on WARP, and the compiler writes a float `math.abs` as a
+  clear of the sign bit.
+- **Uniform layouts and a model's binding slots are generated.** The `build.rs` of henad-compute,
+  henad-models and henad-app runs henad-build's `ShaderBuild` over that crate's shaders, and
+  `henad_compute::include_shaders!()` at the crate root brings the output in from `OUT_DIR` as
+  `shader_bindings` and `binding_decls`, each under one allow list, `unsafe_code` included. The
+  macro and the generated code name `include!`, `concat!`, `env!` and `assert!` through `::core`.
+  henad-compute and henad-models also call the hidden `stamp_source_hash`, and henad-explore's
+  `build.rs` calls `stamp_engine_commit` alone.
+  henad-compute names its entry points with `ShaderBuild::new("src/gpu")`, and the other two use
+  `discover` over `src` and `src/ui`: every `.wgsl` file without a `#define_import_path` line.
+  `discover` follows a symlink to a directory, and walks a directory reached twice once. It
+  refuses a path component that is no Rust identifier or is a keyword, names that
+  collide, a `henad.wgsl` file or a `henad` directory holding a `.wgsl` file in any case, which
+  would shadow a shared module, and a first component the generated code uses at its root (`wgpu`,
+  `bytemuck`, `std`, `core`, `alloc`, `_root`, `ShaderEntry`, `layout_asserts`, `bytemuck_impls`).
+  `generate` refuses an import path that starts with one of them too, since the bindings name an
+  imported module by its import path, and a quoted one by its file stem (`bindings_module`,
+  `ShaderBuildError::ReservedImport`). A module or an imported file with a `@binding` line fails
+  the build, as does an import cycle. `wgsl_bindgen` would follow a cycle until the stack
+  overflows, and a panic of its own becomes `ShaderBuildError::Compose`. The binding constant is
+  the path's components upper-cased and joined by `_`. `generate` copies the shared modules from
+  henad-core into `OUT_DIR/henad_wgsl/henad/` and removes a copy henad-core no longer holds, runs
+  `wgsl_bindgen` (pinned to `=0.23.3`, and `scripts/check_packaging.sh` holds
+  `WGSL_BINDGEN_VERSION` to the pin) with its own rerun lines off, prints one
+  `cargo:rerun-if-changed` for the shader root (and one per explicit entry and per file outside the
+  root an entry imports), in the single-colon form that keeps a downstream MSRV below 1.77, skips
+  the pass when the FNV-1a stamp of its inputs and of `output.rs` itself matches
+  `shader_bindings.stamp`, and writes each file only when its bytes change. The inputs are every
+  file `wgsl_bindgen`'s dependency tree reads, a quoted path import outside the root or a file
+  without the `.wgsl` extension included. A crate with no shaders gets an empty `shader_bindings.rs`
+  and loses its stamp. Otherwise the shaders' return would match the old stamp and keep the empty
+  file.
+  `ShaderBuildError`'s `Debug` writes its `Display`. Uniform structs, workgroup sizes and bind group
+  layouts therefore come from the WGSL, and each model asserts its own struct against the generated
+  one. Shared WGSL is reached with `#import henad::<module>`, resolved at build time for every
+  compiled entry point. A grid rule's step, display and reduce shaders are composed at run time
+  instead, through `gpu/compose.rs` behind `runtime-wgsl`. Their bindings and the step's `Params`
+  block come from the engine's template (`gpu/runtime_grid/template.rs`), and none of the generated
+  assertions above cover them. henad-build also reads each entry's `@group(0)` lines into
+  `binding_decls`, in `@binding` order, and fails the build on any line holding `@binding` or
+  `@group` in another form than `@group(G) @binding(N) var<...> name: Type;` (`BindingLine`), on a
+  sampler, a sampled texture or another address space (`UnsupportedBinding`), or on a gap in the
+  indices. A compile-time assertion in `binding_decls.rs` holds each list to the length of the
+  generated `WgpuBindGroup0` layout, and `include_shaders!` asserts that the shaders were composed
+  against the `SHARED_WGSL_FNV1A64` of the henad-core it links. henad-build's tests run `generate`
+  against a scratch `OUT_DIR`, never Cargo. The engine resolves each name itself. `params`, `dims`,
+  `output`, `cell_start`, `sorted`, `counters` and `partials` are reserved, and any other name is a
+  `BufferSpec` label with an optional `_in` or `_out` suffix. The access mode picks the side.
+  `henad-core/src/authoring/model/binding.rs` is the reference. An imported constant or type reaches
+  the generated bindings exactly when an entry point references it, since naga keeps only what an
+  entry point references. Hence `grid_dims.wgsl` for `Dims`, and the `CODES` array in `parity.wgsl`
+  for `MOORE_ROW_MAJOR` and the other codes.

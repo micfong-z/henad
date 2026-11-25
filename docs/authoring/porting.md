@@ -21,7 +21,7 @@ Network models have no GPU trait, so a [`NetworkModel`](network-models.md) stays
 ## Reuse the parameter list
 
 Neither GPU trait prepends anything to your parameter list.
-A GPU model spells out its whole descriptor list itself, which leaves a port free to return its counterpart's list verbatim.
+A GPU model spells out its whole descriptor list itself, and a port can return its counterpart's list verbatim.
 
 ```rust
 fn param_descriptors() -> Vec<ParamDescriptor> {
@@ -49,7 +49,7 @@ Both sit in the authoring prelude.
 This call belongs in `seed_buffers` and nowhere else in a port.
 Confining it there means the initial state is imported rather than reimplemented, and the port has no room to drift from its counterpart.
 
-The part that genuinely changes is the packing.
+Only the packing changes.
 Boids interleaves `pos_x`/`pos_y` into the `vec2<f32>` layout its shaders read, and turns the CPU's palette-index colour lane into packed RGBA, since a GPU model draws its colours directly.
 
 ## Tick 0 and after
@@ -62,7 +62,7 @@ The two grid ports repeat it draw for draw, and a test compares their seeded buf
 
 `gpu_game_of_life`
 
-:   Fully deterministic and bit-identical throughout, so its CPU counterpart serves as the correctness oracle and comparing the two is a plain equality check.
+:   Fully deterministic and bit-identical throughout, so its CPU counterpart is the correctness oracle and comparing the two is a plain equality check.
 
 `gpu_sir`
 
@@ -86,7 +86,7 @@ See [determinism and testing](determinism.md).
 ## Reuse the palette
 
 The colours end up living in two places, because the stats UI reads `PALETTE` while a display shader writes RGBA directly.
-Take them from the CPU model's `const` and pack them for the uniform instead of retyping them, the way `gpu_boids` builds its `packed_heading_palette`.
+Take them from the CPU model's `const` and pack them for the uniform instead of retyping them, the way `gpu_boids` packs `HEADING_PALETTE` into its step and action uniforms.
 
 A grid model's display shader bakes them into WGSL constants instead, and keeping those in agreement remains your responsibility.
 

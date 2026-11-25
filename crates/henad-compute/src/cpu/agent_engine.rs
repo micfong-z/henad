@@ -57,38 +57,7 @@ impl<A: AgentModel> AgentModelState<A> {
 
     /// Builds a state whose RNG starts from `seed`, or [`AGENT_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
-        let n = extract_u32(params, NUM_AGENTS, 10_000) as usize;
-        let extent = Extent {
-            w: extract_f32(params, WORLD_WIDTH, 1_000.0),
-            h: extract_f32(params, WORLD_HEIGHT, 1_000.0),
-        };
-
-        let (own, field_params) = split_params::<A>(params);
-        let mut lanes = A::Lanes::alloc(n);
-        let actions = action_seed(seed);
-        let mut seed = agent_init_rng(seed);
-        A::init(&mut lanes, extent, own, &mut seed);
-
-        let field = A::Field::new(extent, field_params);
-        let deposits = field.alloc_deposits(n);
-        let hot = A::from_params(own, extent);
-        let (pos_x, pos_y) = lanes.positions();
-        let mut index = A::Index::new(extent, A::index_cell_size(&hot));
-        index.rebuild(pos_x, pos_y, A::index_cell_size(&hot));
-
-        Self {
-            lanes,
-            field,
-            index,
-            deposits,
-            params: ParamStore::new(&agent_model_param_descriptors::<A>(), params),
-            own_params: A::param_descriptors().len(),
-            extent,
-            tally: A::Tally::default(),
-            seed,
-            action_seed: actions,
-            tick: 0,
-        }
+        Self::from_agents_and_field(params, seed, |_lanes, _extent| {}, |_field, _extent| {})
     }
 
     /// Builds a state whose agents come from `seed_lanes`, for reproducing a particular run.

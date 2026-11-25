@@ -33,12 +33,14 @@ mod native;
 mod options;
 mod sim_runner;
 mod state;
+#[cfg(test)]
+mod tests;
 mod ui;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
 use eframe::egui_wgpu;
-use egui_dock::{DockArea, DockState, Style};
+use egui_dock::{DockArea, Style};
 
 use crate::init::{setup_custom_fonts, setup_custom_styles};
 
@@ -53,9 +55,8 @@ pub use crate::state::OpenAt;
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::{init_web_logger, start_web};
 
-use crate::sim_runner::SimRunner;
 use crate::state::AppState;
-use crate::ui::dock::{Tab, default_dock_state, focus_tab};
+use crate::ui::dock::Workspace;
 use henad_compute::fault::{FaultSink, install_panic_hook};
 use henad_compute::runner::CAN_SPAWN_THREADS;
 use henad_compute::runtime_info::{RuntimeInfo, supports_compute};
@@ -85,7 +86,7 @@ use crate::state::FrameTimings;
 const SWEEP_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 struct HenadApp {
-    dock: DockState<Tab>,
+    workspace: Workspace,
     state: AppState,
 }
 
@@ -119,6 +120,7 @@ impl HenadApp {
 
         setup_custom_fonts(&cc.egui_ctx);
         setup_custom_styles(&cc.egui_ctx);
+        ui::focus::install(&cc.egui_ctx);
 
         let AppOptions {
             models,
@@ -139,7 +141,7 @@ impl HenadApp {
             state.open(opening);
         }
         Self {
-            dock: default_dock_state(),
+            workspace: Workspace::default(),
             state,
         }
     }
@@ -147,6 +149,20 @@ impl HenadApp {
 
 impl eframe::App for HenadApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // A close request of the window, Cmd+Q on macOS included, waits while a model the Editor holds has unsaved
+        // edits. A browser tab cannot wait, and the browser asks before it closes instead.
+        #[cfg(not(target_arch = "wasm32"))]
+        native::guard_close(ctx, &mut self.state);
+        #[cfg(target_arch = "wasm32")]
+        web::set_unsaved_edits(!self.state.editor.unsaved_names().is_empty());
+
+        // A modal dialog that showed in the last frame holds the run until it closes.
+        self.state.hold_for_modal(ui::modal_shown(ctx));
+
+        // Takes the runner of a build that has finished on its thread, with its first snapshot.
+        self.state.poll_build();
+        self.state.poll_stopping(ctx);
+
         // Advances the sim where it has no dedicated thread. Where it has one, this does nothing.
         let dt = ctx.input(|i| f64::from(i.unstable_dt));
         if let Some(thread) = &mut self.state.sim_thread {
@@ -154,38 +170,17 @@ impl eframe::App for HenadApp {
         }
         ui::sweep::update(&mut self.state, dt);
 
-        // Takes the latest snapshot from the sim thread.
-        let fresh = self.state.sim_thread.as_mut().and_then(SimRunner::take_snapshot);
-        if let Some(snap) = fresh {
-            // The loop can be past the target by the time it handles `RunTo`, and then pauses where it is. A second
-            // run to the target sees this snapshot's tick, rebuilds, and stops there.
-            let passed_target = self
-                .state
-                .run_to_target
-                .filter(|&target| snap.tick > target && self.state.selection_is_loaded());
-            if self.state.run_to_target.is_some_and(|target| snap.tick >= target) {
-                self.state.run_to_target = None;
-            }
-            // A publish at the newest row's tick replaces that row. After an action it carries the
-            // action's effect, and after a paused layout step the same stats again.
-            if let Some(history) = &mut self.state.stats_history {
-                history.push_entries(&snap.stats, snap.tick);
-            }
-            self.state.record(&snap);
-            // Passing the outgoing snapshot back lets the sim thread refill it instead of allocating.
-            if let Some(previous) = self.state.snapshot.replace(snap)
-                && let Some(thread) = &mut self.state.sim_thread
-            {
-                thread.recycle(previous);
-            }
-            if let Some(target) = passed_target {
-                self.state.run_to(target);
-            }
-        }
+        self.state.poll_snapshot();
 
-        if let Some(fault) = self.state.render_ctx.faults.take() {
+        if let Some(fault) = self
+            .state
+            .sim_faults
+            .take()
+            .or_else(|| self.state.render_ctx.faults.take())
+        {
             self.state.report_fault(fault);
         }
+        ui::editor::preview::poll(ctx, &mut self.state);
 
         self.state.poll_saves();
         self.state.poll_opens();
@@ -210,8 +205,12 @@ impl eframe::App for HenadApp {
         let frame_start = web_time::Instant::now();
         self.state.timings.frame_render_ms = 0.0;
 
-        ui::menu_bar::menu_bar_panel(ui, &mut self.dock, &mut self.state);
+        ui::menu_bar::menu_bar_panel(ui, &mut self.workspace, &mut self.state);
         ui::fault::fault_modal(ui.ctx(), &mut self.state);
+        ui::rebuild::rebuild_modal(ui.ctx(), &mut self.state);
+        ui::editor::sheet::new_model::new_model_modal(ui.ctx(), &mut self.state);
+        ui::editor::unsaved_modal(ui.ctx(), &mut self.state);
+        ui::editor::replace_question_modal(ui.ctx(), &mut self.state);
         ui::about::about_modal(ui.ctx(), &mut self.state);
 
         let mut dock_style = Style::from_egui(ui.style());
@@ -219,15 +218,17 @@ impl eframe::App for HenadApp {
         dock_style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
         // `egui_dock` draws an overflowing tab bar's scroll bar as a pill. The wheel still scrolls the bar without it.
         dock_style.tab_bar.show_scroll_bar_on_overflow = false;
-        DockArea::new(&mut self.dock)
+        self.state.layout = self.workspace.layout();
+        DockArea::new(self.workspace.dock_mut())
             .style(dock_style)
             .show_close_buttons(true)
             .show_leaf_close_all_buttons(true)
             .show_inside(ui, &mut self.state);
 
-        // Applied after the dock has drawn. The panels draw while it is borrowed.
+        // Applied after the dock has drawn. The panels draw while it is borrowed. A request for the Editor can switch
+        // layouts.
         if let Some(tab) = self.state.focus_request.take() {
-            focus_tab(&mut self.dock, tab);
+            self.workspace.focus(tab);
             ui.ctx().request_repaint();
         }
 
@@ -236,30 +237,5 @@ impl eframe::App for HenadApp {
         let render_ms = self.state.timings.frame_render_ms;
         FrameTimings::update_ema(&mut self.state.timings.render_ms, render_ms);
         FrameTimings::update_ema(&mut self.state.timings.ui_ms, (total_ms - render_ms).max(0.0));
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::requested_threads;
-
-    #[test]
-    fn an_absent_query_asks_for_every_core() {
-        assert_eq!(requested_threads("", 14), 14);
-        assert_eq!(requested_threads("?debug=1", 14), 14);
-    }
-
-    #[test]
-    fn threads_one_is_how_a_single_threaded_run_is_asked_for() {
-        assert_eq!(requested_threads("?threads=1", 14), 1);
-        assert_eq!(requested_threads("?foo=a&threads=4", 14), 4);
-    }
-
-    /// More workers than cores only adds contention, and zero would build no pool at all.
-    #[test]
-    fn a_request_is_clamped_to_the_host() {
-        assert_eq!(requested_threads("?threads=99", 14), 14);
-        assert_eq!(requested_threads("?threads=0", 14), 1);
-        assert_eq!(requested_threads("?threads=nonsense", 14), 14);
     }
 }

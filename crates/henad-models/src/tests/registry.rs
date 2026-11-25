@@ -11,6 +11,8 @@ use henad_explore::testing::{
 use henad_compute::entry::ModelEntry;
 use henad_core::metadata::Backend;
 
+use super::support::params_for;
+
 // --8<-- [start:kit]
 /// Returns the kit's settings over the example models, with a baseline device when this machine has an adapter, and
 /// whether the settings hold a device.
@@ -44,14 +46,6 @@ fn the_example_models_conform() {
 
 fn is_gpu(entry: &ModelEntry) -> bool {
     entry.metadata().backend == Backend::Gpu
-}
-
-fn defaults(entry: &ModelEntry) -> Vec<ParamValue> {
-    entry
-        .param_descriptors()
-        .iter()
-        .map(|desc| desc.kind.default_value())
-        .collect()
 }
 
 /// Builds `entry` at `values`, and panics on a fault.
@@ -140,7 +134,7 @@ fn the_example_gpu_models_are_the_gpu_backend_entries() {
 #[test]
 fn a_model_that_panics_while_building_comes_back_as_a_fault() {
     let entry = register_grid_model::<crate::tests::broken::DividesByZero>();
-    let Err(fault) = entry.build(&defaults(&entry), None, None) else {
+    let Err(fault) = entry.build(&params_for(&entry, &[]), None, None) else {
         panic!("the broken model should not have built");
     };
     assert_eq!(fault.during, BUILDING);
@@ -156,7 +150,7 @@ fn a_kernel_that_panics_mid_step_keeps_its_location() {
 
     install_panic_hook();
     let entry = register_grid_model::<crate::tests::broken::DividesByZeroMidStep>();
-    let ModelState::Cpu(mut state) = build(&entry, &defaults(&entry), None) else {
+    let ModelState::Cpu(mut state) = build(&entry, &params_for(&entry, &[]), None) else {
         panic!("a GridModel registers as a CPU entry");
     };
     let outcome: Result<(), _> = catching(STEPPING, || state.step());
@@ -185,7 +179,7 @@ fn every_gpu_entry_needs_the_bindings_its_widest_pass_binds() {
     let mut widest_overall = 0;
     for entry in models.iter().filter(|entry| is_gpu(entry)) {
         let demand = entry
-            .demand(&defaults(entry), &wgpu::Limits::default())
+            .demand(&params_for(entry, &[]), &wgpu::Limits::default())
             .expect("a GPU entry declares its capacity");
         let widest = demand.passes.iter().map(|pass| pass.storage).max().unwrap_or(0);
         let needs = entry.gpu_needs().expect("a GPU entry declares its needs");
@@ -203,7 +197,7 @@ fn a_model_too_large_for_the_device_is_reported() {
     let entry = models.get("gpu_sir").expect("gpu_sir is an example model");
     // These are the baseline limits, so the case does not depend on this machine.
     let baseline = wgpu::Limits::default();
-    let mut params = defaults(entry);
+    let mut params = params_for(entry, &[]);
     params[0] = ParamValue::U32(6000);
     params[1] = ParamValue::U32(6000);
 
@@ -213,7 +207,7 @@ fn a_model_too_large_for_the_device_is_reported() {
         "the over-budget state buffer must be named: {found:?}"
     );
     assert!(
-        entry.shortfalls(&defaults(entry), &baseline).is_empty(),
+        entry.shortfalls(&params_for(entry, &[]), &baseline).is_empty(),
         "the default params fit a baseline device"
     );
 }
@@ -230,7 +224,7 @@ fn gpu_boids_sizes_its_index_tables_to_the_hash_grid() {
         .param_index("visual_range")
         .expect("gpu_boids declares visual_range");
     for visual_range in [50.0, 1.0] {
-        let mut params = defaults(entry);
+        let mut params = params_for(entry, &[]);
         params[range] = ParamValue::F32(visual_range);
         let demand = entry
             .demand(&params, &wgpu::Limits::default())
@@ -296,7 +290,7 @@ fn an_example_entry_inserted_into_another_set_keeps_its_source() {
 fn a_gpu_entry_refuses_to_build_without_a_device() {
     let models = crate::example_models();
     for entry in models.iter().filter(|entry| is_gpu(entry)) {
-        let Err(fault) = entry.build(&defaults(entry), None, None) else {
+        let Err(fault) = entry.build(&params_for(entry, &[]), None, None) else {
             panic!("{} built with no device", entry.id());
         };
         assert_eq!(fault.during, BUILDING, "{}", entry.id());
@@ -312,6 +306,27 @@ fn a_gpu_entry_refuses_to_build_without_a_device() {
             matches!(fault.kind, henad_compute::fault::FaultKind::Refused(_)),
             "{}: {fault:?}",
             entry.id()
+        );
+    }
+}
+
+/// Every starter, sheet or graph, takes an id no example model holds. Otherwise Apply in the app or `--model-file` in
+/// henad-cli replaces the example of that id.
+#[test]
+fn no_starter_takes_the_id_of_an_example_model() {
+    let models = crate::example_models();
+    let starters = henad_graph::sheet::starters()
+        .iter()
+        .chain(henad_graph::starters::starters())
+        .chain(henad_graph::starters::agent_starters());
+    for starter in starters {
+        let file = henad_explore::model_file::ModelFile::parse(starter.text)
+            .unwrap_or_else(|error| panic!("{}: {error}", starter.file_name));
+        assert!(
+            models.get(file.id()).is_none(),
+            "{} takes the id '{}' of an example model",
+            starter.file_name,
+            file.id()
         );
     }
 }

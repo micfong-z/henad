@@ -282,7 +282,7 @@ fn gpu_repetition(
     let elapsed = start.elapsed();
     refusals.note(&refused);
     refusals.note(&stepping::run_due(state, ctx, schedule));
-    stepping::wait(ctx)?;
+    stepping::wait_for(state, ctx)?;
     refusals.check()?;
     Ok(RepetitionReport {
         index,
@@ -318,7 +318,7 @@ impl Refusals {
             None => Ok(()),
             Some((id, tick)) => Err(Fault::refused(
                 STEPPING,
-                format!("the model refused its own action '{id}' at tick {tick}"),
+                format!("the model rejected its own action '{id}' at tick {tick}"),
             )),
         }
     }
@@ -331,7 +331,7 @@ impl Refusals {
 /// `None`.
 fn grid_size_from_params(descriptors: &[ParamDescriptor], values: &[ParamValue]) -> Option<(u32, u32)> {
     let find = |id: &str| -> Option<u32> {
-        let index = descriptors.iter().position(|descriptor| descriptor.id == id)?;
+        let index = descriptors.iter().position(|descriptor| descriptor.id() == id)?;
         match values.get(index) {
             Some(ParamValue::U32(value)) => Some(*value),
             _ => None,
@@ -586,7 +586,7 @@ mod tests {
             setup = setup.act_at("seed_outbreak", tick).expect("gpu_sir declares it");
         }
         let counts = |entries: &[henad_core::view::StatEntry]| -> Vec<f64> {
-            entries.iter().map(|entry| entry.value.scalar()).collect()
+            entries.iter().map(|entry| entry.value().scalar()).collect()
         };
         for (warmup, steps) in [(0, 0), (0, 3), (2, 0), (2, 3)] {
             let mut settings = BenchmarkSettings::new(setup.clone(), steps);

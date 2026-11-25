@@ -12,7 +12,7 @@ use henad_core::explore::plan::Shard;
 
 use crate::output::manifest::{
     BuildRole, Manifest, ManifestError, ManifestMode, ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
-    now_unix_ms, rfc3339,
+    code_text, codes_differ, distinct_builds, now_unix_ms,
 };
 use crate::output::read::{ReadError, RunRecord, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::header_line;
@@ -57,7 +57,8 @@ struct ShardInput {
 ///
 /// Returns [`MergeError`] when there are no inputs, an input cannot be read, the inputs hold different plans,
 /// replicate counts, shard counts or columns, two inputs hold the same shard, a run's id does not match its config and
-/// replicate, or the merged directory cannot be written.
+/// replicate, or the merged directory cannot be written. Returns [`MergeError::CodeChanged`] when two shards ran
+/// different model code, and either code is runtime code.
 pub fn merge(
     shard_dirs: &[PathBuf],
     output_dir: &Path,
@@ -106,11 +107,9 @@ pub fn merge(
         ManifestStatus::Incomplete
     };
     // `merged_manifest` credited every session of every shard, so the counts go in without `Manifest::finish`.
-    let finished = now_unix_ms();
     manifest.status = status;
     manifest.results = Some(counts);
-    manifest.timestamps.finished_unix_ms = Some(finished);
-    manifest.timestamps.finished = Some(rfc3339(finished));
+    manifest.timestamps.finish_at(now_unix_ms());
     dir.write_manifest(&manifest).map_err(MergeError::Output)?;
     Ok(MergeReport {
         counts,
@@ -131,13 +130,7 @@ fn write_tables(
     let segments: Vec<SeriesSegment> = shards
         .iter()
         .enumerate()
-        .flat_map(|(input_index, input)| {
-            input.series.segments.iter().map(move |range| SeriesSegment {
-                path: input.series.path.clone(),
-                range: range.clone(),
-                input_index,
-            })
-        })
+        .flat_map(|(input_index, input)| input.series.segments_at(&input.series.path, input_index))
         .collect();
     dir.replace_tables(
         |dest| {
@@ -256,7 +249,12 @@ fn read_input(dir: &Path) -> Result<ShardInput, MergeError> {
     })
 }
 
-/// Checks that `shards`, sorted by shard index, are distinct shards of one plan with one replicate count.
+/// Checks that `shards`, sorted by shard index, are distinct shards of one model, one model code, one time scale, one
+/// plan and one replicate count.
+///
+/// The model and its code are compared before the plan, as a resume compares them. A runtime model's edit can change
+/// its declarations as well, and the changed code is then the error reported. A shard of another model differs in its
+/// plan.
 fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     let Some(first) = shards.first() else {
         return Err(MergeError::NoInputs);
@@ -270,10 +268,22 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
             });
         }
     }
+    if let Some(input) = shards
+        .iter()
+        .find(|input| input.manifest.model.id != first.manifest.model.id)
+    {
+        return Err(MergeError::PlanDiffers {
+            dir: input.dir.clone(),
+            first: first.dir.clone(),
+        });
+    }
+    check_code(shards)?;
     for input in shards {
         let (plan, expected) = (&input.manifest.plan, &first.manifest.plan);
+        // The schema hash leaves the time scale out, and a compiled model's changed code only warns.
         if plan.plan_hash != expected.plan_hash
             || input.manifest.model.schema_hash != first.manifest.model.schema_hash
+            || input.manifest.model.schema.get("time") != first.manifest.model.schema.get("time")
             || plan.replicates != expected.replicates
             || plan.runs != expected.runs
         {
@@ -292,6 +302,35 @@ fn check_shards(shards: &[ShardInput]) -> Result<(), MergeError> {
     Ok(())
 }
 
+/// Checks that the sessions of `shards`, sorted by shard index, ran one model code wherever either of two codes is
+/// runtime code.
+///
+/// Each model build of a session that wrote runs is compared with every build of each lower shard.
+fn check_code(shards: &[ShardInput]) -> Result<(), MergeError> {
+    let listed: Vec<(&ShardInput, Vec<Option<RecordedBuild>>)> = shards
+        .iter()
+        .map(|input| (input, input.manifest.run_model_builds()))
+        .collect();
+    for (position, (input, builds)) in listed.iter().enumerate() {
+        for (lower_input, lower_builds) in &listed[..position] {
+            for build in builds {
+                if let Some(recorded) = lower_builds
+                    .iter()
+                    .find(|recorded| codes_differ(recorded.as_ref(), build.as_ref()))
+                {
+                    return Err(MergeError::CodeChanged {
+                        dir: input.dir.clone(),
+                        lower_dir: lower_input.dir.clone(),
+                        recorded: code_text(recorded.as_ref()),
+                        current: code_text(build.as_ref()),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Returns a [`SweepWarning::BuildChanged`] for each engine or model build of another shard that matches no build of
 /// the reference shard, the lowest shard that records a build for the role.
 ///
@@ -305,13 +344,7 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
         let Some(reference) = listed.by_ref().find(|builds| !builds.is_empty()) else {
             continue;
         };
-        let mut others: Vec<RecordedBuild> = Vec::new();
-        for build in listed.flatten() {
-            if !others.iter().any(|known| known.reads_as(&build)) {
-                others.push(build);
-            }
-        }
-        for other in others {
+        for other in distinct_builds(listed.flatten()) {
             if reference.iter().any(|build| build.same_build(&other)) {
                 continue;
             }
@@ -336,25 +369,24 @@ fn build_warnings(shards: &[ShardInput]) -> Vec<SweepWarning> {
 /// execution and runtime of the lowest shard. A shard's session that records no engine build receives the build
 /// that its shard's manifest implies. The last session of a shard left `running` or `failed` is credited with the rows
 /// the shard holds beyond those it found, as a resume credits it. The engine block records the build that performs
-/// the merge, and `replays_exactly` is true only when it is true in every shard.
+/// the merge, and `replays_exactly` is true only when it is true in every shard. The author text is the lowest shard's,
+/// or that of the lowest shard that records one.
 fn merged_manifest(shards: &[ShardInput], shard_dirs: &[PathBuf]) -> Manifest {
     let mut manifest = shards[0].manifest.clone();
     manifest.status = ManifestStatus::Running;
     manifest.shard = Shard::WHOLE.into();
     manifest.engine = RecordedBuild::engine();
     manifest.model.replays_exactly = shards.iter().all(|input| input.manifest.model.replays_exactly);
+    if manifest.model.author.is_none() {
+        manifest.model.author = shards.iter().find_map(|input| input.manifest.model.author.clone());
+    }
     manifest.sessions = shards
         .iter()
         .flat_map(|input| {
-            let mut recorded = input.manifest.clone();
-            recorded.record_session_engines();
-            // A session whose process ended before `Manifest::finish` never had its runs counted.
-            if matches!(recorded.status, ManifestStatus::Running | ManifestStatus::Failed)
-                && let Some(last) = recorded.sessions.last_mut()
-            {
-                last.ran = (input.runs.records.len() as u64).saturating_sub(last.skipped);
-            }
-            recorded.sessions
+            input
+                .manifest
+                .clone()
+                .into_credited_sessions(input.runs.records.len() as u64)
         })
         .collect();
     let started = shards
@@ -390,6 +422,17 @@ pub enum MergeError {
         dir: PathBuf,
         /// Path of the input directory with the lowest shard index.
         first: PathBuf,
+    },
+    /// Input `dir` ran other model code than input `lower_dir`, and either code is runtime code.
+    CodeChanged {
+        /// Path of the input directory that differs.
+        dir: PathBuf,
+        /// Path of an input directory with a lower shard index.
+        lower_dir: PathBuf,
+        /// Code that a session of `lower_dir` ran, as text naming its origin and its hash.
+        recorded: String,
+        /// Code that a session of `dir` ran, as text naming its origin and its hash.
+        current: String,
     },
     /// Input `dir` splits the plan into a different number of shards than input `first`.
     ShardCountDiffers {
@@ -463,6 +506,18 @@ impl fmt::Display for MergeError {
                 dir.display(),
                 first.display()
             ),
+            Self::CodeChanged {
+                dir,
+                lower_dir,
+                recorded,
+                current,
+            } => write!(
+                f,
+                "'{}' ran different model code ({current}) from '{}' ({recorded}). Shards of a model composed at run \
+                 time cannot merge unless they ran the same code",
+                dir.display(),
+                lower_dir.display()
+            ),
             Self::ShardCountDiffers { dir, first } => write!(
                 f,
                 "'{}' has a different shard count from '{}'",
@@ -515,6 +570,7 @@ impl std::error::Error for MergeError {
             | Self::BadShard { .. }
             | Self::NoTables
             | Self::PlanDiffers { .. }
+            | Self::CodeChanged { .. }
             | Self::ShardCountDiffers { .. }
             | Self::SameShard { .. }
             | Self::ColumnsDiffer { .. }
@@ -541,17 +597,14 @@ mod tests {
     use crate::progress::NoProgress;
     use crate::sweep::SweepOptions;
     use crate::tests::support::{
-        Recorder, ScratchDir, entry, manifest, other_engine, provenance, rewrite_manifest, sweep, sweep_options,
+        Recorder, ScratchDir, entry, fixed, manifest, other_engine, provenance, rewrite_manifest, sweep, sweep_options,
         sweep_with,
     };
 
     /// Returns Game of Life on an 8 by 8 grid for 2 steps, with 4 replicates.
     fn life_spec() -> SweepSpec {
         let mut spec = SweepSpec::new("game_of_life");
-        spec.fixed = vec![
-            ("grid_width".to_owned(), "8".to_owned()),
-            ("grid_height".to_owned(), "8".to_owned()),
-        ];
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
         spec.run.steps = 2;
         spec.run.replicates = 4;
         spec
@@ -630,10 +683,7 @@ mod tests {
         let scratch = ScratchDir::new("merge-duplicate");
         let shard_dir = scratch.path().join("shard");
         let mut spec = SweepSpec::new("game_of_life");
-        spec.fixed = vec![
-            ("grid_width".to_owned(), "8".to_owned()),
-            ("grid_height".to_owned(), "8".to_owned()),
-        ];
+        spec.fixed = fixed(&[("grid_width", "8"), ("grid_height", "8")]);
         spec.run.steps = 2;
         spec.run.replicates = 2;
         sweep(&entry("game_of_life", None), None, &spec, &shard_dir, Concurrency::Auto);

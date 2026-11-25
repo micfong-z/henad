@@ -1,0 +1,87 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "random_walk"
+name = "Random walk"
+purpose = "Diffusion from individual random steps. Look for walkers spreading evenly, and the average position staying near the centre."
+next_line = 3
+
+[world]
+made_of = "agents"
+width = 1000
+height = 1000
+edges = "wrap"
+
+[[agents]]
+id = "walker"
+name = "Walker"
+count = 10000
+max_count = 1000000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 2941812151
+
+[[agents.property]]
+id = "heading"
+name = "Heading"
+type = "heading"
+
+[[parameter]]
+id = "steps_per_tick"
+name = "Steps per tick"
+type = "whole_number"
+min = 0
+max = 16
+default = 4
+
+[[parameter]]
+id = "step_size"
+name = "Step size"
+type = "number"
+min = 0.1
+max = 20
+default = 2
+step = 0.1
+
+[[measure]]
+id = "average_of_position"
+name = "Average of Position"
+color = "#007AF5"
+rule = "average"
+over = "walker"
+value = { my = "position" }
+
+[color.walker]
+rule = "by_heading"
+
+# Each tick, every walker
+[[card]]
+id = "walker_tick"
+every = "walker"
+runs = "each_tick"
+lines = ["l1"]
+
+# Repeat Steps per tick times:
+[card.line.l1]
+kind = "repeat"
+times = { param = "steps_per_tick" }
+lines = ["l2"]
+
+# Move by a random direction of length Step size
+[card.line.l2]
+kind = "move"
+key = 1358783687
+mode = "by"
+
+[card.line.l2.value]
+kind = "random_direction"
+length = { param = "step_size" }

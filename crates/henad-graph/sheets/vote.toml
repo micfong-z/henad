@@ -1,0 +1,98 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "vote"
+name = "Majority vote"
+purpose = "Majority voting on a grid. Look for noise that coarsens into stable blocks of one opinion with smooth borders."
+next_line = 4
+
+[world]
+made_of = "cells"
+width = 1024
+height = 1024
+edges = "wrap"
+
+[[cells.property]]
+id = "opinion"
+name = "Opinion"
+type = "states"
+states = [
+  { id = "a", name = "A", color = "#1A1A2E" },
+  { id = "b", name = "B", color = "#F2A63B" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 1540209281
+otherwise = "a"
+
+[[cells.property.starts_as.row]]
+state = "b"
+chance = { param = "initial_share_of_b" }
+
+[[parameter]]
+id = "initial_share_of_b"
+name = "Initial share of B"
+type = "number"
+min = 0
+max = 1
+default = 0.5
+step = 0.01
+
+[[measure]]
+id = "holding_b"
+name = "Holding B"
+color = "#F2A63B"
+rule = "count_in_state"
+over = "cells"
+property = "opinion"
+state = "b"
+
+[color.cells]
+rule = "by_state"
+property = "opinion"
+
+# Each tick, every cell
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3"]
+
+# B in my block = count of the 3 by 3 block including me whose Opinion is B
+[card.line.l1]
+kind = "count"
+name = "B in my block"
+around = "block_3x3"
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "opinion" }
+right = { state = "b" }
+
+# Become B from any state, when B in my block is at least 5
+[card.line.l2]
+kind = "become"
+property = "opinion"
+new_state = "b"
+start_state = "any_state"
+
+[card.line.l2.condition]
+kind = "compare"
+test = "at_least"
+left = { result = "l1" }
+right = 5
+
+# otherwise (when line 2 does not apply) become A from any state, always
+[card.line.l3]
+kind = "become"
+property = "opinion"
+new_state = "a"
+start_state = "any_state"
+
+[card.line.l3.condition]
+kind = "always"

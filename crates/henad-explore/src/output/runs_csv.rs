@@ -37,7 +37,7 @@ pub const NOTE_COLUMN: &str = "note";
 /// columns named `reducers`, before CSV escaping.
 pub(crate) fn column_names(params: &[ParamDescriptor], actions: &[ActionSpec], reducers: &[String]) -> Vec<String> {
     let mut names: Vec<String> = ID_COLUMNS.iter().map(|&column| column.to_owned()).collect();
-    names.extend(params.iter().map(|param| param.id.to_owned()));
+    names.extend(params.iter().map(|param| param.id().to_owned()));
     names.extend(actions.iter().map(ActionSpec::column_name));
     names.extend(OUTCOME_COLUMNS.iter().map(|&column| column.to_owned()));
     names.extend(reducers.iter().cloned());
@@ -54,6 +54,18 @@ pub(crate) fn header_line(names: &[String]) -> String {
         .join(",");
     line.push('\n');
     line
+}
+
+/// Appends a comma and the value of each parameter of `config`, whose kinds are `kinds`, then of each action tick, to
+/// `row`.
+pub(crate) fn push_config_values(row: &mut String, kinds: &[ParamKind], config: &Config) {
+    for (kind, value) in kinds.iter().zip(&config.params) {
+        row.push(',');
+        row.push_str(&escape_field(&format_value(kind, value)));
+    }
+    for tick in &config.action_ticks {
+        row.push_str(&format!(",{tick}"));
+    }
 }
 
 /// Writer of `runs.csv`.
@@ -86,7 +98,7 @@ impl<W: Write> RunsWriter<W> {
     pub fn appending(dest: W, params: &[ParamDescriptor]) -> Self {
         Self {
             dest,
-            kinds: params.iter().map(|param| param.kind.clone()).collect(),
+            kinds: params.iter().map(|param| param.kind().clone()).collect(),
         }
     }
 
@@ -101,13 +113,7 @@ impl<W: Write> RunsWriter<W> {
             "{},{},{},{},{},{:016x}",
             run.run_id, run.config_id, config.block, run.rep, run.seed, outcome.run_key
         );
-        for (kind, value) in self.kinds.iter().zip(&config.params) {
-            row.push(',');
-            row.push_str(&escape_field(&format_value(kind, value)));
-        }
-        for tick in &config.action_ticks {
-            row.push_str(&format!(",{tick}"));
-        }
+        push_config_values(&mut row, &self.kinds, config);
         let timings = [outcome.build_ms, outcome.wall_ms, outcome.steps_per_s()].map(format_timing);
         row.push_str(&format!(
             ",{},{},{},{},{},{},{}",

@@ -10,93 +10,23 @@ use crate::explore::search::{SearchAlgorithm, SearchSpec};
 use crate::explore::spec::{ActionSpec, MeasureSettings, RunSettings, SeedSettings};
 use crate::params::{ParamKind, ParamValue};
 
-const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const PRIME: u64 = 0x0000_0100_0000_01b3;
-
-/// FNV-1a hasher over 64 bits.
-///
-/// Integers are written little-endian, and text is written after its length, so two fields never run together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fnv1a64 {
-    state: u64,
-}
-
-impl Fnv1a64 {
-    /// Returns a hasher with nothing written to it.
-    pub const fn new() -> Self {
-        Self { state: OFFSET_BASIS }
-    }
-
-    /// Writes `bytes` as they are, with no length before them.
-    pub const fn write(&mut self, bytes: &[u8]) {
-        let mut index = 0;
-        while index < bytes.len() {
-            self.state ^= bytes[index] as u64;
-            self.state = self.state.wrapping_mul(PRIME);
-            index += 1;
-        }
-    }
-
-    /// Writes `value` as eight little-endian bytes.
-    pub const fn write_u64(&mut self, value: u64) {
-        self.write(&value.to_le_bytes());
-    }
-
-    /// Writes the byte length of `text` as a `u64`, then its bytes.
-    pub const fn write_str(&mut self, text: &str) {
-        self.write_u64(text.len() as u64);
-        self.write(text.as_bytes());
-    }
-
-    /// Writes the bits of `value`, so two values hash alike only when they are bit for bit the same.
-    pub fn write_f64(&mut self, value: f64) {
-        self.write_u64(value.to_bits());
-    }
-
-    fn write_value(&mut self, value: &ParamValue) {
-        let (tag, bits) = match *value {
-            ParamValue::F32(number) => (0, u64::from(number.to_bits())),
-            ParamValue::U32(number) => (1, u64::from(number)),
-            ParamValue::Bool(flag) => (2, u64::from(flag)),
-            ParamValue::Choice(index) => (3, index as u64),
-        };
-        self.write(&[tag]);
-        self.write_u64(bits);
-    }
-
-    /// Returns the hash of everything written so far.
-    pub const fn finish(&self) -> u64 {
-        self.state
-    }
-}
-
-impl Default for Fnv1a64 {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Returns the FNV-1a hash of `bytes`.
-pub fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hasher = Fnv1a64::new();
-    hasher.write(bytes);
-    hasher.finish()
-}
+pub use crate::fnv::{Fnv1a64, fnv1a64};
 
 /// Returns the hash of a model's parameter ids, kinds, bounds, defaults and options, its stat labels and its action
 /// ids.
 ///
-/// Labels shown in the UI, colours, slider steps and display formats are left out.
+/// Labels shown in the UI, colours, slider steps, display formats and whether a parameter is hidden are left out. An
+/// `F32` parameter marked [`integer`](crate::params::ParamDescriptor::integer) hashes as a kind of its own.
 pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
     let mut hasher = Fnv1a64::new();
     hasher.write_str("henad.schema.1");
     hasher.write_str(schema.id);
     hasher.write_u64(schema.params.len() as u64);
     for param in schema.params {
-        hasher.write_str(param.id);
-        match param.kind {
+        hasher.write_str(param.id());
+        match param.kind() {
             ParamKind::F32 { min, max, default, .. } => {
-                hasher.write(&[0]);
+                hasher.write(&[if param.is_integer() { 4 } else { 0 }]);
                 for number in [min, max, default] {
                     hasher.write_u64(u64::from(number.to_bits()));
                 }
@@ -104,30 +34,30 @@ pub fn schema_hash(schema: &ModelSchema<'_>) -> u64 {
             ParamKind::U32 { min, max, default } => {
                 hasher.write(&[1]);
                 for number in [min, max, default] {
-                    hasher.write_u64(u64::from(number));
+                    hasher.write_u64(u64::from(*number));
                 }
             }
             ParamKind::Bool { default } => {
                 hasher.write(&[2]);
-                hasher.write_u64(u64::from(default));
+                hasher.write_u64(u64::from(*default));
             }
             ParamKind::Choice { options, default } => {
                 hasher.write(&[3]);
                 hasher.write_u64(options.len() as u64);
-                for option in options {
+                for option in options.iter() {
                     hasher.write_str(option);
                 }
-                hasher.write_u64(default as u64);
+                hasher.write_u64(*default as u64);
             }
         }
     }
     hasher.write_u64(schema.stats.len() as u64);
     for stat in schema.stats {
-        hasher.write_str(stat.label);
+        hasher.write_str(stat.label());
     }
     hasher.write_u64(schema.actions.len() as u64);
     for action in schema.actions {
-        hasher.write_str(action.id);
+        hasher.write_str(action.id());
     }
     hasher.finish()
 }
@@ -182,7 +112,7 @@ pub fn run_key(results_fingerprint: u64, params: &[ParamValue], action_ticks: &[
     hasher.write_u64(results_fingerprint);
     hasher.write_u64(params.len() as u64);
     for value in params {
-        hasher.write_value(value);
+        write_value(&mut hasher, value);
     }
     hasher.write_u64(action_ticks.len() as u64);
     for &tick in action_ticks {
@@ -228,7 +158,7 @@ pub fn plan_hash(
         hasher.write_u64(config.block as u64);
         hasher.write_u64(config.params.len() as u64);
         for value in &config.params {
-            hasher.write_value(value);
+            write_value(&mut hasher, value);
         }
         hasher.write_u64(config.action_ticks.len() as u64);
         for &tick in &config.action_ticks {
@@ -295,6 +225,18 @@ pub fn search_hash(plan_hash: u64, replicates: u64, search: &SearchSpec) -> u64 
 }
 
 /// Writes the target and levels of `factor`.
+/// Writes `value` to `hasher` as a one-byte kind tag, then its bits as a `u64`.
+fn write_value(hasher: &mut Fnv1a64, value: &ParamValue) {
+    let (tag, bits) = match *value {
+        ParamValue::F32(number) => (0, u64::from(number.to_bits())),
+        ParamValue::U32(number) => (1, u64::from(number)),
+        ParamValue::Bool(flag) => (2, u64::from(flag)),
+        ParamValue::Choice(index) => (3, index as u64),
+    };
+    hasher.write(&[tag]);
+    hasher.write_u64(bits);
+}
+
 fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
     match &factor.target {
         FactorTarget::Param(id) => {
@@ -306,7 +248,8 @@ fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
             hasher.write_str(name);
         }
     }
-    match &factor.levels {
+    // A range in percent plans the levels of the range of its fractions, and hashes as that range.
+    match &factor.levels.to_fractions() {
         LevelSpec::Values(values) => {
             hasher.write(&[0]);
             hasher.write_u64(values.len() as u64);
@@ -314,7 +257,7 @@ fn write_factor(hasher: &mut Fnv1a64, factor: &FactorSpec) {
                 hasher.write_str(value);
             }
         }
-        &LevelSpec::Range { min, max, step } => {
+        &(LevelSpec::Range { min, max, step } | LevelSpec::PercentRange { min, max, step }) => {
             hasher.write(&[1]);
             hasher.write_f64(min);
             hasher.write_f64(max);
@@ -344,7 +287,7 @@ fn write_axis(hasher: &mut Fnv1a64, axis: &PatternAxis) {
 mod tests {
     use std::time::Duration;
 
-    use super::{fnv1a64, results_fingerprint, run_key, schema_hash, search_hash};
+    use super::{results_fingerprint, run_key, schema_hash, search_hash};
     use crate::action::ActionDescriptor;
     use crate::explore::design::DesignKind;
     use crate::explore::factor::{FactorSpec, LevelSpec};
@@ -353,8 +296,8 @@ mod tests {
     use crate::explore::search::{SearchAlgorithm, SearchSpec};
     use crate::explore::spec::{ActionSpec, BlockSpec, MeasureSettings, RunSettings, SweepSpec};
     use crate::explore::stop::StopSpec;
-    use crate::helpers::{f32_param, u32_param};
-    use crate::params::{ParamDescriptor, ParamValue};
+    use crate::helpers::{choice_param, f32_param, u32_param};
+    use crate::params::{ChoiceOptions, ParamDescriptor, ParamKind, ParamValue};
     use crate::view::StatDescriptor;
 
     const STATS: &[StatDescriptor] = &[StatDescriptor::new("Infected", [0, 0, 0, 255])];
@@ -398,11 +341,50 @@ mod tests {
         spec
     }
 
+    /// Owned descriptors hash as the same declarations borrowed do. Otherwise results recorded under one could not
+    /// resume or merge under the other.
     #[test]
-    fn fnv_is_stable() {
-        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_eq!(fnv1a64(b"foobar"), 0x8594_4171_f739_67e8);
+    fn owned_and_borrowed_descriptors_hash_alike() {
+        let mut borrowed_params = params();
+        borrowed_params.push(choice_param("neighborhood", "Neighborhood", &["moore", "von_neumann"], 1).percent());
+        let owned_params: Vec<ParamDescriptor> = borrowed_params
+            .iter()
+            .map(|param| {
+                let kind = match param.kind() {
+                    ParamKind::Choice { options, default } => ParamKind::Choice {
+                        options: ChoiceOptions::new(options.iter().map(str::to_owned).collect()),
+                        default: *default,
+                    },
+                    kind => kind.clone(),
+                };
+                ParamDescriptor::new(param.id().to_owned(), param.label().to_owned(), kind)
+            })
+            .collect();
+        let owned_stats: Vec<StatDescriptor> = STATS
+            .iter()
+            .map(|stat| StatDescriptor::owned(stat.label().to_owned(), stat.color()))
+            .collect();
+        let owned_actions: Vec<ActionDescriptor> = ACTIONS
+            .iter()
+            .map(|action| ActionDescriptor::owned(action.id().to_owned(), action.label().to_owned()))
+            .collect();
+        assert_eq!(owned_stats, STATS);
+        assert_eq!(owned_actions, ACTIONS);
+
+        let borrowed = schema(&borrowed_params);
+        let owned = ModelSchema {
+            id: "sir",
+            params: &owned_params,
+            stats: &owned_stats,
+            actions: &owned_actions,
+        };
+        assert_eq!(schema_hash(&owned), schema_hash(&borrowed));
+        let (from_owned, from_borrowed) = (
+            sweep().plan(&owned).expect("an owned schema plans"),
+            sweep().plan(&borrowed).expect("a borrowed schema plans"),
+        );
+        assert_eq!(from_owned.plan_hash(), from_borrowed.plan_hash());
+        assert_eq!(from_owned.results_fingerprint(), from_borrowed.results_fingerprint());
     }
 
     #[test]
@@ -428,6 +410,22 @@ mod tests {
             ..schema(&params)
         };
         assert_ne!(original, schema_hash(&without_actions));
+    }
+
+    /// Hiding a parameter changes only where the UI draws it. Results recorded before a parameter was hidden still
+    /// resume and merge.
+    #[test]
+    fn a_hidden_parameter_hashes_like_a_shown_one() {
+        let shown = params();
+        let mut hidden = params();
+        hidden[0] = hidden[0].clone().hidden();
+        assert!(hidden[0].is_hidden() && !shown[0].is_hidden());
+        assert_eq!(schema_hash(&schema(&hidden)), schema_hash(&schema(&shown)));
+        let (from_hidden, from_shown) = (
+            sweep().plan(&schema(&hidden)).expect("a hidden parameter plans"),
+            sweep().plan(&schema(&shown)).expect("a shown parameter plans"),
+        );
+        assert_eq!(from_hidden.plan_hash(), from_shown.plan_hash());
     }
 
     #[test]
@@ -558,5 +556,46 @@ mod tests {
             PatternAxis::bounded("Infected:argmax", 0.0, 50.0, 20),
         );
         assert_ne!(search_hash(0x1234, 2, &automatic), search_hash(0x1234, 2, &bounded));
+    }
+
+    /// A parameter marked integer hashes apart from the same `f32` unmarked, and an unmarked model keeps its hash.
+    #[test]
+    fn an_integer_parameter_hashes_apart_from_a_plain_one() {
+        let plain = params();
+        let mut integer = params();
+        integer[0] = f32_param("infection_rate", "Infection rate", 0.0, -2.0, 8.0, Some(1.0)).integer();
+        let mut unmarked = params();
+        unmarked[0] = f32_param("infection_rate", "Infection rate", 0.0, -2.0, 8.0, Some(1.0));
+        assert_ne!(schema_hash(&schema(&integer)), schema_hash(&schema(&unmarked)));
+        assert_ne!(schema_hash(&schema(&integer)), schema_hash(&schema(&plain)));
+        let mut marked_u32 = params();
+        marked_u32[1] = marked_u32[1].clone().integer();
+        assert_eq!(
+            schema_hash(&schema(&marked_u32)),
+            schema_hash(&schema(&plain)),
+            "a u32 ignores the mark"
+        );
+    }
+
+    /// A search over a range written in percent hashes as the same range written as fractions, which plans the same
+    /// levels.
+    #[test]
+    fn a_percent_range_hashes_as_its_fractions() {
+        let mut fractions = pattern_search(
+            PatternAxis::automatic("Infected:max", 32),
+            PatternAxis::automatic("Infected:argmax", 20),
+        );
+        let mut percents = fractions.clone();
+        fractions.space[0].levels = LevelSpec::Range {
+            min: 0.003,
+            max: 0.05,
+            step: Some(0.001),
+        };
+        percents.space[0].levels = LevelSpec::PercentRange {
+            min: 0.3,
+            max: 5.0,
+            step: Some(0.1),
+        };
+        assert_eq!(search_hash(1, 2, &percents), search_hash(1, 2, &fractions));
     }
 }

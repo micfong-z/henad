@@ -1,11 +1,12 @@
 # Font sources
 
-The app embeds four fonts.
-Each is listed here with its source, its licence and, for the two built here, the procedure that rebuilds it.
+The app embeds five fonts.
+Each is listed here with its source, its licence and, for the three built here, the procedure that rebuilds it.
 
 | File | Source | Licence |
 |---|---|---|
 | `Henad Sans Regular.ttf` | IBM Plex Sans 3.201, modified as described below | SIL Open Font License 1.1, in `OFL.txt` |
+| `Henad Sans SemiBold.ttf` | IBM Plex Sans 3.201, modified as described below | SIL Open Font License 1.1, in `OFL.txt` |
 | `Henad Mono Regular.ttf` | IBM Plex Mono 2.3, modified as described below | SIL Open Font License 1.1, in `OFL.txt` |
 | `Material Design Icons.ttf` | `fonts/materialdesignicons-webfont.ttf` of [Templarian/MaterialDesign-Webfont](https://github.com/Templarian/MaterialDesign-Webfont) at tag `v7.2.96`, unmodified | Apache License 2.0, in `LICENSE-APACHE` |
 | `Material Symbols Outlined.ttf` | `variablefont/MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf` of [google/material-design-icons](https://github.com/google/material-design-icons) at commit `9365c0b8c619f5888bbf6f9497ca0f1d5e27c5b1`, version 2.667, unmodified | Apache License 2.0, in `LICENSE-APACHE`. Copyright 2020-2023 Google LLC |
@@ -15,7 +16,7 @@ The Material Symbols file has SHA-256 `3527004d40bc8706368af0c247876c272a25fd3f1
 
 ## Henad Sans and Henad Mono
 
-The two text fonts are IBM Plex with three OpenType features made permanent: `ss01` (single-storey a), `ss02` (single-storey g) and `zero` (slashed zero).
+The three text fonts are IBM Plex with three OpenType features made permanent: `ss01` (single-storey a), `ss02` (single-storey g) and `zero` (slashed zero).
 egui applies no OpenType features, so the glyphs have to be the defaults.
 
 IBM reserves the font name "Plex" under the SIL Open Font License, and a modified version cannot carry it.
@@ -32,7 +33,7 @@ The upstream files are Google Fonts' copies, taken at commit `0b58fb370093f9a9f4
 | `ofl/ibmplexsans/OFL.txt` | | `7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da` |
 
 Plex Sans 3.201 is published as a variable font only.
-Its regular instance sits at the default axis values, weight 400 and width 100.
+Its regular instance sits at the default axis values, weight 400 and width 100, and its semibold instance at weight 600 and width 100.
 
 ### Procedure
 
@@ -56,9 +57,15 @@ freezer=(uvx --from 'opentype-feature-freezer==1.32.2' --with 'fonttools==4.66.1
 "${fonttools[@]}" fonttools varLib.instancer 'IBMPlexSans[wdth,wght].ttf' wght=400 wdth=100 \
     -o IBMPlexSans-Regular.ttf
 
+# Cut the static semibold instance. Its names come from the variable font's style attributes.
+"${fonttools[@]}" fonttools varLib.instancer 'IBMPlexSans[wdth,wght].ttf' wght=600 wdth=100 \
+    --update-name-table -o IBMPlexSans-SemiBold.ttf
+
 # Freeze the three features into the character map, and rename the family.
 "${freezer[@]}" -f ss01,ss02,zero -i -R 'IBM Plex Sans/Henad Sans,IBMPlexSans/HenadSans' \
     IBMPlexSans-Regular.ttf 'Henad Sans Regular.ttf'
+"${freezer[@]}" -f ss01,ss02,zero -i -R 'IBM Plex Sans/Henad Sans,IBMPlexSans/HenadSans' \
+    IBMPlexSans-SemiBold.ttf 'Henad Sans SemiBold.ttf'
 "${freezer[@]}" -f ss01,ss02,zero -i -R 'IBM Plex Mono/Henad Mono,IBMPlexMono/HenadMono' \
     IBMPlexMono-Regular.ttf 'Henad Mono Regular.ttf'
 ```
@@ -85,10 +92,12 @@ font["name"].removeUnusedNames(font)
 font.save(path)
 EOF
 "${fonttools[@]}" python finish.py 'Henad Sans Regular.ttf' 'Henad Sans'
+"${fonttools[@]}" python finish.py 'Henad Sans SemiBold.ttf' 'Henad Sans'
 "${fonttools[@]}" python finish.py 'Henad Mono Regular.ttf' 'Henad Mono'
 
 # "Plex" is left only in the trademark record.
 "${fonttools[@]}" ttx -q -t name -o - 'Henad Sans Regular.ttf' | grep Plex
+"${fonttools[@]}" ttx -q -t name -o - 'Henad Sans SemiBold.ttf' | grep Plex
 "${fonttools[@]}" ttx -q -t name -o - 'Henad Mono Regular.ttf' | grep Plex
 ```
 
@@ -97,6 +106,7 @@ The procedure produces these files.
 | File | SHA-256 |
 |---|---|
 | `Henad Sans Regular.ttf` | `4cdd4289605a370bfc3866f3f9c3aab42e19a27878a5e19c547f7da152535aea` |
+| `Henad Sans SemiBold.ttf` | `4540f1163cd7eca8d807d90e19d70aa8d2c0700b973fffe81b943b6535ec9565` |
 | `Henad Mono Regular.ttf` | `768b2fc782b99ccd271aa79709972ec015e10b7d48da781f1c500835416f0473` |
 
-Every character of both fonts draws with the same outline and advance width as in the fonts the app embedded up to Henad 0.2.0, which FontFreeze 1.12.4 froze from the same upstream versions with the same three features.
+Every character of the regular Sans and the Mono draws with the same outline and advance width as in the fonts the app embedded up to Henad 0.2.0, which FontFreeze 1.12.4 froze from the same upstream versions with the same three features.

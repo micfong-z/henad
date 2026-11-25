@@ -10,12 +10,15 @@ use crate::icons::material_design_icons::{
 use crate::options::cli_phrase;
 use crate::ui::mcs;
 use crate::ui::sweep::SweepRequest;
-use crate::ui::sweep::draft::DraftMode;
+use crate::ui::sweep::draft::ExploreMode;
 use crate::ui::sweep::layout::{add_button, icon_button, segmented, truncated_label};
 use crate::ui::sweep::session::SessionState;
 
 /// Id of the header panel.
 pub const HEADER_ID: &str = "henad_sweep_header";
+
+/// Line under the header while the Editor holds a model that no Apply has installed as it now reads.
+pub const EDITOR_NOT_APPLIED: &str = "Model in the Editor tab is not applied. Press Apply there to sweep it.";
 
 /// Space above and below the header's two rows, in points.
 const HEADER_MARGIN_Y: i8 = 2;
@@ -44,6 +47,8 @@ pub struct BuilderHeader<'a> {
     pub notification: Option<&'a str>,
     /// Whether the model cannot be swept in a browser, as for a GPU model.
     pub gpu_refused: bool,
+    /// Whether the Editor holds a model the sweep leaves out, one that no Apply has installed as it now reads.
+    pub editor_not_applied: bool,
     /// Program that the advice refers to, `None` when the product has no command-line program.
     pub cli_command: Option<&'a str>,
     /// Whether the Plan panel fits beside the form, and its toggle shows.
@@ -56,12 +61,12 @@ pub struct BuilderHeader<'a> {
 pub fn builder_header(
     ui: &mut egui::Ui,
     header: &BuilderHeader<'_>,
-    mode: &mut DraftMode,
+    mode: &mut ExploreMode,
     plan_open: &mut bool,
     request: &mut Option<SweepRequest>,
 ) -> bool {
     let spec_menu = SpecMenu {
-        noun: noun(*mode),
+        mode: *mode,
         save_refusal: None,
         load_refusal: None,
     };
@@ -98,11 +103,16 @@ pub fn builder_header(
             ),
             color: Some(ui.visuals().error_fg_color),
         }
+    } else if header.editor_not_applied {
+        Line {
+            text: EDITOR_NOT_APPLIED.to_owned(),
+            color: Some(ui.visuals().warn_fg_color),
+        }
     } else {
         Line {
             text: match mode {
-                DraftMode::Sweep => "Runs every configuration of a design, each once per replicate.",
-                DraftMode::Search => "Selects configurations in batches, based on earlier results.",
+                ExploreMode::Sweep => "Runs every configuration of a design, each once per replicate.",
+                ExploreMode::Search => "Selects configurations in batches, based on earlier results.",
             }
             .to_owned(),
             color: Some(ui.visuals().weak_text_color()),
@@ -115,8 +125,7 @@ pub fn builder_header(
 /// Contents of the header while a session exists.
 pub struct SessionHeader<'a> {
     pub state: SessionState,
-    /// "sweep" or "search".
-    pub noun: &'static str,
+    pub mode: ExploreMode,
     pub model_name: &'a str,
     pub notification: Option<&'a str>,
     /// Whether the session resumes a folder. Such a session has no draft.
@@ -131,24 +140,25 @@ pub fn session_header(
     plan_open: &mut bool,
     request: &mut Option<SweepRequest>,
 ) {
+    let noun = header.mode.noun();
     let load_refusal = if header.state.is_running() {
-        format!("A {} is running", header.noun)
+        format!("A {noun} is running")
     } else {
-        format!("Press {} to load a spec", edit_label(header.noun, header.resumed))
+        format!("Press {} to load a spec", edit_label(header.mode, header.resumed))
     };
     let spec_menu = SpecMenu {
-        noun: header.noun,
+        mode: header.mode,
         save_refusal: header
             .resumed
-            .then(|| format!("This {}'s spec is already in the folder's manifest.json", header.noun)),
+            .then(|| format!("This {noun}'s spec is already in the folder's manifest.json")),
         load_refusal: Some(load_refusal),
     };
     Sides::new().shrink_left().truncate().show(
         ui,
         |ui| {
             status_badge(ui, header.state);
-            let noun = if header.noun == "search" { "Search" } else { "Sweep" };
-            ui.add(egui::Label::new(RichText::new(format!("{noun} of {}", header.model_name)).strong()).truncate());
+            let title = header.mode.title();
+            ui.add(egui::Label::new(RichText::new(format!("{title} of {}", header.model_name)).strong()).truncate());
         },
         |ui| trailing_controls(ui, &spec_menu, header.plan_fits, plan_open, request),
     );
@@ -159,11 +169,11 @@ pub fn session_header(
         SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed
             if header.resumed =>
         {
-            format!("Press New {} to set up another.", header.noun)
+            format!("Press New {noun} to return to settings.")
         }
         SessionState::Finished | SessionState::Aborted | SessionState::Stopped | SessionState::Failed => format!(
             "Press {} to change the settings and run again.",
-            edit_label(header.noun, false)
+            edit_label(header.mode, false)
         ),
     };
     let line = Line {
@@ -175,7 +185,8 @@ pub fn session_header(
 
 /// Returns the label of the button that leaves an ended session: "Edit sweep", or "New sweep" after a session that
 /// resumed a folder.
-pub fn edit_label(noun: &str, resumed: bool) -> String {
+pub fn edit_label(mode: ExploreMode, resumed: bool) -> String {
+    let noun = mode.noun();
     if resumed {
         format!("New {noun}")
     } else {
@@ -183,20 +194,12 @@ pub fn edit_label(noun: &str, resumed: bool) -> String {
     }
 }
 
-/// Returns "sweep" or "search" for a draft in `mode`.
-pub fn noun(mode: DraftMode) -> &'static str {
-    match mode {
-        DraftMode::Sweep => "sweep",
-        DraftMode::Search => "search",
-    }
-}
-
 /// Draws the Sweep and Search switch writing `mode`, and returns whether it changed.
-fn mode_switch(ui: &mut egui::Ui, mode: &mut DraftMode) -> bool {
+fn mode_switch(ui: &mut egui::Ui, mode: &mut ExploreMode) -> bool {
     let choices = [
-        (DraftMode::Sweep, "Sweep", "Run every configuration of a design"),
+        (ExploreMode::Sweep, "Sweep", "Run every configuration of a design"),
         (
-            DraftMode::Search,
+            ExploreMode::Search,
             "Search",
             "Optimize an objective, or explore a grid of two outputs",
         ),
@@ -206,7 +209,7 @@ fn mode_switch(ui: &mut egui::Ui, mode: &mut DraftMode) -> bool {
 
 /// Spec menu of the header, and the reason each item is disabled.
 struct SpecMenu {
-    noun: &'static str,
+    mode: ExploreMode,
     save_refusal: Option<String>,
     load_refusal: Option<String>,
 }
@@ -226,7 +229,7 @@ fn trailing_controls(
             Button::new(format!("{MDI_TRAY_ARROW_DOWN} Save spec")),
             "Save spec",
         )
-        .on_hover_text(format!("Save {} to TOML file", spec_menu.noun));
+        .on_hover_text(format!("Save {} to TOML file", spec_menu.mode.noun()));
         let save = match &spec_menu.save_refusal {
             Some(reason) => save.on_disabled_hover_text(reason),
             None => save,
@@ -323,7 +326,39 @@ fn status_badge(ui: &mut egui::Ui, state: SessionState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{edit_label, header_height, is_failure};
+    use super::{BuilderHeader, EDITOR_NOT_APPLIED, builder_header, edit_label, header_height, is_failure};
+    use crate::tests::support::accessible_texts;
+    use crate::ui::sweep::draft::ExploreMode;
+
+    #[test]
+    fn the_line_under_the_header_names_an_unapplied_editor_model_unless_a_notification_shows() {
+        let shows_warning = |editor_not_applied: bool, notification: Option<&str>| {
+            let header = BuilderHeader {
+                model_name: "SIR epidemic",
+                notification,
+                gpu_refused: false,
+                editor_not_applied,
+                cli_command: None,
+                plan_fits: true,
+            };
+            let texts = accessible_texts(
+                |ui| {
+                    let mut mode = ExploreMode::Sweep;
+                    let mut plan_open = false;
+                    let mut request = None;
+                    builder_header(ui, &header, &mut mode, &mut plan_open, &mut request);
+                },
+                |node| node.value().or_else(|| node.label()),
+            );
+            texts.iter().any(|text| text == EDITOR_NOT_APPLIED)
+        };
+        assert!(shows_warning(true, None));
+        assert!(!shows_warning(false, None));
+        assert!(
+            !shows_warning(true, Some("Loaded sir.toml")),
+            "a notification shows in its place"
+        );
+    }
 
     #[test]
     fn the_header_holds_two_rows_and_its_separator() {
@@ -338,9 +373,9 @@ mod tests {
 
     #[test]
     fn an_ended_session_is_edited_unless_it_resumed_a_folder() {
-        assert_eq!(edit_label("sweep", false), "Edit sweep");
-        assert_eq!(edit_label("search", false), "Edit search");
-        assert_eq!(edit_label("sweep", true), "New sweep");
+        assert_eq!(edit_label(ExploreMode::Sweep, false), "Edit sweep");
+        assert_eq!(edit_label(ExploreMode::Search, false), "Edit search");
+        assert_eq!(edit_label(ExploreMode::Sweep, true), "New sweep");
     }
 
     #[test]

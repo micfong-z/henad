@@ -4,7 +4,7 @@ Initial conditions are shared rather than reimplemented: both engines have to be
 numbers for the comparison to mean anything. It is the rules that are written independently.
 
 Taken from `crates/henad-models/tests/fixtures/docs/`, and identical to the tables in
-`consistency_boids.rs` and `consistency_ants.rs`.
+`tests/gates/boids.rs` and `tests/gates/ants.rs`.
 """
 module Scenarios
 

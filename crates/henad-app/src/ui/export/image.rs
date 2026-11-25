@@ -2,10 +2,11 @@
 
 use henad_compute::display_scale::{MAX_DISPLAY_DIM, display_dims};
 use henad_compute::gpu::view::display::GpuDisplay;
-use henad_compute::snapshot::{CpuLayers, GpuSnapshot, GridSnapshot, SnapshotView};
+use henad_compute::snapshot::{GridSnapshot, SnapshotView};
 
 use crate::state::AppState;
 use crate::ui::agent_layer::{AgentDraw, padded_palette};
+use crate::ui::viewport::{sample_grid, view_extent};
 
 /// Capture waiting on the GPU, polled every frame without blocking, as a stats readback is.
 pub struct PendingCapture {
@@ -28,33 +29,9 @@ const MIN_AGENT_DIM: u32 = 1000;
 
 /// Returns the pixel dimensions of an export of the current snapshot, or `None` when there is nothing to draw.
 pub fn capture_dims(app: &AppState, device_max: u32) -> Option<(u32, u32)> {
-    let view = &app.snapshot.as_ref()?.view;
-    let (base, agents) = match view {
-        SnapshotView::Cpu(layers) => match layers {
-            CpuLayers {
-                grid: Some(grid),
-                points,
-                ..
-            } => ((grid.width, grid.height), points.is_some()),
-            CpuLayers {
-                points: Some(points), ..
-            } => ((points.world_w as u32, points.world_h as u32), true),
-            CpuLayers { .. } => return None,
-        },
-        SnapshotView::Gpu(gpu) => match gpu {
-            GpuSnapshot {
-                display: Some(display),
-                agents,
-            } => ((display.width, display.height), agents.is_some()),
-            GpuSnapshot {
-                agents: Some(agents), ..
-            } => ((agents.world_w as u32, agents.world_h as u32), true),
-            GpuSnapshot { .. } => return None,
-        },
-    };
-
-    let (width, height) = display_dims(base.0.max(1), base.1.max(1), device_max);
-    if !agents {
+    let extent = view_extent(&app.snapshot.as_ref()?.view)?;
+    let (width, height) = display_dims((extent.width as u32).max(1), (extent.height as u32).max(1), device_max);
+    if !extent.agents {
         return Some((width, height));
     }
     let cap = MAX_DISPLAY_DIM.min(device_max).max(1);
@@ -78,7 +55,7 @@ fn agent_scale(long_side: u32, cap: u32) -> u32 {
 pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     let ctx = &app.render_ctx;
     let device_max = ctx.device.limits().max_texture_dimension_2d;
-    let (width, height) = capture_dims(app, device_max).ok_or("model exposes no view to capture")?;
+    let (width, height) = capture_dims(app, device_max).ok_or("model has no view to capture")?;
     let format = ctx.target_format;
 
     let target = make_target(&ctx.device, format, width, height);
@@ -90,7 +67,8 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     if let SnapshotView::Cpu(layers) = &snapshot.view
         && let Some(grid) = &layers.grid
     {
-        write_grid(ctx, &target, grid, width, height, format);
+        let pixels = app.ui_pool().install(|| grid_pixels(grid, width, height, format));
+        write_grid(ctx, &target, &pixels, width, height);
     }
 
     let gpu_display = match &snapshot.view {
@@ -126,9 +104,9 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
     );
     ctx.queue.submit(Some(encoder.finish()));
 
-    let (tx, rx) = flume::bounded(1);
+    let (sender, receiver) = flume::bounded(1);
     buffer.slice(..).map_async(wgpu::MapMode::Read, move |result| {
-        drop(tx.send(result));
+        drop(sender.send(result));
     });
 
     Ok(PendingCapture {
@@ -137,7 +115,7 @@ pub fn start(app: &AppState, name: String) -> Result<PendingCapture, String> {
         height,
         padded_row,
         format,
-        mapped: rx,
+        mapped: receiver,
         name,
     })
 }
@@ -155,18 +133,11 @@ fn make_target(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, h
     })
 }
 
-fn write_grid(
-    ctx: &henad_compute::gpu::GpuContext,
-    target: &wgpu::Texture,
-    grid: &GridSnapshot,
-    width: u32,
-    height: u32,
-    format: wgpu::TextureFormat,
-) {
-    let pixels = grid_pixels(grid, width, height, format);
+/// Writes `pixels`, a `width` x `height` grid in the target's format, into `target`.
+fn write_grid(ctx: &henad_compute::gpu::GpuContext, target: &wgpu::Texture, pixels: &[u8], width: u32, height: u32) {
     ctx.queue.write_texture(
         copy_source(target),
-        &pixels,
+        pixels,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(width * 4),
@@ -245,7 +216,7 @@ impl PendingCapture {
         device.poll(wgpu::PollType::Poll).ok();
         match self.mapped.try_recv() {
             Ok(Ok(())) => Some(self.encode()),
-            Ok(Err(err)) => Some(Err(err.to_string())),
+            Ok(Err(error)) => Some(Err(error.to_string())),
             Err(_) => None,
         }
     }
@@ -256,7 +227,7 @@ impl PendingCapture {
                 .buffer
                 .slice(..)
                 .get_mapped_range()
-                .map_err(|err| err.to_string())?;
+                .map_err(|error| error.to_string())?;
             let row = self.width as usize * 4;
             let mut rgba = Vec::with_capacity(row * self.height as usize);
             for y in 0..self.height as usize {
@@ -277,7 +248,7 @@ impl PendingCapture {
             image::ExtendedColorType::Rgba8,
             image::ImageFormat::Png,
         )
-        .map_err(|err| err.to_string())?;
+        .map_err(|error| error.to_string())?;
         Ok(png)
     }
 }
@@ -299,18 +270,7 @@ fn agent_draw(app: &AppState, width: u32, height: u32) -> Option<AgentDraw> {
 ///
 /// A cell value past the end of the palette takes its first colour, as in the viewport.
 fn grid_pixels(grid: &GridSnapshot, width: u32, height: u32, format: wgpu::TextureFormat) -> Vec<u8> {
-    use rayon::prelude::*;
-
-    let src_width = grid.width as usize;
-    let colors = padded_palette(grid.palette);
-    let row = |y: u32| {
-        let sy = henad_compute::display_scale::source_row(y, grid.height, height) as usize;
-        let cells = &grid.cells[sy * src_width..(sy + 1) * src_width];
-        (0..width as usize)
-            .flat_map(|x| colors[usize::from(cells[x * src_width / width as usize])])
-            .collect::<Vec<u8>>()
-    };
-    let mut pixels: Vec<u8> = (0..height).into_par_iter().flat_map_iter(row).collect();
+    let mut pixels = sample_grid(grid, width, height, &padded_palette(&grid.palette)).into_flattened();
     match_channel_order(&mut pixels, format);
     pixels
 }
@@ -349,7 +309,7 @@ mod tests {
             width: 4,
             height: 1,
             cells: vec![0, 1, 2, 255],
-            palette: &[[1, 2, 3, 4], [5, 6, 7, 8]],
+            palette: vec![[1, 2, 3, 4], [5, 6, 7, 8]],
         };
         let pixels = grid_pixels(&grid, 4, 1, wgpu::TextureFormat::Rgba8Unorm);
         assert_eq!(pixels, [1, 2, 3, 4, 5, 6, 7, 8, 1, 2, 3, 4, 1, 2, 3, 4]);

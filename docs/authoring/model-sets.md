@@ -49,6 +49,20 @@ A set holds each id once.
 `insert` rejects an id that the set already holds, and an id outside the grammar: a lowercase ASCII letter, then lowercase letters, digits and underscores.
 An id identifies the model on the command line, in a spec file and in every results folder, so keep it once a sweep has used it.
 
+`ModelSet::replace` puts an entry in place of the entry with its id, at the same position in the list, and returns the entry it replaced.
+When the set holds no entry with that id, `replace` adds the entry at the end and returns `None`.
+It rejects an id outside the grammar, as `insert` does.
+
+```rust
+let mut models = henad::ModelSet::new(henad::build_info!());
+models.extend(henad::models::example_models())?;
+let example_sir = models.replace(register_grid_model::<MySir>())?;
+```
+
+Here `MySir` declares the id `sir`, takes the example model's place in the list, and records the project's build.
+A host also replaces an entry when the code behind an id changes while it runs.
+A sweep or a simulation holds its own clone of the entry, and keeps running the code it started with.
+
 ## Sources
 
 Every entry records its **source**: the type path of the model, and the build of the crate that registered it.
@@ -73,6 +87,26 @@ models.extend(my_model::models()?)?;
 ```
 
 `extend` checks every id before it adds any entry, and leaves the set unchanged when two ids clash.
+
+### Origins
+
+A source also records how the model's code reached the process, as a `CodeOrigin`:
+
+| Origin | Code | Identified by |
+|---|---|---|
+| `Compiled` | Compiled into the host from a crate it links, as every `register_*` entry is | The crate's source hash |
+| `Runtime` | Composed at run time from text, such as a grid rule from a model file | The hash of its text |
+
+`ModelSource::origin` returns the origin, and `ModelSource::code_hash` the hash that identifies the code.
+A runtime source holds its text as a `ModelCode`, the canonical text and the name and version of its format, and `ModelSource::code` returns it.
+`ModelSource::runtime` builds such a source, and its type path reads `runtime:` and the label it was given.
+A set never records its build on a runtime source.
+The text identifies the code, and the host's build says nothing about it.
+
+A runtime model can take the id of a compiled model, and the results folder records that its code differs.
+A results folder records each model's origin and code hash, and a runtime model's text in the manifest.
+A changed compiled build raises a warning on a resume or a merge.
+Changed runtime code, or a switch between runtime and compiled code, makes a resume or a merge reject the folder, as [Sweeps](../guide/sweeps.md#resuming-a-sweep) describes.
 
 ## The example models
 
@@ -105,12 +139,13 @@ Each clone keeps henad-models as its source.
 `register_network_model` assigns the entry the `TopologyHint::NETWORK` hint, for nodes drawn as agents with edges between them and no grid.
 The Model tab shows that topology as Network.
 The entry's metadata is a `Structure::Network` carrying the chunk size, the node lanes and the edge palette, and the Model tab lists all three.
+`ModelMetadata` and `Structure` are `#[non_exhaustive]`, and a host that matches on `entry.metadata().structure` takes a wildcard arm.
 
 ## GPU entries
 
 A GPU entry holds no device, and builds on the device that the host passes to `ModelEntry::build`.
 Built with no device, it returns a fault instead of a state.
-On a machine without a device the app and the command line leave the GPU models **out of the list entirely**, instead of listing them and letting them fail on selection.
+On a machine without a device the app and the command line leave the GPU models out of the list.
 
 A GPU entry also carries a capacity check.
 The app asks it whether the current parameters fit the device, and if they do not it disables Build with a reason instead of letting wgpu take the process down.
@@ -130,6 +165,7 @@ A GPU model whose passes leave the order of their writes to the GPU, as atomic a
 Such a model declares `REPLAYS_EXACTLY = false`, as the example `gpu_boids` does.
 The entry's metadata carries the flag as `replays_exactly`, and a results folder records it.
 The testing kit skips the checks that compare two runs on one seed, and the app notes beside a run's Open button that its replay can drift.
+A sheet or a graph model of agents records the flag as `false` when a look at the agents around adds up floats or depends on the order of its visits, as [results across devices](../reference/model-files.md#results-across-devices) describes.
 Every other model replays a recorded run exactly.
 
 ## Next

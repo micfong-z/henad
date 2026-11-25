@@ -40,10 +40,7 @@ impl<M: GridModel> GridModelState<M> {
 
     /// Builds a state whose RNG starts from `seed`, or [`GRID_INIT_SEED`] when it is `None`.
     pub fn from_params_seeded(params: &[ParamValue], seed: Option<u64>) -> Self {
-        let extent = Extent {
-            w: extract_u32(params, GRID_WIDTH, 1024) as f32,
-            h: extract_u32(params, GRID_HEIGHT, 1024) as f32,
-        };
+        let extent = grid_extent(params);
         Self {
             field: CaField::with_seed(extent, own_params(params), seed),
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
@@ -56,10 +53,7 @@ impl<M: GridModel> GridModelState<M> {
     ///
     /// Returns `None` unless `cells` is exactly the length `params` implies.
     pub fn from_cells(params: &[ParamValue], cells: &[u8]) -> Option<Self> {
-        let extent = Extent {
-            w: extract_u32(params, GRID_WIDTH, 1024) as f32,
-            h: extract_u32(params, GRID_HEIGHT, 1024) as f32,
-        };
+        let extent = grid_extent(params);
         Some(Self {
             field: CaField::from_cells(extent, cells)?,
             params: ParamStore::new(&grid_model_param_descriptors::<M>(), params),
@@ -78,6 +72,17 @@ pub const GRID_HEIGHT: usize = 1;
 /// Number of params the engine prepends, and the index of a model's first own param.
 pub const GRID_PARAM_BASE: usize = 2;
 
+/// Default width and height of a grid in cells, and the size a list too short to hold them builds.
+const DEFAULT_GRID_SIDE: u32 = 1024;
+
+/// Returns the size of the grid that `params` sets, in cells.
+fn grid_extent(params: &[ParamValue]) -> Extent {
+    Extent {
+        w: extract_u32(params, GRID_WIDTH, DEFAULT_GRID_SIDE) as f32,
+        h: extract_u32(params, GRID_HEIGHT, DEFAULT_GRID_SIDE) as f32,
+    }
+}
+
 /// A grid model's own slice of a composed list.
 fn own_params(params: &[ParamValue]) -> &[ParamValue] {
     &params[GRID_PARAM_BASE.min(params.len())..]
@@ -86,8 +91,8 @@ fn own_params(params: &[ParamValue]) -> &[ParamValue] {
 /// Returns the full descriptor list: `grid_width` and `grid_height`, then the model's own params.
 pub fn grid_model_param_descriptors<M: GridModel>() -> Vec<ParamDescriptor> {
     let mut descs = vec![
-        u32_param("grid_width", "Grid Width", 1024, 1, 10_000).on_reload(),
-        u32_param("grid_height", "Grid Height", 1024, 1, 10_000).on_reload(),
+        u32_param("grid_width", "Grid Width", DEFAULT_GRID_SIDE, 1, 10_000).on_reload(),
+        u32_param("grid_height", "Grid Height", DEFAULT_GRID_SIDE, 1, 10_000).on_reload(),
     ];
     descs.extend(M::param_descriptors());
     descs
@@ -147,6 +152,7 @@ impl<M: GridModel> SimState for GridModelState<M> {
 #[cfg(test)]
 mod tests {
     use super::GridModelState;
+    use crate::cpu::tests::support::in_pool_of;
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::authoring::primitives::rng::xorshift64;
     use henad_core::grid::Grid2D;
@@ -338,11 +344,7 @@ mod tests {
         // A 128-column grid holds 64 rows per job, and 1024 rows split into 16 jobs.
         let params = vec![ParamValue::U32(128), ParamValue::U32(1024)];
         let run = |threads: usize| -> Vec<u8> {
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .expect("rayon pool");
-            pool.install(|| {
+            in_pool_of(threads, || {
                 let mut state = GridModelState::<Noisy>::from_params(&params);
                 for _ in 0..20 {
                     state.step();

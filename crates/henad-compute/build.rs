@@ -5,6 +5,7 @@
 /// with `include_wgsl!` and has no bindings to generate.
 const ENTRY_POINTS: &[&str] = &[
     "primitives/hash_count.wgsl",
+    "primitives/hash_largest.wgsl",
     "primitives/hash_scatter.wgsl",
     "primitives/scan.wgsl",
     "primitives/scan_add.wgsl",

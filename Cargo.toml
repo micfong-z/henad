@@ -21,6 +21,7 @@ henad-core = { path = "crates/henad-core", version = "0.3.0" }
 henad-build = { path = "crates/henad-build", version = "0.3.0" }
 henad-compute = { path = "crates/henad-compute", version = "0.3.0" }
 henad-models = { path = "crates/henad-models", version = "0.3.0" }
+henad-graph = { path = "crates/henad-graph", version = "0.3.0" }
 henad-explore = { path = "crates/henad-explore", version = "0.3.0" }
 # The facade alone takes the two hosts, without the example models their binaries need.
 henad-cli = { path = "crates/henad-cli", version = "0.3.0", default-features = false }
@@ -55,12 +56,27 @@ wgpu = { version = "30.0", features = [
 ] }
 flume = "0.12"
 rfd = "0.17"
+# henad-app's edit of the macOS app menu, at the versions eframe and rfd already build.
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+] }
 # henad-build only. Default features off: the default `glam` map would make every generated
 # uniform field a `glam` type, and `RustWgslTypeMap` wants plain arrays. The exact pin holds the
 # generated code henad-compute expects. A patch moves only with a Henad release.
 wgsl_bindgen = { version = "=0.23.3", default-features = false }
 heck = "0.5"
+# henad-compute's `runtime-wgsl` alone, which composes and validates a grid rule's WGSL while the program runs. The
+# version is wgpu's. naga_oil's default features add GLSL and a test shader. wgsl_bindgen's build-time copy is a build
+# dependency, outside this graph.
+naga = { version = "30.0.0", features = ["wgsl-in", "wgsl-out"] }
+naga_oil = { version = "0.23.0", default-features = false }
 egui_plot = "0.37"
+egui-snarl = "0.12"
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"
 # Benchmarks only. Default features off: the plotting/html/csv extras pull a large tree and the

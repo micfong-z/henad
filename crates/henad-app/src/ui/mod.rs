@@ -3,9 +3,11 @@ pub mod agent_layer;
 pub mod charts;
 pub mod dock;
 pub mod edge_layer;
+pub mod editor;
 pub mod export;
 pub mod fault;
 pub mod files;
+pub mod focus;
 pub mod mcs;
 pub mod menu_bar;
 pub mod model;
@@ -14,10 +16,13 @@ pub mod painted;
 pub mod params;
 pub mod performance;
 pub mod playback;
+pub mod rebuild;
 pub mod results;
 pub mod stats;
 pub mod sweep;
 pub mod system;
+pub mod text;
+pub mod time_axis;
 pub mod viewport;
 
 pub fn banner(ui: &mut egui::Ui, icon: &str, color: egui::Color32, title: &str, detail: &str) {
@@ -47,6 +52,13 @@ pub(crate) fn plural(count: u64, noun: &str) -> String {
     } else {
         format!("{noun}s")
     }
+}
+
+/// Returns whether a modal dialog showed in the last frame of `ctx`.
+///
+/// egui records the top modal layer as a frame ends. A dialog drawn in a frame shows here from the next frame on.
+pub fn modal_shown(ctx: &egui::Context) -> bool {
+    ctx.memory(|memory| memory.top_modal_layer()).is_some()
 }
 
 const KV_GRID_SPACING: [f32; 2] = [16.0, 4.0];
@@ -103,6 +115,13 @@ impl KvGridRows {
             count: 0,
             stripe: ui.painter().add(egui::Shape::Noop),
         }
+    }
+
+    /// Adds a row of `label` and `value`, and ends it.
+    pub fn row(&mut self, ui: &mut egui::Ui, label: &str, value: impl Into<egui::WidgetText>) {
+        ui.label(label);
+        ui.label(value);
+        self.end_row(ui);
     }
 
     /// Ends the row being drawn, and paints its stripe when it is an odd row.

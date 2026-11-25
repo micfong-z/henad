@@ -71,6 +71,25 @@ pub fn compute_pipeline(
     })
 }
 
+/// Records a compute pass of its own into `encoder` that runs `pipeline` over `groups` workgroups, with `bind` as
+/// group 0.
+pub(crate) fn dispatch_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    pipeline: &wgpu::ComputePipeline,
+    bind: &wgpu::BindGroup,
+    groups: (u32, u32),
+    timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
+) {
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        label: Some(label),
+        timestamp_writes,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind, &[]);
+    pass.dispatch_workgroups(groups.0, groups.1, 1);
+}
+
 /// Creates a storage buffer of `len` `u32`-sized elements.
 ///
 /// `len` is floored at one, since wgpu rejects a zero-sized buffer.

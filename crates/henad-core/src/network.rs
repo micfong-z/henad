@@ -99,19 +99,16 @@ impl Csr {
         self.len[i as usize] += 1;
     }
 
-    /// Drops the entry for `edge` from node `i`'s row.
-    ///
-    /// Returns whether the edge was found and successfully removed.
-    fn remove(&mut self, i: u32, edge: u32) -> bool {
+    /// Drops the entry for `edge` from node `i`'s row, and does nothing when the row holds no such entry.
+    fn remove(&mut self, i: u32, edge: u32) {
         let Range { start, end } = self.span(i);
         let Some(offset) = self.edges[start..end].iter().position(|&e| e == edge) else {
-            return false;
+            return;
         };
         let offset = start + offset;
         self.neighbors[offset] = self.neighbors[end - 1];
         self.edges[offset] = self.edges[end - 1];
         self.len[i as usize] -= 1;
-        true
     }
 
     /// Replaces `old` with `new` in the edge list of node `i`.
@@ -541,6 +538,22 @@ mod tests {
     use super::Network;
     use crate::authoring::primitives::rng::{next_bits, xorshift64};
 
+    /// Returns a network of `nodes` nodes with an edge for each of `attempts` random pairs drawn from `seed`.
+    ///
+    /// A pair that would make a self loop or repeat an edge adds nothing.
+    fn random_network(nodes: u32, directed: bool, seed: u64, attempts: usize) -> Network {
+        let mut net = Network::new(nodes as usize, directed);
+        let mut rng = seed;
+        for _ in 0..attempts {
+            let a = next_bits(&mut rng) % nodes;
+            let b = next_bits(&mut rng) % nodes;
+            if a != b && !net.has_edge(a, b) {
+                net.add_edge(a, b, 0);
+            }
+        }
+        net
+    }
+
     /// Neighbours of every node, computed from the edge list alone.
     fn brute_force(net: &Network) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
         let n = net.slot_count();
@@ -696,15 +709,7 @@ mod tests {
 
     #[test]
     fn a_rebuild_leaves_the_same_graph() {
-        let mut net = Network::new(20, false);
-        let mut rng = 0x51A7_u64;
-        for _ in 0..60 {
-            let a = next_bits(&mut rng) % 20;
-            let b = next_bits(&mut rng) % 20;
-            if a != b && !net.has_edge(a, b) {
-                net.add_edge(a, b, 0);
-            }
-        }
+        let mut net = random_network(20, false, 0x51A7, 60);
         let before: Vec<Vec<u32>> = (0..20).map(|i| sorted(net.in_neighbors(i).to_vec())).collect();
         net.rebuild();
         let after: Vec<Vec<u32>> = (0..20).map(|i| sorted(net.in_neighbors(i).to_vec())).collect();
@@ -768,15 +773,7 @@ mod tests {
     #[test]
     fn edge_between_returns_the_index_in_the_edge_list() {
         for directed in [false, true] {
-            let mut net = Network::new(6, directed);
-            let mut rng = 0xED6E_u64;
-            for _ in 0..20 {
-                let a = next_bits(&mut rng) % 6;
-                let b = next_bits(&mut rng) % 6;
-                if a != b && !net.has_edge(a, b) {
-                    net.add_edge(a, b, 0);
-                }
-            }
+            let mut net = random_network(6, directed, 0xED6E, 20);
             net.remove_edge(0);
             let (src, dst, _) = net.edges();
             for a in 0..6u32 {
@@ -795,15 +792,7 @@ mod tests {
 
     #[test]
     fn has_edge_agrees_with_the_edge_list() {
-        let mut net = Network::new(12, false);
-        let mut rng = 0xBEEF_u64;
-        for _ in 0..30 {
-            let a = next_bits(&mut rng) % 12;
-            let b = next_bits(&mut rng) % 12;
-            if a != b && !net.has_edge(a, b) {
-                net.add_edge(a, b, 0);
-            }
-        }
+        let net = random_network(12, false, 0xBEEF, 30);
         let (src, dst, _) = net.edges();
         let joined: Vec<(u32, u32)> = src.iter().zip(dst).map(|(&a, &b)| (a, b)).collect();
         for a in 0..12u32 {
@@ -862,15 +851,7 @@ mod tests {
     /// Growth alone never asks for a repack. Retiring most nodes does.
     #[test]
     fn retiring_most_of_the_graph_asks_for_a_repack() {
-        let mut net = Network::new(40, false);
-        let mut rng = 0x9A5B_u64;
-        for _ in 0..250 {
-            let a = next_bits(&mut rng) % 40;
-            let b = next_bits(&mut rng) % 40;
-            if a != b && !net.has_edge(a, b) {
-                net.add_edge(a, b, 0);
-            }
-        }
+        let mut net = random_network(40, false, 0x9A5B, 250);
         assert!(!net.should_repack(), "growth alone should not ask for one");
 
         for i in 0..38u32 {
@@ -886,15 +867,7 @@ mod tests {
     /// A repack copies each row instead of rebuilding it, so the order within each row is preserved.
     #[test]
     fn a_repack_keeps_every_row_as_it_was() {
-        let mut net = Network::new(30, true);
-        let mut rng = 0x2E9A_u64;
-        for _ in 0..200 {
-            let a = next_bits(&mut rng) % 30;
-            let b = next_bits(&mut rng) % 30;
-            if a != b && !net.has_edge(a, b) {
-                net.add_edge(a, b, 0);
-            }
-        }
+        let mut net = random_network(30, true, 0x2E9A, 200);
         for e in 0..40 {
             net.remove_edge(e);
         }

@@ -8,7 +8,7 @@ use henad_compute::gpu::GpuContext;
 use henad_compute::gpu::{GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 use henad_compute::snapshot::GpuSnapshot;
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::outcome::{RunStatus, StopReason};
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 use henad_core::explore::stop::StopSpec;
@@ -16,11 +16,11 @@ use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::view::StatEntry;
 
-use crate::exec::{BatchEnd, Concurrency, Executor, GpuTrackDepth, RunRequest, SweepControl};
+use crate::exec::{Concurrency, Executor, GpuTrackDepth, SweepControl};
 use crate::sweep::ExploreError;
 use crate::tests::support::{
-    Collected, ONE_TRACK, OutputTables, Recorder, ScratchDir, baseline_device, entry, headless_device, planned, sweep,
-    sweep_options, sweep_with,
+    Collected, ONE_TRACK, OutputTables, Recorder, ScratchDir, baseline_device, entry, factorial, fixed,
+    headless_device, planned, run_batch, sweep, sweep_options, sweep_with, values,
 };
 
 #[test]
@@ -30,22 +30,15 @@ fn a_gpu_sweep_writes_the_same_files_twice() {
     };
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "64".to_owned()),
-        ("grid_height".to_owned(), "64".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "64"), ("grid_height", "64")]);
     spec.run.steps = 40;
     spec.run.replicates = 2;
     spec.measure.stats_every = 4;
     spec.measure.series_every = 8;
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::param(
-            "infection_rate",
-            LevelSpec::Values(vec!["0.2".to_owned(), "0.5".to_owned()]),
-        )],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::param(
+        "infection_rate",
+        values(&["0.2", "0.5"]),
+    )])];
 
     let scratch = ScratchDir::new("gpu-twice");
     let tables: Vec<OutputTables> = ["first", "second"]
@@ -82,7 +75,7 @@ fn a_gpu_config_that_does_not_fit_is_refused_before_any_run() {
     spec.blocks = vec![BlockSpec {
         design: DesignKind::Zip,
         factors: ["grid_width", "grid_height"]
-            .map(|id| FactorSpec::param(id, LevelSpec::Values(vec!["64".to_owned(), "6000".to_owned()])))
+            .map(|id| FactorSpec::param(id, values(&["64", "6000"])))
             .to_vec(),
         design_seed: None,
     }];
@@ -182,19 +175,12 @@ fn a_gpu_action_tick_factor_moves_the_action() {
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     let mut spec = gpu_sir_spec();
     spec.run.replicates = 1;
-    spec.fixed.push(("infection_rate".to_owned(), "0.1".to_owned()));
+    spec.fixed.extend(fixed(&[("infection_rate", "0.1")]));
     spec.actions = vec![ActionSpec {
         name: "wave".to_owned(),
         ..ActionSpec::new("seed_outbreak", 0)
     }];
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::action(
-            "wave",
-            LevelSpec::Values(vec!["0".to_owned(), "12".to_owned(), "40".to_owned()]),
-        )],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::action("wave", values(&["0", "12", "40"]))])];
     let scratch = ScratchDir::new("gpu-action-tick");
     sweep(&gpu_sir, Some(&ctx), &spec, scratch.path(), Concurrency::Auto);
     let tables = OutputTables::read(scratch.path());
@@ -292,10 +278,7 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
     };
     let gpu_sir = entry("gpu_sir", Some(&ctx));
     let mut spec = SweepSpec::new("gpu_sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "32".to_owned()),
-        ("grid_height".to_owned(), "32".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "32"), ("grid_height", "32")]);
     spec.run.warmup = 10;
     spec.run.steps = 20;
     spec.measure.stats_every = 4;
@@ -330,10 +313,8 @@ fn a_gpu_fault_while_stepping_records_the_same_outcome_at_any_slice_size() {
                 submissions_per_track,
                 steps_per_submission,
             });
-            let requests: Vec<RunRequest<'_>> = plan.runs().map(|run| RunRequest::planned(&plan, run)).collect();
             let mut collected = Collected::default();
-            let end = executor.run_batch(&requests, &mut collected).expect("the batch runs");
-            assert_eq!(end, BatchEnd::Complete);
+            run_batch(&executor, &plan, &mut collected);
             collected.0.remove(0)
         })
         .collect();
@@ -359,14 +340,11 @@ mod sampling_cadence_does_not_change_the_trajectory {
     use henad_compute::entry::ModelState;
     use henad_compute::gpu::view::display::GpuDisplay;
     use henad_compute::gpu::{GpuContext, GpuSimState, stepping};
-    use henad_core::explore::spec::SweepSpec;
     use henad_core::metadata::Backend;
-    use henad_models::example_models;
 
-    use crate::tests::support::{Collected, ONE_TRACK, entry, headless_device, planned, run_plan};
-
-    const STEPS: u64 = 25;
-    const CADENCES: [u64; 2] = [1, 10];
+    use crate::tests::support::{
+        CADENCE_STEPS, CADENCES, ONE_TRACK, assert_covers, cadence_rows, entry, headless_device,
+    };
 
     /// Registered GPU models that replay exactly, one case each.
     const CASES: [&str; 3] = ["gpu_sir", "gpu_game_of_life", "gpu_ants"];
@@ -382,26 +360,7 @@ mod sampling_cadence_does_not_change_the_trajectory {
 
     fn trajectory(ctx: &GpuContext, id: &str, fixed_values: &[(&str, &str)], stats_every: u64) -> Trajectory {
         let model = entry(id, Some(ctx));
-        let mut spec = SweepSpec::new(id);
-        spec.fixed = fixed_values
-            .iter()
-            .map(|&(param, value)| (param.to_owned(), value.to_owned()))
-            .collect();
-        spec.run.steps = STEPS;
-        spec.measure.stats_every = stats_every;
-        spec.measure.series_every = stats_every;
-        spec.seeds.root = 5;
-        let (plan, measure) = planned(&model, Some(ctx), &spec);
-        let mut collected = Collected::default();
-        run_plan(&model, Some(ctx), &plan, &measure, ONE_TRACK, &mut collected);
-        let outcome = &collected.0[0];
-        assert_eq!(outcome.ticks, STEPS, "{:?}", outcome.note);
-        let rows = outcome
-            .series
-            .rows()
-            .filter(|&(tick, _)| tick == STEPS || tick % CADENCES[1] == 0)
-            .map(|(tick, values)| (tick, values.iter().map(|value| value.to_bits()).collect()))
-            .collect();
+        let (rows, plan, measure) = cadence_rows(&model, Some(ctx), ONE_TRACK, fixed_values, stats_every);
 
         let run = plan.run(0).expect("the plan has a run");
         let params = &plan.config(run.config_id).expect("the run's config").params;
@@ -563,21 +522,17 @@ mod sampling_cadence_does_not_change_the_trajectory {
             return;
         };
         let [every_tick, every_tenth] = CADENCES.map(|stats_every| trajectory(&ctx, id, fixed_values, stats_every));
-        assert_eq!(every_tick.rows.len(), 4, "ticks 0, 10, 20 and {STEPS}");
+        assert_eq!(every_tick.rows.len(), 4, "ticks 0, 10, 20 and {CADENCE_STEPS}");
         assert_eq!(every_tick, every_tenth, "{id}");
     }
 
     #[test]
     fn every_gpu_model_that_replays_has_a_case() {
-        let mut registered: Vec<String> = example_models()
-            .iter()
-            .filter(|model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly)
-            .map(|model| model.id().to_owned())
-            .collect();
-        registered.sort_unstable();
-        let mut covered: Vec<String> = CASES.iter().map(|&id| id.to_owned()).collect();
-        covered.sort_unstable();
-        assert_eq!(covered, registered);
+        assert_covers(
+            &CASES,
+            |model| model.metadata().backend == Backend::Gpu && model.metadata().replays_exactly,
+            "sampling_cadence_does_not_change_the_trajectory",
+        );
     }
 
     #[test]
@@ -625,10 +580,7 @@ fn a_sweep_records_the_adapter_of_the_context_it_steps_on() {
     assert_eq!(recorded, Some(adapter));
 
     let mut cpu_spec = SweepSpec::new("sir");
-    cpu_spec.fixed = vec![
-        ("grid_width".to_owned(), "16".to_owned()),
-        ("grid_height".to_owned(), "16".to_owned()),
-    ];
+    cpu_spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
     cpu_spec.run.steps = 4;
     let cpu_dir = scratch.path().join("cpu");
     sweep(&entry("sir", None), Some(&ctx), &cpu_spec, &cpu_dir, Concurrency::Auto);

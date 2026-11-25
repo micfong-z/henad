@@ -1,6 +1,5 @@
 //! Checks that a sweep's results stay the same at any lane count, lane width or sampling cadence.
 
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use henad_compute::entry::{ModelEntry, ModelState};
@@ -14,28 +13,13 @@ use henad_core::export::csv::parse_records;
 use henad_core::export::state::{point_rows, write_edges, write_grid, write_points};
 use henad_core::model::SimState;
 
-use crate::exec::Concurrency;
 use crate::output::OutputWriter;
 use crate::output::runs_csv::RunsWriter;
 use crate::output::series_csv::SeriesWriter;
 use crate::tests::support::{
-    Collected, OutputTables, ScratchDir, entry, lanes, planned, run_plan, sweep, without_timing,
+    OutputTables, ScratchDir, entry, factorial, fixed, lane_count, lanes, planned, range, run_plan, sweep, values,
+    without_timing,
 };
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
-
-fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-    pairs
-        .iter()
-        .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-        .collect()
-}
-
-fn lane_count(count: usize) -> Concurrency {
-    Concurrency::Fixed(NonZeroUsize::new(count).expect("a test lane count is above 0"))
-}
 
 #[test]
 fn a_sweep_writes_the_same_files_at_any_concurrency() {
@@ -47,21 +31,17 @@ fn a_sweep_writes_the_same_files_at_any_concurrency() {
     spec.measure.stats_every = 4;
     spec.measure.series_every = 8;
     spec.seeds.root = 9;
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![
-            FactorSpec::param("infection_rate", values(&["0.2", "0.4", "0.6"])),
-            FactorSpec::param(
-                "recovery_rate",
-                LevelSpec::Range {
-                    min: 0.05,
-                    max: 0.1,
-                    step: Some(0.05),
-                },
-            ),
-        ],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![
+        FactorSpec::param("infection_rate", values(&["0.2", "0.4", "0.6"])),
+        FactorSpec::param(
+            "recovery_rate",
+            LevelSpec::Range {
+                min: 0.05,
+                max: 0.1,
+                step: Some(0.05),
+            },
+        ),
+    ])];
 
     let scratch = ScratchDir::new("any-concurrency");
     let tables: Vec<OutputTables> = [1, 3, 4]
@@ -110,7 +90,6 @@ fn a_sampled_design_sweep_writes_the_same_files_at_any_concurrency() {
         name: "wave".to_owned(),
         ..ActionSpec::new("seed_outbreak", 20)
     }];
-    let range = |min, max| LevelSpec::Range { min, max, step: None };
     spec.blocks = vec![BlockSpec {
         design: DesignKind::LatinHypercube { samples: 6 },
         factors: vec![
@@ -155,11 +134,7 @@ fn ants_results_do_not_depend_on_lane_width() {
     spec.run.replicates = 2;
     spec.measure.stats_every = 5;
     spec.measure.series_every = 10;
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::param("momentum", values(&["0.8", "0.4"]))],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::param("momentum", values(&["0.8", "0.4"]))])];
     let (plan, measure) = planned(&ants, None, &spec);
     let shared_plan = Arc::new(plan.clone());
 
@@ -173,7 +148,7 @@ fn ants_results_do_not_depend_on_lane_width() {
                 measure.reducers().names(),
             )
             .expect("a vector takes every write");
-            let series = SeriesWriter::new(Vec::new(), measure.columns()).expect("a vector takes every write");
+            let series = SeriesWriter::new(Vec::new(), measure.columns(), None).expect("a vector takes every write");
             let mut writer = OutputWriter::new(Arc::clone(&shared_plan), runs, series);
             run_plan(&ants, None, &plan, &measure, layout, &mut writer);
             assert_eq!(writer.counts().ok, 4, "{layout:?}");
@@ -196,11 +171,7 @@ fn common_random_numbers_share_seeds_across_configs() {
     spec.seeds.root = 21;
     // Configs 1 and 2 hold the same values, one from each block.
     spec.blocks = vec![
-        BlockSpec {
-            design: DesignKind::Factorial,
-            factors: vec![FactorSpec::param("infection_rate", values(&["0.2", "0.5"]))],
-            design_seed: None,
-        },
+        factorial(vec![FactorSpec::param("infection_rate", values(&["0.2", "0.5"]))]),
         BlockSpec {
             design: DesignKind::Zip,
             factors: vec![FactorSpec::param("infection_rate", values(&["0.5"]))],
@@ -237,15 +208,9 @@ fn common_random_numbers_share_seeds_across_configs() {
 /// cadence, and compares the rows at the ticks both cadences sample and the state exported at the end.
 mod sampling_cadence_does_not_change_the_trajectory {
     use super::{
-        Collected, MeasurePlan, ModelEntry, ModelState, SimState, SweepSpec, entry, fixed, lanes, planned, point_rows,
-        run_plan, write_edges, write_grid, write_points,
+        MeasurePlan, ModelEntry, ModelState, SimState, entry, lanes, point_rows, write_edges, write_grid, write_points,
     };
-
-    /// Final tick of every case. It is not a multiple of the coarser cadence, so the final tick is sampled in addition.
-    const STEPS: u64 = 25;
-
-    /// Cadences each case compares.
-    const CADENCES: [u64; 2] = [1, 10];
+    use crate::tests::support::{CADENCE_STEPS, CADENCES, assert_covers, cadence_rows};
 
     /// Registered CPU models, one case each.
     const CASES: [&str; 6] = ["sir", "game_of_life", "boids", "ants", "virus_network", "team_assembly"];
@@ -259,30 +224,8 @@ mod sampling_cadence_does_not_change_the_trajectory {
     }
 
     fn trajectory(model: &ModelEntry, fixed_values: &[(&str, &str)], stats_every: u64) -> Trajectory {
-        let mut spec = SweepSpec::new(model.id().to_owned());
-        spec.fixed = fixed(fixed_values);
-        spec.run.steps = STEPS;
-        spec.measure.stats_every = stats_every;
-        spec.measure.series_every = stats_every;
-        spec.seeds.root = 5;
-        let (plan, measure) = planned(model, None, &spec);
-        let mut collected = Collected::default();
-        run_plan(
-            model,
-            None,
-            &plan,
-            &measure,
-            lanes(1, rayon::current_num_threads()),
-            &mut collected,
-        );
-        let outcome = &collected.0[0];
-        assert_eq!(outcome.ticks, STEPS, "{:?}", outcome.note);
-        let rows = outcome
-            .series
-            .rows()
-            .filter(|&(tick, _)| tick == STEPS || tick % CADENCES[1] == 0)
-            .map(|(tick, values)| (tick, values.iter().map(|value| value.to_bits()).collect()))
-            .collect();
+        let layout = lanes(1, rayon::current_num_threads());
+        let (rows, plan, measure) = cadence_rows(model, None, layout, fixed_values, stats_every);
 
         let run = plan.run(0).expect("the plan has a run");
         let params = &plan.config(run.config_id).expect("the run's config").params;
@@ -329,21 +272,17 @@ mod sampling_cadence_does_not_change_the_trajectory {
     fn check(id: &str, fixed_values: &[(&str, &str)]) {
         let model = entry(id, None);
         let [every_tick, every_tenth] = CADENCES.map(|stats_every| trajectory(&model, fixed_values, stats_every));
-        assert_eq!(every_tick.rows.len(), 4, "ticks 0, 10, 20 and {STEPS}");
+        assert_eq!(every_tick.rows.len(), 4, "ticks 0, 10, 20 and {CADENCE_STEPS}");
         assert_eq!(every_tick, every_tenth, "{id}");
     }
 
     #[test]
     fn every_cpu_model_has_a_case() {
-        let mut registered: Vec<String> = henad_models::example_models()
-            .iter()
-            .filter(|model| model.metadata().backend == henad_core::metadata::Backend::Cpu)
-            .map(|model| model.id().to_owned())
-            .collect();
-        registered.sort_unstable();
-        let mut cases = CASES.map(str::to_owned).to_vec();
-        cases.sort_unstable();
-        assert_eq!(cases, registered);
+        assert_covers(
+            &CASES,
+            |model| model.metadata().backend == henad_core::metadata::Backend::Cpu,
+            "sampling_cadence_does_not_change_the_trajectory",
+        );
     }
 
     #[test]

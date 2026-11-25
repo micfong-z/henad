@@ -103,7 +103,7 @@ pub fn headless_test_device(request: &TestDeviceRequest) -> Option<GpuContext> {
             )
         }
         Err(error) => unavailable(&format!(
-            "adapter '{}' gave no device: {error}",
+            "adapter '{}' failed to create a device: {error}",
             adapter.get_info().name
         )),
     }

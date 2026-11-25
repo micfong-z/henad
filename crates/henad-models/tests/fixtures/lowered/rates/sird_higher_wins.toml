@@ -1,0 +1,296 @@
+# Round 2 SIRD with rates, lowered by hand under "the higher change wins", for contrast.
+# Sheet: One tick is [Tick length] days.
+# 1 Infected neighbours = count of the 8 cells around me whose Health is Infected
+# 2 Become Infected if Susceptible, at rate Infection rate per day for each of Infected neighbours
+# 3 Become Recovered if Infected, at rate Recovery rate per day
+# 4 otherwise become Dead if Infected, at rate Death rate per day
+# Two independent draws, line 3 first: P(Dead) = exp(-gamma * dt) * (1 - exp(-mu * dt)) per tick.
+# This is the biased lowering the rates design rejects.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r2_sird_higher_wins"
+name = "SIRD, higher change wins (round 2)"
+description = "Round 2 SIRD with two rate changes from Infected, lowered to library 1"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r2_sird_higher_wins"
+name = "SIRD, higher change wins (round 2)"
+description = "Round 2 SIRD with two rate changes from Infected, lowered to library 1"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "health"
+variants = [
+  { name = "Susceptible", label = "Susceptible", color = [0, 122, 245, 255] },
+  { name = "Infected", label = "Infected", color = [228, 55, 72, 255] },
+  { name = "Recovered", label = "Recovered", color = [128, 128, 128, 255] },
+  { name = "Dead", label = "Dead", color = [33, 33, 33, 255] },
+]
+
+[[lane]]
+id = "health"
+domain = "cells"
+type = "cat:health"
+storage = "u8"
+initial = { cat = "health.Susceptible" }
+
+# The sheet's time line, "One tick is [1] [days]". The lowering writes the number in the rates' unit, here days,
+# hides it from the Parameters panel and names the unit with `tick_unit`.
+[[param]]
+id = "tick_length"
+label = "One tick is (days)"
+kind = "f32"
+min = 0.01
+max = 30.0
+default = 1.0
+step = 0.01
+hidden = true
+tick_unit = "day"
+
+[[param]]
+id = "infection_rate"
+label = "Infection rate (per day)"
+kind = "f32"
+min = 0.0
+max = 5.0
+default = 0.3
+step = 0.01
+
+[[param]]
+id = "recovery_rate"
+label = "Recovery rate (per day)"
+kind = "f32"
+min = 0.0
+max = 5.0
+default = 0.05
+step = 0.01
+
+[[param]]
+id = "death_rate"
+label = "Death rate (per day)"
+kind = "f32"
+min = 0.0
+max = 5.0
+default = 0.05
+step = 0.01
+
+[[param]]
+id = "initial_infected"
+label = "Initial infected"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.01
+step = 0.001
+format = "percent"
+
+[[stat]]
+label = "Susceptible"
+from = "n31.Susceptible"
+color = [0, 122, 245, 255]
+
+[[stat]]
+label = "Infected"
+from = "n31.Infected"
+color = [228, 55, 72, 255]
+
+[[stat]]
+label = "Recovered"
+from = "n31.Recovered"
+color = [128, 128, 128, 255]
+
+[[stat]]
+label = "Dead"
+from = "n31.Dead"
+color = [33, 33, 33, 255]
+
+# Starts as: Infected with chance Initial infected, otherwise Susceptible.
+[[pass]]
+id = "start_cells"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "rand.chance"
+config.key = 3200000401
+in.p = { param = "initial_infected" }
+
+[[pass.node]]
+id = "n2"
+op = "logic.select"
+in.cond = "n1"
+in.if_true = { cat = "health.Infected" }
+in.if_false = { cat = "health.Susceptible" }
+
+[[pass.node]]
+id = "n3"
+op = "lane.set"
+config.lane = "health"
+in.value = "n2"
+
+[[pass]]
+id = "tick_cells"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "health"
+
+# Line 1: Infected neighbours = count of the 8 cells around me whose Health is Infected.
+[[pass.node]]
+id = "n11"
+op = "grid.count"
+config.lane = "health"
+config.neighborhood = "moore"
+config.include_center = false
+in.value = { cat = "health.Infected" }
+in.when = { bool = true }
+
+# Line 2: at rate r per day for each of n is 1 - exp(-r * dt * n) = 1 - q^n with q = exp(-r * dt).
+# q is a prelude value of parameters, so the host computes it and the powi table once per build.
+[[pass.node]]
+id = "n12"
+op = "math.mul"
+in.a = { param = "infection_rate" }
+in.b = { param = "tick_length" }
+
+[[pass.node]]
+id = "n13"
+op = "math.neg"
+in.a = "n12"
+
+[[pass.node]]
+id = "n14"
+op = "math.exp"
+in.a = "n13"
+
+[[pass.node]]
+id = "n15"
+op = "math.powi"
+config.max_exponent = 8
+in.base = "n14"
+in.exponent = "n11"
+
+[[pass.node]]
+id = "n16"
+op = "math.sub"
+in.a = { f32 = 1.0 }
+in.b = "n15"
+
+[[pass.node]]
+id = "n17"
+op = "rand.chance"
+config.key = 3200000402
+in.p = "n16"
+
+# Line 3: at rate r per day is 1 - exp(-r * dt), all prelude.
+[[pass.node]]
+id = "n18"
+op = "math.mul"
+in.a = { param = "recovery_rate" }
+in.b = { param = "tick_length" }
+
+[[pass.node]]
+id = "n19"
+op = "math.neg"
+in.a = "n18"
+
+[[pass.node]]
+id = "n20"
+op = "math.exp"
+in.a = "n19"
+
+[[pass.node]]
+id = "n21"
+op = "math.sub"
+in.a = { f32 = 1.0 }
+in.b = "n20"
+
+[[pass.node]]
+id = "n22"
+op = "rand.chance"
+config.key = 3200000403
+in.p = "n21"
+
+[[pass.node]]
+id = "n23"
+op = "math.mul"
+in.a = { param = "death_rate" }
+in.b = { param = "tick_length" }
+
+[[pass.node]]
+id = "n24"
+op = "math.neg"
+in.a = "n23"
+
+[[pass.node]]
+id = "n25"
+op = "math.exp"
+in.a = "n24"
+
+[[pass.node]]
+id = "n26"
+op = "math.sub"
+in.a = { f32 = 1.0 }
+in.b = "n25"
+
+[[pass.node]]
+id = "n27"
+op = "rand.chance"
+config.key = 3200000404
+in.p = "n26"
+
+[[pass.node]]
+id = "n29"
+op = "cat.transition"
+config.category = "health"
+config.rules = [
+  { id = "line_2", from = "Susceptible", to = "Infected", phase = 0 },
+  { id = "line_3", from = "Infected", to = "Recovered", phase = 0 },
+  { id = "line_4", from = "Infected", to = "Dead", phase = 0 },
+]
+in.state = "n10"
+in.rule.line_2.when = "n17"
+in.rule.line_3.when = "n22"
+in.rule.line_4.when = "n27"
+
+[[pass.node]]
+id = "n40"
+op = "lane.set"
+config.lane = "health"
+in.value = "n29.next"
+
+[[pass]]
+id = "measures_cells"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "health"
+
+[[pass.node]]
+id = "n31"
+op = "stat.count_by"
+config.category = "health"
+in.value = "n30"

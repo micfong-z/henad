@@ -4,7 +4,7 @@
 //! The Objective and axis lists offer every output the runs record, then the common outputs they do not record yet.
 //! Picking one of those adds it to the Outputs section, where the search's use of it locks its row.
 
-use egui::{Button, Checkbox, ComboBox, DragValue, Id, Label, Response, RichText, Ui, vec2};
+use egui::{Button, Checkbox, ComboBox, DragValue, Id, Label, Response, RichText, TextStyle, Ui, vec2};
 use henad_core::explore::plan::ModelSchema;
 use henad_core::explore::search::genetic::{GeneticSettings, MAX_POPULATION, MAX_TOURNAMENT_SIZE};
 use henad_core::explore::search::hill_climb::HillClimbSettings;
@@ -12,18 +12,22 @@ use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
 use henad_core::explore::search::{Aggregate, Goal};
 
 use crate::ui::plural;
+use crate::ui::results::labels::output_label;
 use crate::ui::results::plot::format_significant;
-use crate::ui::results::store::{ResultsStore, output_label};
+use crate::ui::results::store::ResultsStore;
 use crate::ui::sweep::CheckSummary;
 use crate::ui::sweep::builder::FormInput;
 use crate::ui::sweep::draft::{
-    AXIS_RANGE_MISSING, DraftAlgorithm, DraftIssue, DraftSite, GridAxis, INITIAL_SAMPLES_KEY, IssueKind,
-    MAX_DRAFT_RUNS, SearchDraft, SweepDraft, batch_estimate, generation_estimate,
+    AXIS_RANGE_MISSING, CROSSOVER_RATE_KEY, DraftAlgorithm, DraftIssue, DraftSite, ELITE_COUNT_KEY,
+    GENETIC_MUTATION_SCALE_KEY, GridAxis, HILL_CLIMB_MUTATION_SCALE_KEY, INITIAL_SAMPLES_KEY, IssueKind,
+    MAX_DRAFT_RUNS, MUTATION_RATE_KEY, PATIENCE_KEY, POPULATION_KEY, PSE_MUTATION_SCALE_KEY, REEVALUATE_FRACTION_KEY,
+    SearchDraft, SweepDraft, TOURNAMENT_SIZE_KEY, batch_estimate, generation_estimate, setting_label,
 };
 use crate::ui::sweep::layout::{
     FormLayout, FormRows, IssueCount, Note, NoteButton, SectionHeading, checkbox_indent, nested_section, note_block,
-    note_line_with_button, slot, text_width,
+    note_line_with_button, slot,
 };
+use crate::ui::text::text_width;
 
 /// Maximum number of candidates that the Batch size field accepts.
 const MAX_BATCH_SIZE: usize = 1 << 16;
@@ -39,9 +43,6 @@ pub const AXIS_FIELDS_STACK_BELOW: f32 = 340.0;
 
 /// Salt of the Method settings section's id.
 const METHOD_SETTINGS_ID: &str = "henad_sweep_method_settings";
-
-/// Key of the population setting. Its row sits beside the budget, outside Method settings.
-const POPULATION_KEY: &str = "genetic.population";
 
 /// Note under the axes while either axis still spans 0 to 0.
 pub const AXES_UNSET: &str =
@@ -103,20 +104,20 @@ pub fn algorithm_description(algorithm: DraftAlgorithm) -> &'static str {
     }
 }
 
-/// Returns the labels of the rows that Method settings holds for `algorithm`.
-fn method_setting_labels(algorithm: DraftAlgorithm) -> &'static [&'static str] {
+/// Returns the keys of the settings whose rows Method settings holds for `algorithm`, in the order of the rows.
+fn method_setting_keys(algorithm: DraftAlgorithm) -> &'static [&'static str] {
     match algorithm {
         DraftAlgorithm::Random => &[],
-        DraftAlgorithm::HillClimb => &["Step size", "Patience"],
+        DraftAlgorithm::HillClimb => &[HILL_CLIMB_MUTATION_SCALE_KEY, PATIENCE_KEY],
         DraftAlgorithm::Genetic => &[
-            "Elites",
-            "Tournament size",
-            "Crossover rate",
-            "Mutation rate",
-            "Step size",
-            "Re-evaluation rate",
+            ELITE_COUNT_KEY,
+            TOURNAMENT_SIZE_KEY,
+            CROSSOVER_RATE_KEY,
+            MUTATION_RATE_KEY,
+            GENETIC_MUTATION_SCALE_KEY,
+            REEVALUATE_FRACTION_KEY,
         ],
-        DraftAlgorithm::PatternSpace => &["Initial samples", "Step size"],
+        DraftAlgorithm::PatternSpace => &[INITIAL_SAMPLES_KEY, PSE_MUTATION_SCALE_KEY],
     }
 }
 
@@ -132,10 +133,14 @@ pub fn search_labels(ui: &Ui, algorithm: DraftAlgorithm) -> Vec<(&'static str, f
     }
     labels.extend([("Across replicates", 0.0), ("Evaluations", 0.0), ("Batch size", 0.0)]);
     if algorithm == DraftAlgorithm::Genetic {
-        labels.push(("Population", 0.0));
+        labels.push((setting_label(POPULATION_KEY), 0.0));
     }
     let indent = ui.spacing().indent;
-    labels.extend(method_setting_labels(algorithm).iter().map(|&label| (label, indent)));
+    labels.extend(
+        method_setting_keys(algorithm)
+            .iter()
+            .map(|&key| (setting_label(key), indent)),
+    );
     labels
 }
 
@@ -328,7 +333,7 @@ pub(super) fn search_section(ui: &mut Ui, rows: &mut FormRows, draft: &mut Sweep
         };
         axis_rows(ui, rows, search, &context, &mut added);
     }
-    budget_rows(ui, rows, search, replicates, summary);
+    evaluation_rows(ui, rows, search, replicates, summary);
     method_settings(ui, rows, search, summary);
     for column in added {
         draft.add_watched_output(&column);
@@ -546,7 +551,7 @@ fn range_rows(
         let PatternAxis { min, max, cells, .. } = pattern_axis;
         let label_width = ["Minimum", "Maximum", "Cells"]
             .into_iter()
-            .map(|text| text_width(ui, text))
+            .map(|text| text_width(ui, text, TextStyle::Body))
             .fold(0.0, f32::max);
         let field_size = vec2(AXIS_BOUND_WIDTH, ui.spacing().interact_size.y);
         let field = |ui: &mut Ui, text: &str, add_field: &mut dyn FnMut(&mut Ui) -> Response| {
@@ -617,7 +622,13 @@ fn bound_drag_value(value: &mut f64, speed: f64) -> DragValue<'_> {
 }
 
 /// Draws the Evaluations and Batch size rows, and Population for a genetic algorithm, each with its feedback.
-fn budget_rows(ui: &mut Ui, rows: &mut FormRows, search: &mut SearchDraft, replicates: u64, summary: &CheckSummary) {
+fn evaluation_rows(
+    ui: &mut Ui,
+    rows: &mut FormRows,
+    search: &mut SearchDraft,
+    replicates: u64,
+    summary: &CheckSummary,
+) {
     let layout = rows.layout;
     let feedback = Note::Weak(evaluations_feedback(search.max_evaluations, replicates));
     feedback_row(
@@ -652,7 +663,7 @@ fn budget_rows(ui: &mut Ui, rows: &mut FormRows, search: &mut SearchDraft, repli
     let population = feedback_row(
         ui,
         &layout,
-        "Population",
+        setting_label(POPULATION_KEY),
         "Configurations per generation",
         &feedback,
         DragValue::new(&mut search.genetic.population)
@@ -721,20 +732,20 @@ fn feedback_row(
     response.on_hover_text(tooltip).labelled_by(label.id)
 }
 
-/// Draws the row of the method setting `key`, with its issue in the feedback slot, and reveals the row when it is the
-/// row to reveal.
+/// Draws the row of the method setting `key`, labelled by [`setting_label`] and with its issue in the feedback slot,
+/// and reveals the row when it is the row to reveal.
 fn setting_row(
     ui: &mut Ui,
     rows: &mut FormRows,
     summary: &CheckSummary,
     key: &'static str,
-    (label, tooltip): (&str, &str),
+    tooltip: &str,
     widget: impl egui::Widget,
 ) {
     let site = DraftSite::MethodSetting(key);
     let feedback = Note::issue_or(summary.issues_at(site), Note::Empty);
     let layout = rows.layout;
-    let response = feedback_row(ui, &layout, label, tooltip, &feedback, widget);
+    let response = feedback_row(ui, &layout, setting_label(key), tooltip, &feedback, widget);
     rows.reveal_row(ui, site, &response, None);
 }
 
@@ -752,19 +763,16 @@ fn hill_climb_rows(ui: &mut Ui, rows: &mut FormRows, settings: &mut HillClimbSet
         ui,
         rows,
         summary,
-        "hill_climb.mutation_scale",
-        ("Step size", STEP_SIZE_TOOLTIP),
+        HILL_CLIMB_MUTATION_SCALE_KEY,
+        STEP_SIZE_TOOLTIP,
         share_drag_value(&mut settings.mutation_scale),
     );
     setting_row(
         ui,
         rows,
         summary,
-        "hill_climb.patience",
-        (
-            "Patience",
-            "Batches without improvement before restarting from a random configuration",
-        ),
+        PATIENCE_KEY,
+        "Batches without improvement before restarting from a random configuration",
         DragValue::new(&mut settings.patience)
             .range(1..=u64::from(u32::MAX))
             .clamp_existing_to_range(false),
@@ -780,11 +788,8 @@ fn genetic_rows(ui: &mut Ui, rows: &mut FormRows, settings: &mut GeneticSettings
         ui,
         rows,
         summary,
-        "genetic.elite_count",
-        (
-            "Elites",
-            "Best configurations carried unchanged into the next generation",
-        ),
+        ELITE_COUNT_KEY,
+        "Best configurations carried unchanged into the next generation",
         DragValue::new(&mut settings.elite_count)
             .range(0..=MAX_POPULATION)
             .clamp_existing_to_range(false),
@@ -793,8 +798,8 @@ fn genetic_rows(ui: &mut Ui, rows: &mut FormRows, settings: &mut GeneticSettings
         ui,
         rows,
         summary,
-        "genetic.tournament_size",
-        ("Tournament size", "Configurations compared to select each parent"),
+        TOURNAMENT_SIZE_KEY,
+        "Configurations compared to select each parent",
         DragValue::new(&mut settings.tournament_size)
             .range(1..=MAX_TOURNAMENT_SIZE)
             .clamp_existing_to_range(false),
@@ -803,38 +808,32 @@ fn genetic_rows(ui: &mut Ui, rows: &mut FormRows, settings: &mut GeneticSettings
         ui,
         rows,
         summary,
-        "genetic.crossover_rate",
-        (
-            "Crossover rate",
-            "Probability that a child combines parameters from two parents",
-        ),
+        CROSSOVER_RATE_KEY,
+        "Probability that a child combines parameters from two parents",
         share_drag_value(&mut settings.crossover_rate),
     );
     setting_row(
         ui,
         rows,
         summary,
-        "genetic.mutation_rate",
-        ("Mutation rate", "Probability of mutating each parameter of a child"),
+        MUTATION_RATE_KEY,
+        "Probability of mutating each parameter of a child",
         share_drag_value(&mut settings.mutation_rate),
     );
     setting_row(
         ui,
         rows,
         summary,
-        "genetic.mutation_scale",
-        ("Step size", STEP_SIZE_TOOLTIP),
+        GENETIC_MUTATION_SCALE_KEY,
+        STEP_SIZE_TOOLTIP,
         share_drag_value(&mut settings.mutation_scale),
     );
     setting_row(
         ui,
         rows,
         summary,
-        "genetic.reevaluate_fraction",
-        (
-            "Re-evaluation rate",
-            "Fraction of each generation run again with fresh replicates, best first",
-        ),
+        REEVALUATE_FRACTION_KEY,
+        "Fraction of each generation run again with fresh replicates, best first",
         share_drag_value(&mut settings.reevaluate_fraction),
     );
 }
@@ -855,7 +854,7 @@ fn pattern_space_rows(
     let initial_samples = feedback_row(
         ui,
         &layout,
-        "Initial samples",
+        setting_label(INITIAL_SAMPLES_KEY),
         "Random configurations to run before breeding from the grid",
         &feedback,
         DragValue::new(&mut settings.initial_samples)
@@ -867,8 +866,8 @@ fn pattern_space_rows(
         ui,
         rows,
         summary,
-        "pse.mutation_scale",
-        ("Step size", STEP_SIZE_TOOLTIP),
+        PSE_MUTATION_SCALE_KEY,
+        STEP_SIZE_TOOLTIP,
         share_drag_value(&mut settings.mutation_scale),
     );
 }
@@ -957,10 +956,10 @@ fn aggregate_row(ui: &mut Ui, layout: &FormLayout, id: Id, aggregate: &mut Aggre
 
 #[cfg(test)]
 mod tests {
-    use henad_compute::entry::ModelEntry;
+
     use henad_core::explore::search::genetic::GeneticSettings;
     use henad_core::explore::search::pse::{PatternAxis, PatternSpaceSettings};
-    use henad_core::params::ParamValue;
+
     use henad_explore::probe::ProbeReport;
     use henad_models::example_models;
 
@@ -968,19 +967,17 @@ mod tests {
         AXES_UNSET, OutputChoices, axes_note, batches_feedback, evaluations_feedback, initial_samples_feedback,
         method_settings_summary, parse_bound, population_feedback,
     };
+    use crate::state::default_values;
+    use crate::tests::support::sir;
     use crate::ui::sweep::draft::{
-        AXIS_RANGE_MISSING, DraftAlgorithm, DraftIssue, DraftMode, DraftSite, GridAxis, IssueKind, SweepDraft,
+        AXIS_RANGE_MISSING, DraftAlgorithm, DraftIssue, DraftSite, ExploreMode, GridAxis, IssueKind, SweepDraft,
     };
     use crate::ui::sweep::layout::Note;
-
-    fn sir() -> ModelEntry {
-        example_models().get("sir").cloned().expect("SIR is registered")
-    }
 
     fn search_draft(algorithm: DraftAlgorithm) -> SweepDraft {
         let entry = sir();
         let mut draft = SweepDraft::new(&entry.schema());
-        draft.mode = DraftMode::Search;
+        draft.mode = ExploreMode::Search;
         draft.search.algorithm = algorithm;
         draft
     }
@@ -1091,12 +1088,8 @@ mod tests {
     fn the_output_lists_offer_the_parts_of_a_vector_stat() {
         let entry = example_models().get("boids").cloned().expect("boids is registered");
         let schema = entry.schema();
-        let values: Vec<ParamValue> = entry
-            .param_descriptors()
-            .iter()
-            .map(|descriptor| descriptor.kind.default_value())
-            .collect();
-        let report = ProbeReport::build(&entry, None, &values, None).unwrap_or_else(|error| panic!("{error}"));
+        let report =
+            ProbeReport::build(&entry, None, &default_values(&entry), None).unwrap_or_else(|error| panic!("{error}"));
         let mut draft = SweepDraft::new(&schema);
         draft.set_stat_columns(&report.columns);
         let choices = OutputChoices::of(&draft, &schema);

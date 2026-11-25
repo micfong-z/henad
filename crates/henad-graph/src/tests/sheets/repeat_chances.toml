@@ -1,0 +1,96 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "repeat_chances"
+name = "Repeat chances"
+purpose = "Two Becomes inside a Repeat by chance each time round: A with chance 0.1, and otherwise B with chance 0.5."
+next_line = 4
+
+[world]
+made_of = "agents"
+width = 1000
+height = 1000
+edges = "wrap"
+
+[[agents]]
+id = "walker"
+name = "Walker"
+count = 200000
+max_count = 200000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 11
+
+[[agents.property]]
+id = "status"
+name = "Status"
+type = "states"
+states = [
+  { id = "s", name = "S", color = "#E8E8F0" },
+  { id = "a", name = "A", color = "#3DD58C" },
+  { id = "b", name = "B", color = "#E43748" },
+]
+
+[agents.property.starts_as]
+rule = "value"
+value = { state = "s" }
+
+[[measure]]
+id = "in_a"
+name = "In A"
+color = "#3DD58C"
+rule = "count_in_state"
+over = "walker"
+property = "status"
+state = "a"
+
+[[measure]]
+id = "in_b"
+name = "In B"
+color = "#E43748"
+rule = "count_in_state"
+over = "walker"
+property = "status"
+state = "b"
+
+[[card]]
+id = "walker_tick"
+every = "walker"
+runs = "each_tick"
+lines = ["l1"]
+
+[card.line.l1]
+kind = "repeat"
+times = 4
+lines = ["l2", "l3"]
+
+[card.line.l2]
+kind = "become"
+key = 101
+property = "status"
+new_state = "a"
+start_state = "s"
+
+[card.line.l2.condition]
+kind = "chance"
+chance = 0.1
+
+[card.line.l3]
+kind = "become"
+key = 102
+property = "status"
+new_state = "b"
+start_state = "s"
+
+[card.line.l3.condition]
+kind = "chance"
+chance = 0.5

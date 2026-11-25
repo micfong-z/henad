@@ -1,0 +1,720 @@
+//! Display names of the node kinds: the name the node graph editor shows for each kind of henad-graph's catalogue,
+//! with its category and a one-line description.
+//!
+//! A *display name* reuses the card's words where a card line lowers to exactly that kind (Become, With chance, Count
+//! around me), reads "my" and "their" as the card does, and names the result in plain words elsewhere. The raw kind,
+//! such as `cmp.eq`, stays beside it on every node. The table is presentation only, outside every code identity.
+
+/// Display name, category and description of one node kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DisplayName {
+    /// Kind, such as `cmp.eq`.
+    pub kind: &'static str,
+    /// Name the editor shows, such as "Is".
+    pub name: &'static str,
+    /// Category, such as "Decide".
+    pub category: &'static str,
+    /// One-line description.
+    pub description: &'static str,
+}
+
+/// Display name of every kind of the catalogue.
+pub const DISPLAY_NAMES: [DisplayName; 114] = [
+    DisplayName {
+        kind: "lane.get",
+        name: "My property",
+        category: "Read",
+        description: "One of my properties, as it was at the start of the pass.",
+    },
+    DisplayName {
+        kind: "field.get",
+        name: "Ground at",
+        category: "Read",
+        description: "Ground layer at a cell, as it was at the start of the tick.",
+    },
+    DisplayName {
+        kind: "ctx.tick",
+        name: "Tick number",
+        category: "Read",
+        description: "Number of ticks run before the current tick.",
+    },
+    DisplayName {
+        kind: "ctx.index",
+        name: "My index",
+        category: "Read",
+        description: "My position in the list of cells or agents.",
+    },
+    DisplayName {
+        kind: "ctx.cell_xy",
+        name: "My column and row",
+        category: "Read",
+        description: "Column and row of the cell this line runs for.",
+    },
+    DisplayName {
+        kind: "ctx.world",
+        name: "World size",
+        category: "Read",
+        description: "Width and height of the world.",
+    },
+    DisplayName {
+        kind: "ctx.grid",
+        name: "Grid size",
+        category: "Read",
+        description: "Width and height of the grid in cells.",
+    },
+    DisplayName {
+        kind: "grid.count",
+        name: "Count around me",
+        category: "Look around",
+        description: "Number of the 8 or 4 cells around me whose property has a given value.",
+    },
+    DisplayName {
+        kind: "grid.fold",
+        name: "Look at cells around me",
+        category: "Look around",
+        description: "Runs the nodes inside once for each cell around me and gathers their results.",
+    },
+    DisplayName {
+        kind: "agent.radius_fold",
+        name: "Look at agents within",
+        category: "Look around",
+        description: "Runs the nodes inside once for each agent within a distance and gathers their results.",
+    },
+    DisplayName {
+        kind: "region.put",
+        name: "Add to summary",
+        category: "Look around",
+        description: "Adds one value to a summary of the look or repeat around it: total, count, smallest, \
+                      largest, any, all or last.",
+    },
+    DisplayName {
+        kind: "lane.get_at",
+        name: "Their property",
+        category: "Look around",
+        description: "Property of the cell or agent being looked at, as it was at the start of the pass.",
+    },
+    DisplayName {
+        kind: "grid.life_like",
+        name: "Life-like rule",
+        category: "Look around",
+        description: "Alive or dead from a neighbor count, by birth and survival lists such as B3/S23.",
+    },
+    DisplayName {
+        kind: "rand.chance",
+        name: "With chance",
+        category: "Chance",
+        description: "Holds with a given chance, drawn fresh for each cell or agent.",
+    },
+    DisplayName {
+        kind: "rand.float",
+        name: "Random number",
+        category: "Chance",
+        description: "Random number from 0 up to a maximum.",
+    },
+    DisplayName {
+        kind: "rand.bits",
+        name: "Random bits",
+        category: "Chance",
+        description: "32 random bits, for the nodes that work on bits.",
+    },
+    DisplayName {
+        kind: "rand.below",
+        name: "Random below threshold",
+        category: "Chance",
+        description: "Holds when 32 random bits are less than a threshold.",
+    },
+    DisplayName {
+        kind: "rand.choice3",
+        name: "Random step",
+        category: "Chance",
+        description: "−1, 0 or 1 at random.",
+    },
+    DisplayName {
+        kind: "rng.reservoir",
+        name: "Keep this candidate",
+        category: "Chance",
+        description: "Holds with chance 1 in n on given bits, to pick one of n candidates evenly.",
+    },
+    DisplayName {
+        kind: "cmp.eq",
+        name: "Is",
+        category: "Decide",
+        description: "Holds when two values are equal.",
+    },
+    DisplayName {
+        kind: "cmp.ne",
+        name: "Is not",
+        category: "Decide",
+        description: "Holds when two values differ.",
+    },
+    DisplayName {
+        kind: "cmp.lt",
+        name: "Is less than",
+        category: "Decide",
+        description: "Holds when the first value is less than the second.",
+    },
+    DisplayName {
+        kind: "cmp.le",
+        name: "Is at most",
+        category: "Decide",
+        description: "Holds when the first value is less than or equal to the second.",
+    },
+    DisplayName {
+        kind: "cmp.gt",
+        name: "Is more than",
+        category: "Decide",
+        description: "Holds when the first value is greater than the second.",
+    },
+    DisplayName {
+        kind: "cmp.ge",
+        name: "Is at least",
+        category: "Decide",
+        description: "Holds when the first value is greater than or equal to the second.",
+    },
+    DisplayName {
+        kind: "logic.and",
+        name: "Both",
+        category: "Decide",
+        description: "Holds when both conditions hold.",
+    },
+    DisplayName {
+        kind: "logic.or",
+        name: "Either",
+        category: "Decide",
+        description: "Holds when one condition or both hold.",
+    },
+    DisplayName {
+        kind: "logic.xor",
+        name: "Exactly one of",
+        category: "Decide",
+        description: "Holds when one condition holds and the other does not.",
+    },
+    DisplayName {
+        kind: "logic.not",
+        name: "Not",
+        category: "Decide",
+        description: "Holds when the condition does not.",
+    },
+    DisplayName {
+        kind: "logic.select",
+        name: "If, otherwise",
+        category: "Decide",
+        description: "One value when a condition holds, another otherwise.",
+    },
+    DisplayName {
+        kind: "logic.pick",
+        name: "Pick from list",
+        category: "Decide",
+        description: "Entry of a fixed list at a position.",
+    },
+    DisplayName {
+        kind: "cat.switch",
+        name: "Depending on state",
+        category: "Decide",
+        description: "One value for each state of a States property.",
+    },
+    DisplayName {
+        kind: "math.add",
+        name: "Add",
+        category: "Calculate",
+        description: "Sum of two values.",
+    },
+    DisplayName {
+        kind: "math.sub",
+        name: "Subtract",
+        category: "Calculate",
+        description: "First value minus the second.",
+    },
+    DisplayName {
+        kind: "math.mul",
+        name: "Multiply",
+        category: "Calculate",
+        description: "Product of two values.",
+    },
+    DisplayName {
+        kind: "math.div",
+        name: "Divide",
+        category: "Calculate",
+        description: "First value divided by the second.",
+    },
+    DisplayName {
+        kind: "math.rem",
+        name: "Remainder",
+        category: "Calculate",
+        description: "Remainder after dividing the first value by the second.",
+    },
+    DisplayName {
+        kind: "math.min",
+        name: "Smaller of",
+        category: "Calculate",
+        description: "Smaller of two values.",
+    },
+    DisplayName {
+        kind: "math.max",
+        name: "Larger of",
+        category: "Calculate",
+        description: "Larger of two values.",
+    },
+    DisplayName {
+        kind: "math.clamp",
+        name: "Keep between",
+        category: "Calculate",
+        description: "Value kept between a lowest and a highest value.",
+    },
+    DisplayName {
+        kind: "math.abs",
+        name: "Absolute value",
+        category: "Calculate",
+        description: "Value without its sign.",
+    },
+    DisplayName {
+        kind: "math.neg",
+        name: "Negative",
+        category: "Calculate",
+        description: "Value with its sign flipped.",
+    },
+    DisplayName {
+        kind: "math.floor",
+        name: "Round down",
+        category: "Calculate",
+        description: "Value rounded down to an integer.",
+    },
+    DisplayName {
+        kind: "math.ceil",
+        name: "Round up",
+        category: "Calculate",
+        description: "Value rounded up to an integer.",
+    },
+    DisplayName {
+        kind: "math.round",
+        name: "Round",
+        category: "Calculate",
+        description: "Value rounded to the nearest integer, ties to even.",
+    },
+    DisplayName {
+        kind: "math.trunc",
+        name: "Round toward zero",
+        category: "Calculate",
+        description: "Value with its fraction dropped.",
+    },
+    DisplayName {
+        kind: "math.sqrt",
+        name: "Square root",
+        category: "Calculate",
+        description: "Square root of a value.",
+    },
+    DisplayName {
+        kind: "math.recip",
+        name: "Reciprocal",
+        category: "Calculate",
+        description: "1 divided by a value.",
+    },
+    DisplayName {
+        kind: "math.pow",
+        name: "Power",
+        category: "Calculate",
+        description: "Base raised to a power.",
+    },
+    DisplayName {
+        kind: "math.powi",
+        name: "Integer power",
+        category: "Calculate",
+        description: "Base raised to an integer power, up to a set maximum.",
+    },
+    DisplayName {
+        kind: "math.exp",
+        name: "Exponential",
+        category: "Calculate",
+        description: "e raised to a value.",
+    },
+    DisplayName {
+        kind: "math.log",
+        name: "Natural log",
+        category: "Calculate",
+        description: "Logarithm to base e.",
+    },
+    DisplayName {
+        kind: "math.log2",
+        name: "Log base 2",
+        category: "Calculate",
+        description: "Logarithm to base 2.",
+    },
+    DisplayName {
+        kind: "math.log10",
+        name: "Log base 10",
+        category: "Calculate",
+        description: "Logarithm to base 10.",
+    },
+    DisplayName {
+        kind: "math.sin",
+        name: "Sine",
+        category: "Calculate",
+        description: "Sine of an angle in radians.",
+    },
+    DisplayName {
+        kind: "math.cos",
+        name: "Cosine",
+        category: "Calculate",
+        description: "Cosine of an angle in radians.",
+    },
+    DisplayName {
+        kind: "math.midpoint",
+        name: "Midpoint",
+        category: "Calculate",
+        description: "Halfway point between two constants or parameters.",
+    },
+    DisplayName {
+        kind: "math.expr",
+        name: "Formula",
+        category: "Calculate",
+        description: "Outputs computed from inputs by a typed formula.",
+    },
+    DisplayName {
+        kind: "vec.make",
+        name: "Arrow from x and y",
+        category: "Arrows",
+        description: "Arrow made of two parts.",
+    },
+    DisplayName {
+        kind: "vec.split",
+        name: "x and y of arrow",
+        category: "Arrows",
+        description: "Two parts of an arrow.",
+    },
+    DisplayName {
+        kind: "vec.scale",
+        name: "Scale arrow",
+        category: "Arrows",
+        description: "Arrow multiplied by a number.",
+    },
+    DisplayName {
+        kind: "vec.length",
+        name: "Length of arrow",
+        category: "Arrows",
+        description: "Length of an arrow.",
+    },
+    DisplayName {
+        kind: "vec.dot",
+        name: "Dot product",
+        category: "Arrows",
+        description: "Sum of the products of two arrows' parts.",
+    },
+    DisplayName {
+        kind: "vec.from_angle",
+        name: "Arrow from angle",
+        category: "Arrows",
+        description: "Arrow of a given length pointing at an angle in radians.",
+    },
+    DisplayName {
+        kind: "space.wrap",
+        name: "Wrap around edges",
+        category: "Place",
+        description: "Position brought back inside a world whose edges wrap.",
+    },
+    DisplayName {
+        kind: "space.delta",
+        name: "Offset to",
+        category: "Place",
+        description: "Shortest offset from one position to another across wrapping edges.",
+    },
+    DisplayName {
+        kind: "space.dist_sq",
+        name: "Squared distance",
+        category: "Place",
+        description: "Squared shortest distance between two positions across wrapping edges.",
+    },
+    DisplayName {
+        kind: "space.cell_index",
+        name: "Cell at column and row",
+        category: "Place",
+        description: "Cell at a column and row, and whether it is on the grid.",
+    },
+    DisplayName {
+        kind: "space.cell_of",
+        name: "Cell under position",
+        category: "Place",
+        description: "Cell under a position in open space.",
+    },
+    DisplayName {
+        kind: "space.cell_xy",
+        name: "Column and row of cell",
+        category: "Place",
+        description: "Column and row of a cell.",
+    },
+    DisplayName {
+        kind: "space.offset",
+        name: "Cell at offset",
+        category: "Place",
+        description: "Cell a step away from a column and row, and whether it is on the grid.",
+    },
+    DisplayName {
+        kind: "space.heading_octant",
+        name: "Heading as 8 directions",
+        category: "Place",
+        description: "Which of 8 directions an arrow points in, 0 to 7.",
+    },
+    DisplayName {
+        kind: "space.step_code",
+        name: "Step as number",
+        category: "Place",
+        description: "One of the 9 steps to a neighboring cell, numbered 0 to 8.",
+    },
+    DisplayName {
+        kind: "space.step_offset",
+        name: "Step from number",
+        category: "Place",
+        description: "Step to a neighboring cell from its number 0 to 8.",
+    },
+    DisplayName {
+        kind: "lane.set",
+        name: "Set my property",
+        category: "Change",
+        description: "New value of one of my properties, applied at the end of the pass.",
+    },
+    DisplayName {
+        kind: "cat.transition",
+        name: "Become",
+        category: "Change",
+        description: "New state from rules tried in order. The first rule that applies wins.",
+    },
+    DisplayName {
+        kind: "field.set",
+        name: "Set ground here",
+        category: "Change",
+        description: "New value of a ground layer at my own cell, applied at the end of the pass.",
+    },
+    DisplayName {
+        kind: "field.deposit",
+        name: "Leave on ground",
+        category: "Change",
+        description: "Amount left on a ground cell, merged with everyone else's amounts after the tick.",
+    },
+    DisplayName {
+        kind: "counter.add",
+        name: "Record event",
+        category: "Change",
+        description: "Adds to a count that runs for the whole run.",
+    },
+    DisplayName {
+        kind: "region.repeat",
+        name: "Repeat",
+        category: "Repeat",
+        description: "Runs the nodes inside a number of times within one tick.",
+    },
+    DisplayName {
+        kind: "stat.count_by",
+        name: "Number in each state",
+        category: "Measures",
+        description: "Number of cells or agents in each state.",
+    },
+    DisplayName {
+        kind: "stat.count_where",
+        name: "Number where",
+        category: "Measures",
+        description: "Number of cells or agents for which a condition holds.",
+    },
+    DisplayName {
+        kind: "stat.sum",
+        name: "Total",
+        category: "Measures",
+        description: "Sum of a value over every cell or agent.",
+    },
+    DisplayName {
+        kind: "stat.mean",
+        name: "Average",
+        category: "Measures",
+        description: "Mean of a value over every cell or agent.",
+    },
+    DisplayName {
+        kind: "stat.counter",
+        name: "Event total",
+        category: "Measures",
+        description: "Total of an event count so far.",
+    },
+    DisplayName {
+        kind: "view.color",
+        name: "Color from palette",
+        category: "Colors",
+        description: "Draws me in a palette entry.",
+    },
+    DisplayName {
+        kind: "view.ramp",
+        name: "Shade by number",
+        category: "Colors",
+        description: "Palette entry a number falls on between a low and a high value.",
+    },
+    DisplayName {
+        kind: "conv.to_f32",
+        name: "As number",
+        category: "Convert",
+        description: "Value as a number.",
+    },
+    DisplayName {
+        kind: "conv.to_f64",
+        name: "As double-precision number",
+        category: "Convert",
+        description: "Value as a 64-bit number, in an init pass or a measure only.",
+    },
+    DisplayName {
+        kind: "conv.to_u32",
+        name: "As non-negative integer",
+        category: "Convert",
+        description: "Value as an unsigned integer, the fraction dropped.",
+    },
+    DisplayName {
+        kind: "conv.to_i32",
+        name: "As signed integer",
+        category: "Convert",
+        description: "Value as a signed integer, the fraction dropped.",
+    },
+    DisplayName {
+        kind: "conv.u32_to_cat",
+        name: "State by number",
+        category: "Convert",
+        description: "State at a position in a States property's list.",
+    },
+    DisplayName {
+        kind: "conv.cat_to_u32",
+        name: "Number of state",
+        category: "Convert",
+        description: "Position of a state in its States property's list, from 0.",
+    },
+    DisplayName {
+        kind: "conv.to_vec2f",
+        name: "As arrow",
+        category: "Convert",
+        description: "Pair of values as an arrow of numbers.",
+    },
+    DisplayName {
+        kind: "conv.to_vec2i",
+        name: "As integer step",
+        category: "Convert",
+        description: "Pair of values as a pair of signed integers.",
+    },
+    DisplayName {
+        kind: "conv.to_vec2u",
+        name: "As column and row",
+        category: "Convert",
+        description: "Pair of values as a pair of unsigned integers.",
+    },
+    DisplayName {
+        kind: "fn.input",
+        name: "Function input",
+        category: "Functions",
+        description: "Value a function receives from where it is used.",
+    },
+    DisplayName {
+        kind: "fn.output",
+        name: "Function output",
+        category: "Functions",
+        description: "Value a function returns to where it is used.",
+    },
+    DisplayName {
+        kind: "fn.call",
+        name: "Use function",
+        category: "Functions",
+        description: "Runs a function's nodes here, with its own random draws.",
+    },
+    DisplayName {
+        kind: "stream.bits",
+        name: "Next bits in sequence",
+        category: "Exact replay",
+        description: "Next 32 bits of one sequence shared by every cell in order.",
+    },
+    DisplayName {
+        kind: "stream.float",
+        name: "Next number in sequence",
+        category: "Exact replay",
+        description: "Next random number of one sequence shared by every cell in order.",
+    },
+    DisplayName {
+        kind: "ctx.press_seed",
+        name: "Button press seed",
+        category: "Exact replay",
+        description: "Seed word that changes on every button press.",
+    },
+    DisplayName {
+        kind: "rng.threshold",
+        name: "Chance as threshold",
+        category: "Exact replay",
+        description: "Chance converted to a 32-bit threshold when the model is built.",
+    },
+    DisplayName {
+        kind: "rng.hash",
+        name: "Hash",
+        category: "Exact replay",
+        description: "32 bits scrambled by a fixed hash.",
+    },
+    DisplayName {
+        kind: "rng.to_float",
+        name: "Bits to number",
+        category: "Exact replay",
+        description: "Number from 0 up to a maximum made from given bits.",
+    },
+    DisplayName {
+        kind: "rng.below",
+        name: "Bits below threshold",
+        category: "Exact replay",
+        description: "Holds when given bits are less than a threshold.",
+    },
+    DisplayName {
+        kind: "rng.choice3",
+        name: "Step from bits",
+        category: "Exact replay",
+        description: "−1, 0 or 1 made from given bits.",
+    },
+    DisplayName {
+        kind: "rng.lane_seed",
+        name: "Seed word for property",
+        category: "Exact replay",
+        description: "Seed word a stock model starts a per-cell random state from.",
+    },
+    DisplayName {
+        kind: "bits.and",
+        name: "Bitwise and",
+        category: "Bits",
+        description: "Bits set in both values.",
+    },
+    DisplayName {
+        kind: "bits.or",
+        name: "Bitwise or",
+        category: "Bits",
+        description: "Bits set in either value.",
+    },
+    DisplayName {
+        kind: "bits.xor",
+        name: "Bitwise xor",
+        category: "Bits",
+        description: "Bits set in exactly one value.",
+    },
+    DisplayName {
+        kind: "bits.not",
+        name: "Bitwise not",
+        category: "Bits",
+        description: "Every bit flipped.",
+    },
+    DisplayName {
+        kind: "bits.shl",
+        name: "Shift left",
+        category: "Bits",
+        description: "Bits moved left, zeros shifted in.",
+    },
+    DisplayName {
+        kind: "bits.shr",
+        name: "Shift right",
+        category: "Bits",
+        description: "Bits moved right.",
+    },
+];
+
+/// Returns the display name of the kind `kind`, `None` for a kind the table does not hold.
+pub fn display_name(kind: &str) -> Option<&'static DisplayName> {
+    DISPLAY_NAMES.iter().find(|entry| entry.kind == kind)
+}
+
+/// Returns the name a node of the kind `kind` shows: its display name, else the kind itself.
+///
+/// Every kind of the catalogue has a display name, so only a kind the catalogue lacks shows itself.
+pub fn kind_name(kind: &str) -> String {
+    display_name(kind).map_or_else(|| kind.to_owned(), |display| display.name.to_owned())
+}

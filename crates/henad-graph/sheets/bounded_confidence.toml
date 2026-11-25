@@ -1,0 +1,162 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "bounded_confidence"
+name = "Bounded confidence"
+purpose = "Opinion dynamics. Look for several opinion groups that persist with a small Confidence, and opinions that converge with a larger Confidence."
+next_line = 4
+
+[world]
+made_of = "agents"
+width = 1000
+height = 1000
+edges = "wrap"
+
+[[agents]]
+id = "person"
+name = "Person"
+count = 20000
+max_count = 1000000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 1632622822
+
+[[agents.property]]
+id = "heading"
+name = "Heading"
+type = "heading"
+
+[[agents.property]]
+id = "opinion"
+name = "Opinion"
+type = "number"
+
+[agents.property.starts_as]
+rule = "value"
+key = 515962334
+
+[agents.property.starts_as.value]
+kind = "random_number"
+low = 0
+high = 1
+
+[[parameter]]
+id = "confidence"
+name = "Confidence"
+type = "number"
+min = 0
+max = 1
+default = 0.2
+step = 0.01
+means = "How far another opinion can be from mine for me to listen (epsilon)"
+
+[[parameter]]
+id = "hearing_range"
+name = "Hearing range"
+type = "number"
+min = 1
+max = 100
+default = 20
+step = 1
+means = "How far away a person can be heard"
+
+[[parameter]]
+id = "persuasion"
+name = "Persuasion"
+type = "number"
+min = 0
+max = 1
+default = 1
+step = 0.01
+means = "Share of the gap to the like-minded average closed each tick. 1 is Hegselmann and Krause's rule."
+
+[[parameter]]
+id = "wander"
+name = "Wander"
+type = "number"
+min = 0
+max = 20
+default = 2
+step = 0.1
+means = "Length of each tick's random step"
+
+[[measure]]
+id = "average_opinion"
+name = "Average opinion"
+color = "#007AF5"
+rule = "average"
+over = "person"
+value = { my = "opinion" }
+
+[[measure]]
+id = "spread_of_opinion"
+name = "Spread of opinion"
+color = "#F08228"
+rule = "spread"
+over = "person"
+value = { my = "opinion" }
+
+[color.person]
+rule = "shaded"
+property = "opinion"
+
+[[button]]
+id = "mix_opinions"
+name = "Mix opinions"
+
+[[button.does]]
+rule = "start_again"
+properties = ["opinion"]
+
+# Each tick, every person
+[[card]]
+id = "person_tick"
+every = "person"
+runs = "each_tick"
+lines = ["l1", "l2", "l3"]
+
+# Like-minded = look at people within Hearing range including me, only those whose Opinion is within Confidence of my Opinion: average of their Opinion (average opinion)
+[card.line.l1]
+kind = "look_around"
+name = "Like-minded"
+around = "agents_within"
+agent_kind = "person"
+distance = { param = "hearing_range" }
+include_me = true
+summaries = [
+  { id = "average_opinion", name = "average opinion", summary = "average", value = { their = "opinion" } },
+]
+
+[card.line.l1.only]
+kind = "compare"
+test = "within"
+left = { their = "opinion" }
+right = { my = "opinion" }
+tolerance = { param = "confidence" }
+
+# Steer Opinion towards Like-minded's average opinion, strength Persuasion
+[card.line.l2]
+kind = "steer"
+property = "opinion"
+mode = "towards"
+value = { result = "l1", part = "average_opinion" }
+strength = { param = "persuasion" }
+
+# Move by a random direction of length Wander
+[card.line.l3]
+kind = "move"
+key = 2503973056
+mode = "by"
+
+[card.line.l3.value]
+kind = "random_direction"
+length = { param = "wander" }

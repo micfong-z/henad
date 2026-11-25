@@ -11,11 +11,20 @@
     )
 )]
 
+mod declarations;
 mod set;
 
+#[cfg(feature = "runtime-wgsl")]
+#[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+pub use declarations::EntryDeclarations;
+#[cfg(not(feature = "runtime-wgsl"))]
+pub(crate) use declarations::EntryDeclarations;
+#[cfg(feature = "runtime-wgsl")]
+pub(crate) use set::check_id_grammar;
 pub use set::{ModelLookupError, ModelSet, ModelSetError, ModelSetIter};
 
 use std::any::type_name;
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
@@ -30,7 +39,7 @@ use henad_core::explore::plan::ModelSchema;
 use henad_core::metadata::{Backend, ModelMetadata, Structure};
 use henad_core::model::SimState;
 use henad_core::params::{ParamDescriptor, ParamValue};
-use henad_core::provenance::ModelSource;
+use henad_core::provenance::{ModelCode, ModelSource};
 use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 use henad_core::topology::TopologyHint;
 use henad_core::view::StatDescriptor;
@@ -39,10 +48,12 @@ use crate::cpu::agent_engine::{AgentModelState, agent_model_param_descriptors};
 use crate::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
 use crate::cpu::network_engine::{NetworkModelState, network_model_param_descriptors};
 use crate::fault::{BUILDING, Fault, catching};
-use crate::gpu::agent_engine::GpuAgentState;
+use crate::gpu::agent_engine::GpuAgentEngine;
+use crate::gpu::agent_spec::GpuAgentSpec;
 use crate::gpu::capacity::Demand;
 use crate::gpu::fault::catching_on;
-use crate::gpu::grid_engine::GpuGridState;
+use crate::gpu::grid_engine::GpuGridEngine;
+use crate::gpu::grid_spec::GpuGridSpec;
 use crate::gpu::sim_thread::GpuSimState;
 use crate::gpu::{GpuContext, GpuNeeds};
 use crate::simulation::RunSetup;
@@ -170,7 +181,7 @@ impl ModelEntry {
         self.parts.topology_hint
     }
 
-    /// Declared facts about the model, derived from its trait consts.
+    /// Declared facts about the model, derived from its declarations.
     pub fn metadata(&self) -> &ModelMetadata {
         &self.parts.metadata
     }
@@ -190,19 +201,23 @@ impl ModelEntry {
         self.parts.gpu_needs
     }
 
-    /// Origin of the model's code: its type path always, and the registering crate's build once a set records it.
+    /// Origin of the model's code: its type path always, and the registering crate's build once a set records it,
+    /// or the code of a model composed at run time.
     pub fn source(&self) -> &ModelSource {
         &self.parts.source
     }
 
     /// Returns the position of parameter `id` in [`Self::param_descriptors`].
     pub fn param_index(&self, id: &str) -> Option<usize> {
-        self.parts.param_descriptors.iter().position(|desc| desc.id == id)
+        self.parts.param_descriptors.iter().position(|desc| desc.id() == id)
     }
 
     /// Returns the position of action `id` in [`Self::action_descriptors`].
     pub fn action_index(&self, id: &str) -> Option<usize> {
-        self.parts.action_descriptors.iter().position(|action| action.id == id)
+        self.parts
+            .action_descriptors
+            .iter()
+            .position(|action| action.id() == id)
     }
 
     /// Returns a setup at the declared defaults, the default seed and no actions.
@@ -247,11 +262,198 @@ impl ModelEntry {
         Self { parts: Arc::new(parts) }
     }
 
+    /// Returns the entry with the source of a model composed at run time from `code`, labelled with the entry's id.
+    ///
+    /// The entry builds its state as before, and its source records no build. Tests give a compiled model runtime code
+    /// this way.
+    #[doc(hidden)]
+    pub fn __with_code(self, code: ModelCode) -> Self {
+        let source = ModelSource::runtime(self.id(), code);
+        self.with_source(source)
+    }
+
     /// Returns the entry with its source replaced by `source`.
     fn with_source(mut self, source: ModelSource) -> Self {
         Arc::make_mut(&mut self.parts).source = source;
         self
     }
+}
+
+impl ModelEntry {
+    /// Returns the entry of a CPU model with `declarations` and `source`, whose `build` returns a state for
+    /// positional parameter values and a seed.
+    ///
+    /// The entry holds no device needs and no capacity check. Each build runs inside [`catching`], and a panic
+    /// returns a [`Fault`].
+    pub(crate) fn new_cpu<F>(declarations: EntryDeclarations, source: ModelSource, build: F) -> Self
+    where
+        F: Fn(&[ParamValue], Option<u64>) -> Box<dyn SimState> + WasmNotSend + WasmNotSync + 'static,
+    {
+        let factory = move |params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
+            catching(BUILDING, || ModelState::Cpu(build(params, seed)))
+        };
+        Self::from_declarations(declarations, Backend::Cpu, source, Arc::new(factory), None, None)
+    }
+
+    /// Returns the entry of a GPU model with `declarations` and `source`, whose `build` returns a state on a device,
+    /// and whose `demand` computes its device resources before anything is allocated.
+    ///
+    /// `needs` are the device needs above the WebGPU baseline that a host requests before any model builds. A build
+    /// with no device returns a refused [`Fault`]. Each build runs inside [`catching_on`], and a panic or a device
+    /// error returns a [`Fault`].
+    pub(crate) fn new_gpu<F, D>(
+        declarations: EntryDeclarations,
+        source: ModelSource,
+        needs: GpuNeeds,
+        build: F,
+        demand: D,
+    ) -> Self
+    where
+        F: Fn(&GpuContext, &[ParamValue], Option<u64>) -> Box<dyn GpuSimState> + WasmNotSend + WasmNotSync + 'static,
+        D: Capacity + 'static,
+    {
+        let id = declarations.id.clone();
+        let factory = move |params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
+            let ctx = gpu.ok_or_else(|| no_device(&id))?;
+            catching_on(ctx, BUILDING, || ModelState::Gpu(build(ctx, params, seed)))
+        };
+        Self::from_declarations(
+            declarations,
+            Backend::Gpu,
+            source,
+            Arc::new(factory),
+            Some(needs),
+            Some(Arc::new(demand)),
+        )
+    }
+
+    /// Returns the entry of a GPU grid model with `declarations` and `source`, whose builds and demand share `spec`.
+    ///
+    /// Each parameter that `declarations` declares live is live in every build.
+    pub(crate) fn from_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
+        let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
+        let build_spec = Arc::clone(&spec);
+        let live = live_params(&declarations);
+        Self::new_gpu(
+            declarations,
+            source,
+            needs,
+            move |ctx, params, seed| -> Box<dyn GpuSimState> {
+                Box::new(GpuGridEngine::new(ctx, Arc::clone(&build_spec), params, seed).with_live_params(live.clone()))
+            },
+            move |params, limits| spec.demand(params, limits),
+        )
+    }
+
+    /// Returns the entry of a GPU agent model with `declarations` and `source`, whose builds and demand share `spec`.
+    ///
+    /// Each parameter that `declarations` declares live is live in every build.
+    pub(crate) fn from_agent_spec(
+        declarations: EntryDeclarations,
+        source: ModelSource,
+        spec: Arc<GpuAgentSpec>,
+    ) -> Self {
+        let needs = GpuNeeds::with_storage_buffers(spec.max_storage_bindings());
+        let build_spec = Arc::clone(&spec);
+        let live = live_params(&declarations);
+        Self::new_gpu(
+            declarations,
+            source,
+            needs,
+            move |ctx, params, seed| -> Box<dyn GpuSimState> {
+                Box::new(GpuAgentEngine::new(ctx, Arc::clone(&build_spec), params, seed).with_live_params(live.clone()))
+            },
+            move |params, limits| spec.demand(params, limits),
+        )
+    }
+
+    /// Returns the entry of a GPU grid model composed at run time, whose builds and demand share `spec`.
+    ///
+    /// `declarations` describe the model to a host and `spec` is what the engine runs, so the stats and actions of the
+    /// two list the same items in the same order. [`GpuGridSpec::structure`] fills [`EntryDeclarations::structure`].
+    /// `source` is usually [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device
+    /// error returns a [`Fault`].
+    ///
+    /// A parameter that `declarations` declares live is set on the running state by `set_param`, which writes the
+    /// uniform block of every step, display and reduce pass again through [`GridHooks::pass_params_bytes`] before the
+    /// next step. Such a parameter must feed nothing but those blocks, the reruns and the stat values, never the grid's
+    /// size or its seeds. Declare any other one [`ParamDescriptor::on_reload`].
+    ///
+    /// [`GridHooks::pass_params_bytes`]: crate::gpu::GridHooks::pass_params_bytes
+    #[cfg(feature = "runtime-wgsl")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+    pub fn from_gpu_grid_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuGridSpec>) -> Self {
+        Self::from_grid_spec(declarations, source, spec)
+    }
+
+    /// Returns the entry of a GPU agent model composed at run time, whose builds and demand share `spec`.
+    ///
+    /// `declarations` describe the model to a host and `spec` is what the engine runs, so the stats and actions of the
+    /// two list the same items in the same order. [`GpuAgentSpec::structure`] fills [`EntryDeclarations::structure`]
+    /// and [`GpuAgentSpec::topology_hint`] fills [`EntryDeclarations::topology_hint`]. `source` is usually
+    /// [`ModelSource::runtime`]. Each build runs inside [`catching_on`], and a panic or a device error returns a
+    /// [`Fault`].
+    ///
+    /// A parameter that `declarations` declares live is set on the running state by `set_param`, which writes the
+    /// uniform block of every pass but the actions again through [`AgentHooks::run_params_bytes`] before the next
+    /// step, and rejects a value at which a block fails. Such a parameter must feed nothing but those blocks, the
+    /// reruns and the stat values, never a size, a count, the geometry or the seeds. Declare any other one
+    /// [`ParamDescriptor::on_reload`].
+    ///
+    /// [`AgentHooks::run_params_bytes`]: crate::gpu::AgentHooks::run_params_bytes
+    #[cfg(feature = "runtime-wgsl")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "runtime-wgsl")))]
+    pub fn from_gpu_agent_spec(declarations: EntryDeclarations, source: ModelSource, spec: Arc<GpuAgentSpec>) -> Self {
+        Self::from_agent_spec(declarations, source, spec)
+    }
+
+    /// Returns the entry that holds `declarations`, with the metadata of a model on `backend`.
+    fn from_declarations(
+        declarations: EntryDeclarations,
+        backend: Backend,
+        source: ModelSource,
+        factory: Arc<dyn Factory>,
+        gpu_needs: Option<GpuNeeds>,
+        capacity: Option<Arc<dyn Capacity>>,
+    ) -> Self {
+        let EntryDeclarations {
+            id,
+            name,
+            description,
+            params,
+            stats,
+            actions,
+            topology_hint,
+            structure,
+            palette,
+            replays_exactly,
+            time,
+        } = declarations;
+        let mut metadata = ModelMetadata::new(backend, structure).replays_exactly(replays_exactly);
+        metadata.palette = palette;
+        metadata.time = time;
+        Self {
+            parts: Arc::new(EntryParts {
+                id,
+                name,
+                description,
+                param_descriptors: params,
+                stat_descriptors: stats,
+                action_descriptors: actions,
+                topology_hint,
+                metadata,
+                gpu_needs,
+                source,
+                factory,
+                capacity,
+            }),
+        }
+    }
+}
+
+/// Returns whether each parameter of `declarations` is live, in their order.
+fn live_params(declarations: &EntryDeclarations) -> Vec<bool> {
+    declarations.params.iter().map(ParamDescriptor::is_live).collect()
 }
 
 /// Returns the fault a GPU model raises when it receives no device.
@@ -264,190 +466,243 @@ fn no_device(id: &str) -> Fault {
 
 /// Returns an entry for the CPU grid model `M`.
 pub fn register_grid_model<M: GridModel>() -> ModelEntry {
-    ModelEntry {
-        parts: Arc::new(EntryParts {
-            id: M::ID.to_owned(),
-            name: M::NAME.to_owned(),
-            description: M::DESCRIPTION.to_owned(),
-            param_descriptors: grid_model_param_descriptors::<M>(),
-            stat_descriptors: M::STATS.to_vec(),
-            action_descriptors: M::ACTIONS.to_vec(),
-            topology_hint: TopologyHint::GRID,
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(M::PALETTE),
-                structure: Structure::Grid {
-                    neighborhood: M::NEIGHBORHOOD,
-                },
-                replays_exactly: true,
-            },
-            gpu_needs: None,
-            source: ModelSource::__from_type_path(type_name::<M>()),
-            factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
-                catching(BUILDING, || {
-                    ModelState::Cpu(Box::new(GridModelState::<M>::from_params_seeded(params, seed)))
-                })
-            }),
-            capacity: None,
-        }),
-    }
+    let declarations = EntryDeclarations {
+        id: M::ID.to_owned(),
+        name: M::NAME.to_owned(),
+        description: M::DESCRIPTION.to_owned(),
+        params: grid_model_param_descriptors::<M>(),
+        stats: M::STATS.to_vec(),
+        actions: M::ACTIONS.to_vec(),
+        topology_hint: TopologyHint::GRID,
+        structure: Structure::Grid {
+            neighborhood: M::NEIGHBORHOOD,
+        },
+        palette: Some(Cow::Borrowed(M::PALETTE)),
+        replays_exactly: true,
+        time: None,
+    };
+    let source = ModelSource::__from_type_path(type_name::<M>());
+    ModelEntry::new_cpu(declarations, source, |params, seed| {
+        Box::new(GridModelState::<M>::from_params_seeded(params, seed))
+    })
 }
 
 /// Returns an entry for the CPU agent model `A`.
 pub fn register_agent_model<A: AgentModel>() -> ModelEntry {
-    ModelEntry {
-        parts: Arc::new(EntryParts {
-            id: A::ID.to_owned(),
-            name: A::NAME.to_owned(),
-            description: A::DESCRIPTION.to_owned(),
-            param_descriptors: agent_model_param_descriptors::<A>(),
-            stat_descriptors: A::STATS.to_vec(),
-            action_descriptors: A::ACTIONS.to_vec(),
-            topology_hint: TopologyHint {
-                grid: <A::Field as FieldLayer>::HAS_GRID,
-                agents: true,
-                edges: false,
-            },
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(A::PALETTE),
-                structure: Structure::Agents {
-                    chunk: A::CHUNK,
-                    lanes: <A::Lanes as AgentLanes>::LANES,
-                    index: <A::Index as NeighborIndex>::KIND,
-                    field: <A::Field as FieldLayer>::KIND,
-                },
-                replays_exactly: true,
-            },
-            gpu_needs: None,
-            source: ModelSource::__from_type_path(type_name::<A>()),
-            factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
-                catching(BUILDING, || {
-                    ModelState::Cpu(Box::new(AgentModelState::<A>::from_params_seeded(params, seed)))
-                })
-            }),
-            capacity: None,
-        }),
-    }
+    let declarations = EntryDeclarations {
+        id: A::ID.to_owned(),
+        name: A::NAME.to_owned(),
+        description: A::DESCRIPTION.to_owned(),
+        params: agent_model_param_descriptors::<A>(),
+        stats: A::STATS.to_vec(),
+        actions: A::ACTIONS.to_vec(),
+        topology_hint: TopologyHint {
+            grid: <A::Field as FieldLayer>::HAS_GRID,
+            agents: true,
+            edges: false,
+        },
+        structure: Structure::Agents {
+            chunk: A::CHUNK,
+            lanes: <A::Lanes as AgentLanes>::LANES,
+            index: <A::Index as NeighborIndex>::KIND,
+            field: <A::Field as FieldLayer>::KIND,
+        },
+        palette: Some(Cow::Borrowed(A::PALETTE)),
+        replays_exactly: true,
+        time: None,
+    };
+    let source = ModelSource::__from_type_path(type_name::<A>());
+    ModelEntry::new_cpu(declarations, source, |params, seed| {
+        Box::new(AgentModelState::<A>::from_params_seeded(params, seed))
+    })
 }
 
 /// Returns an entry for the CPU network model `N`.
 pub fn register_network_model<N: NetworkModel>() -> ModelEntry {
-    ModelEntry {
-        parts: Arc::new(EntryParts {
-            id: N::ID.to_owned(),
-            name: N::NAME.to_owned(),
-            description: N::DESCRIPTION.to_owned(),
-            param_descriptors: network_model_param_descriptors::<N>(),
-            stat_descriptors: N::STATS.to_vec(),
-            action_descriptors: N::ACTIONS.to_vec(),
-            topology_hint: TopologyHint::NETWORK,
-            metadata: ModelMetadata {
-                backend: Backend::Cpu,
-                palette: Some(N::PALETTE),
-                structure: Structure::Network {
-                    chunk: N::CHUNK,
-                    lanes: <N::Lanes as AgentLanes>::LANES,
-                    edge_palette: N::EDGE_PALETTE,
-                },
-                replays_exactly: true,
-            },
-            gpu_needs: None,
-            source: ModelSource::__from_type_path(type_name::<N>()),
-            factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, _gpu: Option<&GpuContext>| {
-                catching(BUILDING, || {
-                    ModelState::Cpu(Box::new(NetworkModelState::<N>::from_params_seeded(params, seed)))
-                })
-            }),
-            capacity: None,
-        }),
-    }
+    let declarations = EntryDeclarations {
+        id: N::ID.to_owned(),
+        name: N::NAME.to_owned(),
+        description: N::DESCRIPTION.to_owned(),
+        params: network_model_param_descriptors::<N>(),
+        stats: N::STATS.to_vec(),
+        actions: N::ACTIONS.to_vec(),
+        topology_hint: TopologyHint::NETWORK,
+        structure: Structure::Network {
+            chunk: N::CHUNK,
+            lanes: <N::Lanes as AgentLanes>::LANES,
+            edge_palette: N::EDGE_PALETTE,
+        },
+        palette: Some(Cow::Borrowed(N::PALETTE)),
+        replays_exactly: true,
+        time: None,
+    };
+    let source = ModelSource::__from_type_path(type_name::<N>());
+    ModelEntry::new_cpu(declarations, source, |params, seed| {
+        Box::new(NetworkModelState::<N>::from_params_seeded(params, seed))
+    })
 }
 
 /// Returns an entry for the GPU grid model `M`.
 ///
-/// Every parameter applies on reload, since the GPU state accepts no live edit.
+/// Every parameter applies on reload. A live edit rewrites the uniform blocks alone, and a parameter of `M` can also
+/// feed [`GpuGridModel::dims`] or [`GpuGridModel::seed_buffers`].
 pub fn register_gpu_grid_model<M: GpuGridModel>() -> ModelEntry {
-    ModelEntry {
-        parts: Arc::new(EntryParts {
-            id: M::ID.to_owned(),
-            name: M::NAME.to_owned(),
-            description: M::DESCRIPTION.to_owned(),
-            param_descriptors: M::param_descriptors()
-                .into_iter()
-                .map(ParamDescriptor::on_reload)
-                .collect(),
-            stat_descriptors: M::STATS.to_vec(),
-            action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
-            // The grid reaches the view as a texture instead of a cell buffer.
-            topology_hint: TopologyHint::GRID,
-            metadata: ModelMetadata {
-                backend: Backend::Gpu,
-                palette: Some(M::PALETTE),
-                structure: Structure::GpuGrid {
-                    buffers: M::BUFFERS,
-                    workgroup: M::WORKGROUP_SIZE,
-                },
-                replays_exactly: M::REPLAYS_EXACTLY,
-            },
-            gpu_needs: Some(GpuNeeds::with_storage_buffers(GpuGridState::<M>::max_storage_bindings())),
-            source: ModelSource::__from_type_path(type_name::<M>()),
-            factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
-                let ctx = gpu.ok_or_else(|| no_device(M::ID))?;
-                catching_on(ctx, BUILDING, || {
-                    ModelState::Gpu(Box::new(GpuGridState::<M>::new_seeded(ctx, params, seed)))
-                })
-            }),
-            capacity: Some(Arc::new(GpuGridState::<M>::demand)),
-        }),
-    }
+    let spec = Arc::new(GpuGridSpec::from_model::<M>());
+    let declarations = EntryDeclarations {
+        id: M::ID.to_owned(),
+        name: M::NAME.to_owned(),
+        description: M::DESCRIPTION.to_owned(),
+        params: M::param_descriptors()
+            .into_iter()
+            .map(ParamDescriptor::on_reload)
+            .collect(),
+        stats: M::STATS.to_vec(),
+        actions: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
+        // The grid reaches the view as a texture instead of a cell buffer.
+        topology_hint: TopologyHint::GRID,
+        structure: spec.structure(),
+        palette: Some(Cow::Borrowed(M::PALETTE)),
+        replays_exactly: M::REPLAYS_EXACTLY,
+        time: None,
+    };
+    let source = ModelSource::__from_type_path(type_name::<M>());
+    ModelEntry::from_grid_spec(declarations, source, spec)
 }
 
 /// Returns an entry for the GPU agent model `M`.
 ///
-/// Every parameter applies on reload, since the GPU state accepts no live edit.
+/// Every parameter applies on reload. A live edit rewrites the uniform blocks alone, and a parameter of `M` can also
+/// feed [`GpuAgentModel::dims`] or [`GpuAgentModel::seed_buffers`].
 pub fn register_gpu_agent_model<M: GpuAgentModel>() -> ModelEntry {
-    ModelEntry {
-        parts: Arc::new(EntryParts {
-            id: M::ID.to_owned(),
-            name: M::NAME.to_owned(),
-            description: M::DESCRIPTION.to_owned(),
-            param_descriptors: M::param_descriptors()
-                .into_iter()
-                .map(ParamDescriptor::on_reload)
-                .collect(),
-            stat_descriptors: M::STATS.to_vec(),
-            action_descriptors: M::ACTIONS.iter().map(|action| action.desc).collect(),
-            // A model that declares a display pass draws a grid layer under its agents.
-            topology_hint: TopologyHint {
-                grid: M::DISPLAY.is_some(),
-                agents: true,
-                edges: false,
+    let spec = Arc::new(GpuAgentSpec::from_model::<M>());
+    let declarations = EntryDeclarations {
+        id: M::ID.to_owned(),
+        name: M::NAME.to_owned(),
+        description: M::DESCRIPTION.to_owned(),
+        params: M::param_descriptors()
+            .into_iter()
+            .map(ParamDescriptor::on_reload)
+            .collect(),
+        stats: M::STATS.to_vec(),
+        actions: M::ACTIONS.iter().map(|action| action.desc.clone()).collect(),
+        topology_hint: spec.topology_hint(),
+        structure: spec.structure(),
+        // No palette. A GPU agent model's shaders write RGBA themselves.
+        palette: None,
+        replays_exactly: M::REPLAYS_EXACTLY,
+        time: None,
+    };
+    let source = ModelSource::__from_type_path(type_name::<M>());
+    ModelEntry::from_agent_spec(declarations, source, spec)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::type_name;
+    use std::borrow::Cow;
+
+    use henad_core::action::ActionDescriptor;
+    use henad_core::authoring::model::grid_model::GridModel;
+    use henad_core::authoring::primitives::rng::{below, next_bits};
+    use henad_core::explore::fingerprint::schema_hash;
+    use henad_core::grid::Grid2D;
+    use henad_core::helpers::{extract_f32, f32_param};
+    use henad_core::metadata::Structure;
+    use henad_core::params::{ParamDescriptor, ParamValue};
+    use henad_core::provenance::ModelSource;
+    use henad_core::topology::{NeighborhoodKind, TopologyHint};
+    use henad_core::view::{StatDescriptor, StatValue};
+
+    use super::{EntryDeclarations, ModelEntry, ModelState, register_grid_model};
+    use crate::cpu::grid_engine::{GridModelState, grid_model_param_descriptors};
+
+    /// Grid model whose cells switch on at random, with a parameter, a stat, an action and a palette to compare.
+    struct Flicker;
+
+    impl GridModel for Flicker {
+        const NAME: &'static str = "Flicker";
+        const ID: &'static str = "flicker";
+        const DESCRIPTION: &'static str = "Cells that switch on at random.";
+        const PALETTE: &'static [[u8; 4]] = &[[0, 0, 0, 255], [255, 255, 255, 255]];
+        const NEIGHBORHOOD: NeighborhoodKind = NeighborhoodKind::VonNeumann;
+        const STATS: &'static [StatDescriptor] = &[StatDescriptor::new("On", [255, 255, 255, 255])];
+        const ACTIONS: &'static [ActionDescriptor] = &[ActionDescriptor::new("clear", "Clear")];
+        type Params = f32;
+
+        fn param_descriptors() -> Vec<ParamDescriptor> {
+            vec![f32_param("chance", "Chance", 0.2, 0.0, 1.0, Some(0.01))]
+        }
+
+        fn from_params(params: &[ParamValue]) -> f32 {
+            extract_f32(params, 0, 0.2)
+        }
+
+        fn init(_grid: &mut Grid2D<u8>, _params: &[ParamValue], _rng: &mut u64) {}
+
+        fn step_cell(cell: u8, _neighbors: &[u8], chance: &f32, rng: &mut u64) -> u8 {
+            let threshold = (*chance * u32::MAX as f32) as u32;
+            if below(next_bits(rng), threshold) { 1 } else { cell }
+        }
+
+        fn act(_action: usize, grid: &mut Grid2D<u8>, _params: &[ParamValue], _rng: &mut u64) {
+            grid.current_mut().fill(0);
+        }
+
+        fn stats(grid: &Grid2D<u8>) -> Vec<StatValue> {
+            let on = grid.current().iter().filter(|&&cell| cell == 1).count();
+            vec![StatValue::Scalar(on as f64)]
+        }
+    }
+
+    /// Returns the stat values of `entry` built at its defaults on 32 by 16 cells and seed 7, after each of 4 steps.
+    fn stepped_stats(entry: &ModelEntry) -> Vec<f64> {
+        let mut params = entry.setup().values().to_vec();
+        params[0] = ParamValue::U32(32);
+        params[1] = ParamValue::U32(16);
+        let Ok(ModelState::Cpu(mut state)) = entry.build(&params, Some(7), None) else {
+            panic!("a CPU model builds without a device");
+        };
+        (0..4)
+            .flat_map(|_| {
+                state.step();
+                state.stats().into_iter().map(|stat| stat.value().scalar())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_entry_from_values_reads_like_the_registered_one() {
+        let declarations = EntryDeclarations {
+            id: "flicker".to_owned(),
+            name: "Flicker".to_owned(),
+            description: "Cells that switch on at random.".to_owned(),
+            params: grid_model_param_descriptors::<Flicker>(),
+            stats: vec![StatDescriptor::owned("On".to_owned(), [255, 255, 255, 255])],
+            actions: vec![ActionDescriptor::owned("clear".to_owned(), "Clear".to_owned())],
+            topology_hint: TopologyHint::GRID,
+            structure: Structure::Grid {
+                neighborhood: NeighborhoodKind::VonNeumann,
             },
-            metadata: ModelMetadata {
-                backend: Backend::Gpu,
-                // A GPU agent model's shaders write RGBA themselves.
-                palette: None,
-                structure: Structure::GpuAgents {
-                    buffers: M::BUFFERS,
-                    passes: M::STEP_PASSES,
-                    index: M::INDEX,
-                    display: M::DISPLAY.is_some(),
-                    counters: M::COUNTERS,
-                },
-                replays_exactly: M::REPLAYS_EXACTLY,
-            },
-            gpu_needs: Some(GpuNeeds::with_storage_buffers(
-                GpuAgentState::<M>::max_storage_bindings(),
-            )),
-            source: ModelSource::__from_type_path(type_name::<M>()),
-            factory: Arc::new(|params: &[ParamValue], seed: Option<u64>, gpu: Option<&GpuContext>| {
-                let ctx = gpu.ok_or_else(|| no_device(M::ID))?;
-                catching_on(ctx, BUILDING, || {
-                    ModelState::Gpu(Box::new(GpuAgentState::<M>::new_seeded(ctx, params, seed)))
-                })
-            }),
-            capacity: Some(Arc::new(GpuAgentState::<M>::demand)),
-        }),
+            palette: Some(Cow::Owned(vec![[0, 0, 0, 255], [255, 255, 255, 255]])),
+            replays_exactly: true,
+            time: None,
+        };
+        let source = ModelSource::__from_type_path(type_name::<Flicker>());
+        let from_values = ModelEntry::new_cpu(declarations, source, |params, seed| {
+            Box::new(GridModelState::<Flicker>::from_params_seeded(params, seed))
+        });
+        let registered = register_grid_model::<Flicker>();
+
+        assert_eq!(
+            format!("{from_values:?}"),
+            format!("{registered:?}"),
+            "the two entries hold the same declarations, metadata, needs and source"
+        );
+        assert_eq!(schema_hash(&from_values.schema()), schema_hash(&registered.schema()));
+        assert_eq!(from_values.gpu_needs(), None);
+        assert!(from_values.demand(&[], &wgpu::Limits::default()).is_none());
+        let stats = stepped_stats(&from_values);
+        assert!(stats.iter().any(|&on| on > 0.0), "{stats:?}");
+        assert_eq!(stats, stepped_stats(&registered));
     }
 }

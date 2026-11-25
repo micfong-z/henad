@@ -2,8 +2,9 @@
 //!
 //! The interleaver runs on the calling thread, since wgpu's error scopes belong to one thread. It visits the live
 //! tracks in turn, and each visit collects a completed sample and submits the next command buffer of one track. A
-//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them. The
-//! steps of several tracks in one buffer could pass that bound together and trip the operating system's GPU watchdog.
+//! command buffer holds the steps of one track only, at most [`GpuTrackDepth::steps_per_submission`] of them, or the
+//! fewer that the state's [`GpuSimState::submission_steps`] returns. The steps of several tracks in one buffer could
+//! pass that bound together and trip the operating system's GPU watchdog.
 //!
 //! A track records its work in the order a blocking run takes it: at each tick the actions due there, then the stats
 //! passes of the sample due there, then the steps to the next tick anything is due at. A sample reads back while the
@@ -27,8 +28,10 @@ use henad_core::explore::outcome::{PlannedRun, RunOutcome, RunStatus, StopReason
 
 use super::{
     BatchEnd, ExecutionError, Executor, GpuTrackDepth, ReorderBuffer, RunRequest, RunSink, RunWatch, gpu_memory_budget,
+    run_in_build_pool,
 };
 use crate::cursor::{OutcomeParts, RunEnd, RunFailure, failed_build_outcome, milliseconds, refusal_note, run_outcome};
+use crate::probe::shortfalls;
 
 /// Runs `requests` on the GPU tracks of `executor`, and commits the outcomes to `sink` in request order.
 ///
@@ -154,19 +157,40 @@ impl<'x> Interleaver<'x> {
     /// Builds queued runs while a track is free and the next run fits the memory budget, and returns whether any
     /// build was tried.
     ///
-    /// Nothing is built while admission is held after an out-of-memory build.
+    /// A run the device cannot build is refused and never built. Nothing is built while admission is held after an
+    /// out-of-memory build.
     fn admit(&mut self) -> bool {
         let mut tried = false;
+        let limits = self.ctx.device.limits();
         while !self.admission_held && self.tracks.len() < self.track_cap {
             let Some(&request_index) = self.unbuilt_requests.front() else {
                 break;
             };
             let request = &self.requests[request_index];
-            let demand_bytes = self
-                .executor
-                .entry
-                .demand(request.params, &self.ctx.device.limits())
-                .map_or(0, |demand| demand.bytes());
+            let entry = self.executor.entry;
+            let reasons = shortfalls(entry, request.params, &limits, self.executor.shortfall_words.as_ref());
+            if !reasons.is_empty() {
+                self.unbuilt_requests.pop_front();
+                tried = true;
+                let fault = Fault::refused(
+                    BUILDING,
+                    format!("the config does not fit this GPU: {}", reasons.join("; ")),
+                );
+                let outcome = failed_build_outcome(
+                    request.run,
+                    request.run_key,
+                    &self.executor.measure,
+                    0.0,
+                    RunFailure::from(fault),
+                );
+                self.failed_builds.push(EndedRun {
+                    request_index,
+                    outcome,
+                    watch: None,
+                });
+                continue;
+            }
+            let demand_bytes = entry.demand(request.params, &limits).map_or(0, |demand| demand.bytes());
             let live_bytes: u64 = self.tracks.iter().map(|track| track.demand_bytes).sum();
             if !self.tracks.is_empty() && live_bytes.saturating_add(demand_bytes) > self.gpu_memory_budget {
                 break;
@@ -417,10 +441,10 @@ impl GpuTrack {
             .as_ref()
             .map(|active_runs| active_runs.watch(request.run, executor.measure.total()));
         let started = Instant::now();
-        let built = executor
-            .entry
-            .build(request.params, Some(request.run.seed), executor.gpu)
-            .and_then(gpu_state);
+        let (entry, gpu, seed) = (executor.entry, executor.gpu, request.run.seed);
+        let built = run_in_build_pool(executor.build_pool.as_deref(), || {
+            entry.build(request.params, Some(seed), gpu).and_then(gpu_state)
+        });
         let build_ms = milliseconds(started.elapsed());
         let state = match built {
             Ok(state) => state,
@@ -543,7 +567,11 @@ impl GpuTrack {
             }
             (0, true)
         } else {
-            let mut boundary = sample_tick.min(self.tick + u64::from(depth.steps_per_submission));
+            // A state that measures its steps' work may submit the measurement, and never waits for it here.
+            let state = &mut self.state;
+            let measured = catching_on(ctx, STEPPING, || state.submission_steps(false))?;
+            let steps = depth.steps_per_submission.min(measured);
+            let mut boundary = sample_tick.min(self.tick + u64::from(steps));
             if let Some(due) = self.schedule.next_due_after(self.tick) {
                 boundary = boundary.min(due);
             }

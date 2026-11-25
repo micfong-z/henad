@@ -147,6 +147,12 @@ pub fn nest_cell(width: u32, height: u32) -> usize {
     (y * width + x) as usize
 }
 
+/// Returns the world position of the nest's cell, where every ant starts.
+pub(crate) fn nest_position(width: u32, height: u32) -> (f32, f32) {
+    let nest = nest_cell(width, height) as u32;
+    ((nest % width) as f32, (nest / width) as f32)
+}
+
 /// Returns the index of the food source's cell, one eighth of the way across and down the grid.
 pub fn food_cell(width: u32, height: u32) -> usize {
     let x = (0.125 * width as f32) as u32;

@@ -24,13 +24,14 @@ use std::sync::Arc;
 use henad_core::explore::measure::MeasurePlan;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::{Config, Plan};
+use henad_core::metadata::TimeScale;
 use henad_core::params::ParamDescriptor;
 
 use crate::exec::RunSink;
 use crate::output::manifest::{Manifest, ResultCounts};
 use crate::output::read::{ReadError, RunsCsv, SeriesScan, SeriesSegment, merge_series};
 use crate::output::runs_csv::RunsWriter;
-use crate::output::series_csv::SeriesWriter;
+use crate::output::series_csv::{SeriesWriter, tick_length_position};
 use crate::output::summary_csv::{SummaryError, write_summary};
 
 /// Name of the table with one row per run.
@@ -216,7 +217,8 @@ impl OutputDir {
 
     /// Creates `runs.csv` and `series.csv`, and returns a writer for the runs of `plan`.
     ///
-    /// `params` are the model's parameters, and `measure` fixes the stat and reducer columns.
+    /// `params` are the model's parameters, `measure` fixes the stat and reducer columns, and `time`, the model's time
+    /// scale, adds the `time` column to `series.csv`.
     ///
     /// # Errors
     ///
@@ -226,6 +228,7 @@ impl OutputDir {
         plan: &Arc<Plan>,
         params: &[ParamDescriptor],
         measure: &MeasurePlan,
+        time: Option<&TimeScale>,
     ) -> Result<OutputWriter<BufWriter<File>>, OutputError> {
         let runs_path = self.path.join(RUNS_FILE);
         let runs = File::create_new(&runs_path).map_err(write_error_at(&runs_path))?;
@@ -233,13 +236,16 @@ impl OutputDir {
             .map_err(write_error_at(&runs_path))?;
         let series_path = self.path.join(SERIES_FILE);
         let series = File::create_new(&series_path).map_err(write_error_at(&series_path))?;
-        let series =
-            SeriesWriter::new(BufWriter::new(series), measure.columns()).map_err(write_error_at(&series_path))?;
+        let tick_length = tick_length_position(time, params);
+        let series = SeriesWriter::new(BufWriter::new(series), measure.columns(), tick_length)
+            .map_err(write_error_at(&series_path))?;
         Ok(OutputWriter::new(Arc::clone(plan), runs, series))
     }
 
     /// Opens `runs.csv` and `series.csv`, whose headers are already written, and returns a writer that adds the runs
     /// of `plan` to them.
+    ///
+    /// `time` is the model's time scale, as for [`Self::open_writer`].
     ///
     /// # Errors
     ///
@@ -248,6 +254,7 @@ impl OutputDir {
         &self,
         plan: &Arc<Plan>,
         params: &[ParamDescriptor],
+        time: Option<&TimeScale>,
     ) -> Result<OutputWriter<BufWriter<File>>, OutputError> {
         let append = |file: &str| {
             let path = self.path.join(file);
@@ -258,7 +265,8 @@ impl OutputDir {
                 .map_err(write_error_at(&path))
         };
         let runs = RunsWriter::appending(append(RUNS_FILE)?, params);
-        let series = SeriesWriter::appending(append(SERIES_FILE)?);
+        let tick_length = tick_length_position(time, params);
+        let series = SeriesWriter::appending(append(SERIES_FILE)?, tick_length);
         Ok(OutputWriter::new(Arc::clone(plan), runs, series))
     }
 
@@ -347,15 +355,7 @@ impl OutputDir {
         };
         let mut records: Vec<_> = runs.records.iter().collect();
         records.sort_by_key(|record| record.run_id);
-        let segments: Vec<SeriesSegment> = series
-            .segments
-            .iter()
-            .map(|range| SeriesSegment {
-                path: series_path.clone(),
-                range: range.clone(),
-                input_index: 0,
-            })
-            .collect();
+        let segments: Vec<SeriesSegment> = series.segments_at(&series_path, 0).collect();
         let runs_header_line = runs_csv::header_line(runs_header);
         self.replace_tables(
             |dest| {
@@ -406,19 +406,32 @@ impl OutputDir {
     /// cannot be written, and [`OutputError::Summary`] when `runs.csv` cannot be summarized.
     pub fn write_summary(&self) -> Result<(), OutputError> {
         let runs_path = self.path.join(RUNS_FILE);
-        let read_error = |source| OutputError::Read {
+        let runs = File::open(&runs_path).map_err(|source| OutputError::Read {
             path: runs_path.clone(),
             source,
-        };
-        let runs = File::open(&runs_path).map_err(read_error)?;
+        })?;
         let summary_path = self.path.join(SUMMARY_FILE);
         let summary = create_fresh(&summary_path).map_err(write_error_at(&summary_path))?;
-        match write_summary(BufReader::new(runs), BufWriter::new(summary)) {
-            Ok(_) => Ok(()),
-            Err(SummaryError::Read(source)) => Err(read_error(source)),
-            Err(SummaryError::Io(source)) => Err(write_error_at(&summary_path)(source)),
-            Err(error) => Err(OutputError::Summary(error)),
+        write_summary(BufReader::new(runs), BufWriter::new(summary))
+            .map(drop)
+            .map_err(|error| OutputError::from_summary(error, &runs_path, &summary_path))
+    }
+
+    /// Cuts `runs.csv` to `runs_bytes` bytes and `series.csv` to `series_bytes` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputError::Write`] when a table cannot be opened or cut.
+    pub(crate) fn truncate_tables(&self, runs_bytes: u64, series_bytes: u64) -> Result<(), OutputError> {
+        for (file, length) in [(RUNS_FILE, runs_bytes), (SERIES_FILE, series_bytes)] {
+            let path = self.path.join(file);
+            OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .and_then(|table| table.set_len(length))
+                .map_err(|source| OutputError::Write { path, source })?;
         }
+        Ok(())
     }
 }
 
@@ -579,7 +592,7 @@ fn write_both<W: Write>(
     outcome: &RunOutcome,
     config: &Config,
 ) -> io::Result<()> {
-    series.write_run(outcome.run.run_id, &outcome.series)?;
+    series.write_run(outcome.run.run_id, &outcome.series, &config.params)?;
     series.flush()?;
     runs.write_run(outcome, config)?;
     runs.flush()?;
@@ -635,6 +648,23 @@ pub enum OutputError {
     Manifest(serde_json::Error),
 }
 
+impl OutputError {
+    /// Returns the error of a summary that `runs_path` was read for and `summary_path` was written to.
+    pub(crate) fn from_summary(error: SummaryError, runs_path: &Path, summary_path: &Path) -> Self {
+        match error {
+            SummaryError::Read(source) => Self::Read {
+                path: runs_path.to_owned(),
+                source,
+            },
+            SummaryError::Io(source) => Self::Write {
+                path: summary_path.to_owned(),
+                source,
+            },
+            error => Self::Summary(error),
+        }
+    }
+}
+
 impl fmt::Display for OutputError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -648,7 +678,7 @@ impl fmt::Display for OutputError {
             ),
             Self::Link { path } => write!(
                 f,
-                "'{}' is a symbolic link. A sweep writes to no table through a link",
+                "'{}' is a symbolic link. A sweep cannot write to a table through a link",
                 path.display()
             ),
             Self::Read { path, .. } => write!(f, "cannot read '{}'", path.display()),

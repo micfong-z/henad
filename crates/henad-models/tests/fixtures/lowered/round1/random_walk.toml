@@ -1,0 +1,257 @@
+# Round 1 random walk, lowered by hand.
+# Walker: Position starts anywhere at random; Heading is built in (direction of the last move).
+# Each tick: Repeat Steps per tick times: Move by a random direction of length Step size.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "r1_random_walk"
+name = "Random walk (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[graph]
+topology = "agents"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "r1_random_walk"
+name = "Random walk (round 1)"
+description = "Round 1 author model lowered to library 1"
+
+[agents]
+count = 10000
+max_count = 1000000
+width = 1000.0
+height = 1000.0
+
+# Colours: By heading, the eight compass hues the editor generates.
+[[palette]]
+id = "by_heading"
+colors = [
+  [228, 55, 72, 255],
+  [240, 122, 40, 255],
+  [255, 193, 7, 255],
+  [139, 195, 74, 255],
+  [30, 168, 124, 255],
+  [0, 158, 200, 255],
+  [0, 122, 245, 255],
+  [142, 84, 216, 255],
+]
+
+[[lane]]
+id = "position"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+role = "position"
+
+[[lane]]
+id = "heading"
+domain = "agents"
+type = "vec2f"
+initial = { vec2f = [0.0, 0.0] }
+
+[[param]]
+id = "steps_per_tick"
+label = "Steps per tick"
+kind = "u32"
+min = 0
+max = 16
+default = 4
+
+[[param]]
+id = "step_size"
+label = "Step size"
+kind = "f32"
+min = 0.1
+max = 20.0
+default = 2.0
+step = 0.1
+
+[[stat]]
+label = "Average position"
+from = "n41.mean"
+color = [0, 122, 245, 255]
+
+# Starts as: Position anywhere at random.
+[[pass]]
+id = "start_walkers"
+stage = "init"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n1"
+op = "ctx.world"
+
+[[pass.node]]
+id = "n2"
+op = "vec.split"
+in.v = "n1"
+
+[[pass.node]]
+id = "n3"
+op = "rand.float"
+config.key = 3100000401
+in.max = "n2.x"
+
+[[pass.node]]
+id = "n4"
+op = "rand.float"
+config.key = 3100000402
+in.max = "n2.y"
+
+[[pass.node]]
+id = "n5"
+op = "vec.make"
+in.x = "n3"
+in.y = "n4"
+
+[[pass.node]]
+id = "n6"
+op = "lane.set"
+config.lane = "position"
+in.value = "n5"
+
+# Each tick, every walker.
+[[pass]]
+id = "tick_walkers"
+stage = "tick"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "lane.get"
+config.lane = "position"
+
+[[pass.node]]
+id = "n11"
+op = "lane.get"
+config.lane = "heading"
+
+[[pass.node]]
+id = "n12"
+op = "ctx.world"
+
+# Repeat Steps per tick times: Move by ... adds up into one sum.
+[[pass.node]]
+id = "n13"
+op = "region.repeat"
+config.max = 16
+config.acc = [
+  { name = "move", type = "vec2f", combine = "sum" },
+]
+in.count = { param = "steps_per_tick" }
+in.when = { bool = true }
+in.init.move = { vec2f = [0.0, 0.0] }
+
+[[pass.node]]
+id = "n14"
+op = "rand.float"
+config.key = 3100000403
+in.max = { f32 = 6.2831855 }
+region = "n13"
+
+[[pass.node]]
+id = "n15"
+op = "vec.from_angle"
+in.angle = "n14"
+in.length = { param = "step_size" }
+region = "n13"
+
+[[pass.node]]
+id = "n16"
+op = "region.put"
+config.acc = "move"
+in.value = "n15"
+in.when = { bool = true }
+region = "n13"
+
+# Settlement: Position = wrap(Position + moves), Heading = the move when it is not zero.
+[[pass.node]]
+id = "n17"
+op = "math.add"
+in.a = "n10"
+in.b = "n13.move"
+
+[[pass.node]]
+id = "n18"
+op = "space.wrap"
+in.v = "n17"
+in.world = "n12"
+
+[[pass.node]]
+id = "n19"
+op = "lane.set"
+config.lane = "position"
+in.value = "n18"
+
+[[pass.node]]
+id = "n20"
+op = "vec.length"
+in.v = "n13.move"
+
+[[pass.node]]
+id = "n21"
+op = "cmp.gt"
+in.a = "n20"
+in.b = { f32 = 0.0 }
+
+[[pass.node]]
+id = "n22"
+op = "logic.select"
+in.cond = "n21"
+in.if_true = "n13.move"
+in.if_false = "n11"
+
+[[pass.node]]
+id = "n23"
+op = "lane.set"
+config.lane = "heading"
+in.value = "n22"
+
+# Colours: By heading.
+[[pass]]
+id = "colour_walkers"
+stage = "view"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n30"
+op = "lane.get"
+config.lane = "heading"
+
+[[pass.node]]
+id = "n31"
+op = "space.heading_octant"
+in.v = "n30"
+
+[[pass.node]]
+id = "n32"
+op = "view.color"
+config.palette = "by_heading"
+in.index = "n31"
+
+# Measures: Average position.
+[[pass]]
+id = "measures_walkers"
+stage = "stats"
+kind = "map"
+domain = "agents"
+enabled = true
+
+[[pass.node]]
+id = "n40"
+op = "lane.get"
+config.lane = "position"
+
+[[pass.node]]
+id = "n41"
+op = "stat.mean"
+config.chunk_acc = "f64"
+in.value = "n40"

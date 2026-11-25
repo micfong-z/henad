@@ -100,7 +100,7 @@ pub fn stamp_commit() {
 /// Sets the stamp of [`stamp_commit`] for henad-explore, whose stamp represents the engine.
 ///
 /// The commit and the dirty flag come from git only inside Henad's own tree, where the dirty flag and the source hash
-/// cover henad-core, henad-build, henad-compute and henad-explore with the workspace's lockfile. Also sets
+/// cover henad-core, henad-build, henad-compute, henad-graph and henad-explore with the workspace's lockfile. Also sets
 /// `HENAD_BUILD_CRATE_HASH`, the hash of henad-explore's own `src` and manifest, and `HENAD_BUILD_STAMP_VERSION`,
 /// henad-build's own version.
 #[doc(hidden)]
@@ -222,10 +222,7 @@ impl ShaderBuild {
 
     /// Writes both files to `out_dir`, and returns the paths for Cargo to watch and the warnings to print.
     fn generate_in(self, out_dir: &Path) -> Result<Report, ShaderBuildError> {
-        let root = std::path::absolute(&self.root).map_err(|source| ShaderBuildError::Io {
-            path: self.root.clone(),
-            source,
-        })?;
+        let root = std::path::absolute(&self.root).map_err(io_error(&self.root))?;
         paths::check_root(&root)?;
         let files = paths::wgsl_files(&root)?;
         paths::check_reserved(&root, &files)?;
@@ -252,8 +249,8 @@ impl ShaderBuild {
             let source = read(&path)?;
             if paths::defines_reserved_path(&source) {
                 warnings.push(format!(
-                    "{} declares an import path under `henad::`, a root reserved for the shared modules. An import \
-                     resolves by file path, and never reads this line.",
+                    "{} declares an import path under `henad::`, a root reserved for the shared modules. Imports \
+                     resolve by file path and ignore this declaration",
                     path.display()
                 ));
             }
@@ -290,10 +287,15 @@ struct Report {
 
 /// Returns the text of `path`.
 fn read(path: &Path) -> Result<String, ShaderBuildError> {
-    std::fs::read_to_string(path).map_err(|source| ShaderBuildError::Io {
+    std::fs::read_to_string(path).map_err(io_error(path))
+}
+
+/// Returns a function that turns an IO error on `path` into [`ShaderBuildError::Io`].
+fn io_error(path: &Path) -> impl Fn(std::io::Error) -> ShaderBuildError + '_ {
+    move |source| ShaderBuildError::Io {
         path: path.to_path_buf(),
         source,
-    })
+    }
 }
 
 /// Reason a shader build fails.
@@ -416,7 +418,7 @@ impl fmt::Display for ShaderBuildError {
         match self {
             Self::InvalidName { path, component } => {
                 if component.is_empty() {
-                    write!(f, "{}: the path gives an empty Rust name. ", path.display())?;
+                    write!(f, "{}: the path maps to an empty Rust name. ", path.display())?;
                 } else {
                     write!(
                         f,
@@ -425,8 +427,8 @@ impl fmt::Display for ShaderBuildError {
                     )?;
                 }
                 f.write_str(
-                    "Each component of a shader's path below the shader root becomes part of a Rust name, and the \
-                     components joined in PascalCase name the shader's `ShaderEntry` variant",
+                    "Each component of a shader's path below the shader root must be a Rust identifier. The components \
+                     joined in PascalCase name the shader's `ShaderEntry` variant",
                 )
             }
             Self::NameCollision {
@@ -436,20 +438,19 @@ impl fmt::Display for ShaderBuildError {
                 name,
             } => write!(
                 f,
-                "{} and {} both give the {kind} `{name}`",
+                "{} and {} both map to the {kind} `{name}`",
                 first.display(),
                 second.display()
             ),
             Self::ReservedName { path, name } if name.eq_ignore_ascii_case("henad") => write!(
                 f,
-                "{}: the name `henad`, in any case, is reserved for the shared modules, and a shader file or \
-                 directory of that name would shadow them",
+                "{}: the name `henad`, in any case, is reserved for the shared modules and cannot be used for a shader \
+                 file or directory",
                 path.display()
             ),
             Self::ReservedName { path, name } => write!(
                 f,
-                "{}: the generated bindings use the name `{name}` at their root, and a shader path starting with it \
-                 would shadow it",
+                "{}: a shader path cannot start with `{name}`, the name the generated bindings use at their root",
                 path.display()
             ),
             Self::ReservedImport {
@@ -488,14 +489,14 @@ impl fmt::Display for ShaderBuildError {
                 reason,
             } => write!(
                 f,
-                "{}:{line}: `{text}` binds {reason}. Group 0 of an entry point holds storage buffers, uniforms and \
-                 storage textures. Move a render shader out of the shader root, or name the entry points with \
-                 `ShaderBuild::new`",
+                "{}:{line}: `{text}` binds {reason}. Group 0 of an entry point must hold only storage buffers, \
+                 uniforms and storage textures. Move a render shader out of the shader root, or name the entry points \
+                 with `ShaderBuild::new`",
                 path.display()
             ),
             Self::ModuleBinding { path, line, text } => write!(
                 f,
-                "{}:{line}: `{text}` declares a binding in a module another shader imports. Bindings belong in the \
+                "{}:{line}: `{text}` declares a binding in a module another shader imports. Move the binding to the \
                  entry shader",
                 path.display()
             ),

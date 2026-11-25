@@ -24,7 +24,7 @@ pub struct BufferSpec {
     /// label.
     pub label: &'static str,
     /// Whether the buffer has a second side, for a pass that reads the previous values while it
-    /// writes this tick's values.
+    /// writes this tick's values. The engine panics at construction if no step pass writes the buffer.
     pub double_buffered: bool,
     /// Whether the buffer is also a vertex stream, for the view to draw without a copy.
     pub drawable: bool,
@@ -263,9 +263,11 @@ pub trait GpuAgentModel: Send + Sync + 'static {
 
     /// Storage buffers of the model's state, declared with [`buffers!`](crate::buffers).
     const BUFFERS: &'static [BufferSpec];
-    /// Index into [`Self::BUFFERS`] of the `vec2<f32>` positions that the view draws.
+    /// Index into [`Self::BUFFERS`] of the `vec2<f32>` positions that the view draws. The engine panics at construction
+    /// if the buffer is not drawable.
     const POS_BUFFER: usize;
-    /// Index into [`Self::BUFFERS`] of the packed RGBA that the view draws.
+    /// Index into [`Self::BUFFERS`] of the packed RGBA that the view draws. The engine panics at construction if the
+    /// buffer is not drawable.
     const COLOR_BUFFER: usize;
 
     /// Whether the engine rebuilds a neighbour index from the positions before every step.

@@ -1,3 +1,7 @@
+# Every text file is checked out with LF line ends, Windows included. The model's WGSL is embedded with
+# include_str!, and its code hash and the shader text should not depend on the system.
+* text=auto eol=lf
+
 # Bash fails on a script with CRLF line ends, and `$(cat scripts/web-toolchain)` would keep the CR. A Windows checkout
 # writes CRLF unless told otherwise.
 *.sh text eol=lf

@@ -6,24 +6,16 @@ use henad_core::action::{Fire, RefusedActions, Schedule};
 use henad_core::view::StatEntry;
 
 use crate::fault::{Fault, FaultKind, STEPPING};
+use crate::gpu::sim_thread::{submit_due, submit_in_chunks};
 use crate::gpu::{GpuContext, GpuSimState, MAX_STEPS_PER_SUBMISSION, StatsPoll};
 
 /// Submits `count` steps on the GPU without waiting for them.
 ///
-/// Each command buffer holds at most [`MAX_STEPS_PER_SUBMISSION`] steps.
+/// Each command buffer holds at most [`GpuSimState::submission_steps`] steps, never more than
+/// [`MAX_STEPS_PER_SUBMISSION`]. A state that measures its steps' work waits for that measurement once, after its
+/// first step.
 pub fn submit_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
-    // Submissions to one queue run in order, so batch N+1 still reads batch N's output. They all
-    // queue up and the caller's one wait drains them, letting the CPU encode ahead of the GPU.
-    let mut remaining = count;
-    while remaining > 0 {
-        let n = remaining.min(u64::from(MAX_STEPS_PER_SUBMISSION)) as u32;
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_steps"),
-        });
-        state.encode_steps(&mut encoder, n, None);
-        ctx.queue.submit(Some(encoder.finish()));
-        remaining -= u64::from(n);
-    }
+    submit_in_chunks(state, &ctx.device, &ctx.queue, count, "henad_gpu_steps");
 }
 
 /// Submits `count` steps of `state` as one command buffer, with its stats passes after them when `sample` is set.
@@ -33,8 +25,9 @@ pub fn submit_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) {
 ///
 /// # Panics
 ///
-/// Panics when `count` exceeds [`MAX_STEPS_PER_SUBMISSION`]. A debug build also panics on a sample while the
-/// previous readback is pending, since the readback would skip it and report the stale values.
+/// Panics when `count` exceeds [`MAX_STEPS_PER_SUBMISSION`]. A caller holds `count` to
+/// [`GpuSimState::submission_steps`] as well. A debug build also panics on a sample while the previous readback is
+/// pending, since the readback would skip it and report the stale values.
 pub fn submit_slice(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u32, sample: bool) -> wgpu::SubmissionIndex {
     assert!(
         count <= MAX_STEPS_PER_SUBMISSION,
@@ -70,10 +63,39 @@ pub fn submit_slice(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u32, s
 /// or a [`FaultKind::Poll`] fault when the wait itself fails. A lost device fails its work as ordinary errors, and
 /// the loss is their cause. `wait` then returns the loss and leaves those errors in `ctx.faults`.
 pub fn wait(ctx: &GpuContext) -> Result<(), Fault> {
+    drain(ctx)?;
+    reported(ctx)
+}
+
+/// Blocks as [`wait`] does, then has `state` read back a fault its shaders recorded, and reports any fault.
+///
+/// A run that reads no stats ends here, so a fault the model recorded on the device still ends it.
+///
+/// # Errors
+///
+/// Returns the fault [`wait`] reports, or the fault `state` recorded, through [`GpuSimState::read_fault`].
+pub fn wait_for(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<(), Fault> {
+    drain(ctx)?;
+    if !ctx.is_lost() {
+        state.read_fault();
+    }
+    reported(ctx)
+}
+
+/// Blocks until the GPU has finished everything submitted.
+///
+/// # Errors
+///
+/// Returns a [`FaultKind::Poll`] fault when the wait fails.
+fn drain(ctx: &GpuContext) -> Result<(), Fault> {
     ctx.device
         .poll(wgpu::PollType::wait_indefinitely())
         .map_err(poll_fault)?;
+    Ok(())
+}
 
+/// Returns the loss of the device, or the first fault the context's sink holds.
+fn reported(ctx: &GpuContext) -> Result<(), Fault> {
     // wgpu reports a loss to the callback alone, and polls go on succeeding.
     if ctx.is_lost() {
         return Err(Fault::device_lost(STEPPING));
@@ -112,13 +134,13 @@ fn poll_fault(error: wgpu::PollError) -> Fault {
 ///
 /// # Errors
 ///
-/// Returns the fault [`wait`] reports.
+/// Returns the fault [`wait_for`] reports.
 pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> Result<(), Fault> {
     if count == 0 {
         return Ok(());
     }
     submit_steps(state, ctx, count);
-    wait(ctx)
+    wait_for(state, ctx)
 }
 
 /// Runs steps as [`run_steps`] does, stopping at each tick that has a scheduled action to encode.
@@ -133,7 +155,7 @@ pub fn run_steps(state: &mut dyn GpuSimState, ctx: &GpuContext, count: u64) -> R
 ///
 /// # Errors
 ///
-/// Returns the fault [`wait`] reports.
+/// Returns the fault [`wait_for`] reports.
 pub fn run_steps_acting<'s>(
     state: &mut dyn GpuSimState,
     ctx: &GpuContext,
@@ -153,7 +175,7 @@ pub fn run_steps_acting<'s>(
     }
     let now = state.tick();
     submit_steps(state, ctx, end - now);
-    wait(ctx)?;
+    wait_for(state, ctx)?;
     Ok(refused)
 }
 
@@ -163,18 +185,7 @@ pub fn run_steps_acting<'s>(
 /// written mid-encoder would not be visible until the whole encoder submitted.
 #[must_use = "a refused action is reported only through the returned entries"]
 pub fn run_due<'s>(state: &mut dyn GpuSimState, ctx: &GpuContext, schedule: &'s Schedule) -> RefusedActions<'s> {
-    let mut refused = Vec::new();
-    for action in schedule.due(state.tick()) {
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("henad_gpu_action"),
-        });
-        if state.encode_action(&mut encoder, action.index) {
-            ctx.queue.submit(Some(encoder.finish()));
-        } else {
-            refused.push(action);
-        }
-    }
-    refused
+    submit_due(state, ctx, schedule, "henad_gpu_action").1
 }
 
 /// Returns the stats of the state's current tick, blocking until the GPU reads them back.
@@ -238,11 +249,11 @@ mod tests {
             u64::from(self.tick)
         }
         fn stats(&self) -> Vec<StatEntry> {
-            vec![StatEntry {
-                label: "Tick",
-                value: StatValue::Scalar(f64::from(self.readback.values()[0])),
-                color: [0; 4],
-            }]
+            vec![StatEntry::new(
+                "Tick",
+                StatValue::Scalar(f64::from(self.readback.values()[0])),
+                [0; 4],
+            )]
         }
         fn set_param(&mut self, _index: usize, _value: &ParamValue) -> bool {
             false
@@ -277,20 +288,13 @@ mod tests {
             self.readback.begin_map();
         }
         fn poll_stats_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
-            if block {
-                self.readback.poll_blocking(device)
-            } else {
-                self.readback.poll(device)
-            }
+            self.readback.poll_or_block(device, block)
         }
         fn stats_readback_pending(&self) -> bool {
             self.readback.is_pending()
         }
         fn view(&self) -> GpuSnapshot {
-            GpuSnapshot {
-                display: None,
-                agents: None,
-            }
+            GpuSnapshot::default()
         }
     }
 
@@ -298,8 +302,7 @@ mod tests {
     /// sample's values.
     #[test]
     fn a_sample_behind_an_unfinished_readback_reports_the_current_tick() {
-        let Some(ctx) = headless_context("henad_sample_stats_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_sample_behind_an_unfinished_readback_reports_the_current_tick: no adapter");
+        let Some(ctx) = headless_context("henad_sample_stats_test") else {
             return;
         };
         let mut state = TickReadback {
@@ -315,7 +318,7 @@ mod tests {
         );
         submit_steps(&mut state, &ctx, 4);
         let stats = sample_stats(&mut state, &ctx).expect("the sample lands");
-        assert_eq!(stats[0].value.scalar(), 7.0, "the sample reported the slice's tick");
+        assert_eq!(stats[0].value().scalar(), 7.0, "the sample reported the slice's tick");
         assert!(ctx.faults.take().is_none());
     }
 }

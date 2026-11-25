@@ -6,9 +6,9 @@ icon: material/crane
 
 # Architecture
 
-Henad is a workspace of eight crates, all published to crates.io at one version.
+Henad is a workspace of nine crates, all published to crates.io at one version.
 henad-core depends on no other crate, and henad-build on henad-core alone.
-Every other dependency runs from a crate to a crate drawn above it in the graph below, and a crate with WGSL or a commit stamp takes henad-build as a build dependency.
+Every other dependency runs from a crate to a crate drawn above it in the graph below, and a crate with shader bindings or a commit stamp takes henad-build as a build dependency.
 henad-models and henad-explore take no normal dependency on each other, and the two front ends reach the example models only for `example_models()`, behind their default `example-models` feature.
 The facade, `henad`, sits over all of them, and is the one crate a program depends on.
 
@@ -23,6 +23,9 @@ graph LR
   build -. "build" .-> app
   compute --> models["henad-models<br/><small>example models</small>"]
   compute --> explore["henad-explore<br/><small>sweeps, searches and the testing kit</small>"]
+  compute --> graphcrate["henad-graph<br/><small>graph models</small>"]
+  graphcrate -. "model-files" .-> explore
+  graphcrate --> app
   explore --> cli["henad-cli<br/><small>command line</small>"]
   explore --> app["henad-app<br/><small>egui UI</small>"]
   models -- "example_models()" --> cli
@@ -31,6 +34,7 @@ graph LR
   models -. "example-models" .-> facade
   cli -. "cli" .-> facade
   app -. "app" .-> facade
+  graphcrate -. "model-files" .-> facade
 ```
 
 The layers are easiest to follow from the bottom up, since each layer depends only on the layers below it.
@@ -39,14 +43,14 @@ The layers are easiest to follow from the bottom up, since each layer depends on
 With those dependencies absent, the two GPU traits describe their shaders as `&'static str` strings and their buffers as plain bytes.
 Alongside the authoring API, the crate holds the `Grid2D<T>` double-buffered grid, the counting-sort `SpatialHash`, the `Network` graph, parameter and action descriptors, the stat and view types the UI reads, and the provenance types that identify a build.
 
-**henad-build** runs from the build scripts of the crates with WGSL or a commit stamp.
+**henad-build** runs from the build scripts of the crates with shader bindings or a commit stamp.
 It composes each crate's shaders with the shared modules that henad-core holds as text, and writes the Rust bindings that `include_shaders!` brings into the crate.
 A shader imports a shared module with `#import henad::<module>`.
 Its `stamp_commit` records the commit a crate was built from, whether its sources differed from that commit, and a hash of the sources.
 
 **henad-compute** turns an authoring impl into something runnable.
-Its `cpu/` and `gpu/` halves are siblings rather than a base class and a specialisation, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.
-A file name shared across the halves always marks a counterpart, never a coincidence.
+Its `cpu/` and `gpu/` halves are siblings, and they mirror each other file by file: each half has its own runner, its own engines and its own primitives.
+A file name shared across the halves always marks a counterpart.
 Network models are the exception to the mirroring.
 They run on the CPU only, and their engine has no counterpart in `gpu/`.
 
@@ -69,13 +73,14 @@ It also acquires a headless GPU device for the command line and for any sweep th
 The parts of a sweep that need no engine, such as designs, seeds, reducers and summaries, sit in `henad_core::explore`, and so do the search methods.
 **henad-app** and **henad-cli** are the two front ends, one graphical and one headless, each a library over a host's model set with Henad's own binary on top.
 
-**henad** re-exports the other crates under one module tree, the example models, the app, the command line and the testing kit each behind a feature.
+**henad** re-exports the other crates under one module tree, the example models, the app, the command line, the testing kit, and grid rules with graph models each behind a feature.
 It defines nothing of its own.
 [The API reference](../reference/api.md) lists its modules.
 
 Two dev-dependencies run against the graph.
 henad-explore's tests run the example models, and henad-models' tests run the testing kit.
-These two are the only dev-only edges that the normal graph does not hold, and neither normal graph reaches the other.
+Neither normal graph reaches the other.
+henad-models' tests also take henad-graph, which sits beside henad-models in the graph, to run graph models and lower sheets.
 
 Two more crates sit outside the published set.
 `examples/tutorial` holds the finished code of the first-model guide, depends on the facade as a reader's crate does, and tests each tutorial model against the example model it teaches.
@@ -117,7 +122,15 @@ A network model's layout runs when a snapshot is published, outside any tick.
 A GPU model is driven differently again.
 Its runner encodes many steps into a single submission, capped at 64 steps per submission.
 The cap exists because enough passes in one command buffer trips the OS GPU watchdog, which raises no error and no panic and leaves every later readback silently reading zero.
+A model of agents whose step work depends on where its agents stand measures that work on the device after its first step, and `GpuSimState::submission_steps` then caps its submissions lower where a crowd needs it.
 An action on a GPU model goes out in its own submission.
+
+On native the app builds a model on a thread of its own, `henad-model-build`.
+The thread builds the state and its runner, and the app takes the runner on a later frame.
+Commands sent meanwhile wait in a queue for the runner.
+A teardown waits a quarter of a second for the runner to stop, then detaches a thread still running.
+The next build waits on its own thread until the detached thread ends, or for two seconds since the stop.
+A thread still running then retires the rayon pool it runs in, and the app's CPU work moves to a fresh pool at the global width.
 
 The app holds the loaded model's runner behind one enum, `SimRunner`.
 The CPU `SimThread` and the GPU `GpuSimThread` stay separate types, since the CPU runner steps a state once per loop iteration and the GPU runner encodes many steps into one submission.
@@ -148,7 +161,7 @@ Each axis is capped instead, and the display pass reads the cell at `texel * gri
 ## Failure handling
 
 wgpu treats any error that no error scope claims as fatal.
-Model construction therefore runs inside error scopes covering all three filters, and `GpuContext::new` installs an uncaptured-error handler as the floor under every path that no scope reaches, egui's own rendering included.
+Model construction therefore runs inside error scopes covering all three filters, and `GpuContext::new` installs an uncaptured-error handler as the fallback for every path that no scope reaches, egui's own rendering included.
 Error scopes are thread-local, and a scope pushed on the UI thread never sees what a sim thread does.
 The uncaptured-error handler covers that gap.
 
@@ -160,7 +173,7 @@ A parameter value written as text, through `--set`, a spec file or a design tabl
 The app's widgets cannot leave those bounds, but text reaches `init` with nothing else in the way, and a model sizes its buffers from the number it is given.
 
 A panicking kernel is caught as well.
-Both sim threads wrap the run loop in a panic catch once at thread start, outside the loop, which keeps the catch off the per-tick path.
+Both sim threads wrap the run loop in a panic catch once at thread start, outside the loop, to keep the catch off the per-tick path.
 
 ## Further reading
 

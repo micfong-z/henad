@@ -73,6 +73,9 @@ feature-depth = 1
 ignore = [
     { id = "RUSTSEC-2025-0057", reason = "fxhash, unmaintained, runs at build time only, through the wgsl_bindgen henad-build pins" },
     { id = "RUSTSEC-2024-0436", reason = "paste, unmaintained, a proc-macro dependency of egui_dock" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant, unmaintained, merged into zbus 6, reached through accesskit_unix under eframe's accesskit feature, the Linux accessibility backend" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names, unmaintained, merged into zbus 6, reached through accesskit_unix under eframe's accesskit feature, the Linux accessibility backend" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive, unmaintained, merged into zbus 6, reached through accesskit_unix under eframe's accesskit feature, the Linux accessibility backend" },
     #"RUSTSEC-0000-0000",
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish

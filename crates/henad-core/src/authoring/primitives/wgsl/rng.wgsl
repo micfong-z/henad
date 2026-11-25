@@ -2,7 +2,7 @@
 
 // Random draws, the twin of `henad_core::authoring::primitives::rng`.
 //
-// The draws over a raw word are twins, and so is `pcg_hash`. The generators differ. WGSL has no
+// The draws over a raw word are twins, and so are `pcg_hash` and `pcg4d`. The generators differ. WGSL has no
 // 64-bit integers, so this side advances with `pcg_hash` over `u32` where a CPU kernel runs
 // `xorshift64` over `u64`.
 
@@ -11,6 +11,21 @@ fn pcg_hash(input: u32) -> u32 {
     var state = input * 747796405u + 2891336453u;
     let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
     return (word >> 22u) ^ word;
+}
+
+// The twin of `rng::pcg4d`, bit for bit: the JCGT `pcg4d` hash, with every operation wrapping.
+fn pcg4d(input: vec4<u32>) -> vec4<u32> {
+    var v = input * 1664525u + 1013904223u;
+    v.x = v.x + v.y * v.w;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    v.w = v.w + v.y * v.z;
+    v = v ^ (v >> vec4<u32>(16u));
+    v.x = v.x + v.y * v.w;
+    v.y = v.y + v.z * v.x;
+    v.z = v.z + v.x * v.y;
+    v.w = v.w + v.y * v.z;
+    return v;
 }
 
 // Advances `r` with `pcg_hash` and returns the new state.

@@ -5,12 +5,14 @@ use std::collections::BTreeSet;
 
 use egui::Id;
 use egui_plot::{FilledArea, Legend, LegendGrouping, Line, Plot, PlotPoint, PlotResponse};
+use henad_core::metadata::TimeUnit;
 use web_time::Instant;
 
 use crate::ui::results::ResultsRequest;
-use crate::ui::results::plot::{MAX_PLOT_POINTS, config_color, decimate, labeled_combo, refresh_due};
+use crate::ui::results::plot::{MAX_PLOT_POINTS, cache_stale, config_color, decimate, labeled_combo};
 use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
-use crate::ui::sweep::draft::capitalize;
+use crate::ui::text::capitalize;
+use crate::ui::time_axis::{axis_label, plot_x};
 use crate::ui::{plural, show_plot};
 
 /// Maximum number of configs the view draws at once.
@@ -42,6 +44,8 @@ struct SeriesPlot {
     band: BandKind,
     show_runs: bool,
     configs: Vec<u64>,
+    /// Unit of the x axis, `None` for a model with no time scale, whose x axis counts ticks.
+    time_unit: Option<TimeUnit>,
     /// Band of each drawn config, `None` for a config with no series held.
     bands: Vec<Option<ConfigBand>>,
     /// Line of each run of the drawn configs.
@@ -52,7 +56,8 @@ struct SeriesPlot {
 #[derive(Debug)]
 struct ConfigBand {
     config_id: u64,
-    /// Band whose low and high ends the fill spans.
+    /// Band whose low and high ends the fill spans. For a model with a time scale, its ticks hold the time of each
+    /// tick in the config's runs.
     band: SeriesBand,
     /// Centre line, decimated so its spikes survive.
     center: Vec<PlotPoint>,
@@ -134,7 +139,8 @@ pub fn series_ui(
     }
 }
 
-/// Draws the bands and run lines of `plotted`, with `stat` on the y axis.
+/// Draws the bands and run lines of `plotted`, with `stat` on the y axis and the ticks or the time of the model's time
+/// scale on the x axis.
 ///
 /// `labels` holds the name of each drawn config, in the order of `plotted.configs`. The legend lists the configs in
 /// that order, one entry per config.
@@ -145,7 +151,7 @@ fn draw_plot(ui: &mut egui::Ui, plotted: &SeriesPlot, labels: &[String], stat: &
                 .follow_insertion_order(true)
                 .grouping(LegendGrouping::ById),
         )
-        .x_axis_label("Tick")
+        .x_axis_label(axis_label(plotted.time_unit))
         .y_axis_label(stat);
     show_plot(ui, plot, |plot_ui| {
         for line in &plotted.run_lines {
@@ -209,7 +215,7 @@ fn controls(ui: &mut egui::Ui, store: &ResultsStore, view: &mut SeriesView, sele
         })
         .on_hover_text(band_tooltip(view.band));
         ui.checkbox(&mut view.show_runs, "Show runs")
-            .on_hover_text("Draw every replicate as a thin line. Click one to select its run.");
+            .on_hover_text("Draw every replicate as a thin line. Click a line to select its run.");
     });
 }
 
@@ -295,16 +301,17 @@ impl SeriesView {
     /// [`REFRESH_INTERVAL`]: crate::ui::results::plot::REFRESH_INTERVAL
     fn cached_plot(&mut self, ctx: &egui::Context, store: &ResultsStore, configs: Vec<u64>) -> &SeriesPlot {
         let (stat, band, show_runs) = (self.stat, self.band, self.show_runs);
+        let time_unit = store.time_unit();
         let run_counts = run_counts(store, &configs);
         let replaced_runs = store.replaced_count();
         let stale = self.cache.as_ref().is_some_and(|cache| {
-            let settings_changed =
-                cache.stat != stat || cache.band != band || cache.show_runs != show_runs || cache.configs != configs;
+            let settings_changed = cache.stat != stat
+                || cache.band != band
+                || cache.show_runs != show_runs
+                || cache.configs != configs
+                || cache.time_unit != time_unit;
             let runs_changed = cache.run_counts != run_counts || cache.replaced_runs != replaced_runs;
-            if settings_changed || !runs_changed {
-                return settings_changed;
-            }
-            refresh_due(ctx, cache.computed_at)
+            cache_stale(ctx, settings_changed, runs_changed, cache.computed_at)
         });
         if stale {
             self.cache = None;
@@ -313,7 +320,12 @@ impl SeriesView {
             let bands = configs
                 .iter()
                 .map(|&config_id| {
-                    let band = store.band(config_id, stat, band)?;
+                    let mut band = store.band(config_id, stat, band)?;
+                    if let Some(time) = store.config_time(config_id) {
+                        for x in &mut band.ticks {
+                            *x = time.at(*x as u64);
+                        }
+                    }
                     Some(ConfigBand {
                         config_id,
                         center: center_line(&band),
@@ -334,6 +346,7 @@ impl SeriesView {
                 band,
                 show_runs,
                 configs,
+                time_unit,
                 bands,
                 run_lines,
             }
@@ -357,9 +370,12 @@ fn run_counts(store: &ResultsStore, configs: &[u64]) -> Vec<(usize, usize)> {
 }
 
 /// Returns the line of stat `stat` for every run of `configs` whose series is held, finite values only.
+///
+/// For a model with a time scale, a point sits at the time of its tick in the run's config.
 fn run_lines(store: &ResultsStore, configs: &[u64], stat: usize) -> Vec<RunLine> {
     let mut lines = Vec::new();
     for (position, &config_id) in configs.iter().enumerate() {
+        let time = store.config_time(config_id);
         for outcome in store.config_runs(config_id) {
             let Some(series) = store.series(outcome.run.run_id) else {
                 continue;
@@ -370,7 +386,7 @@ fn run_lines(store: &ResultsStore, configs: &[u64], stat: usize) -> Vec<RunLine>
             let points: Vec<[f64; 2]> = series
                 .rows()
                 .filter(|(_, row)| row[stat].is_finite())
-                .map(|(tick, row)| [tick as f64, row[stat]])
+                .map(|(tick, row)| [plot_x(tick, time), row[stat]])
                 .collect();
             let points = decimate(&points, MAX_PLOT_POINTS);
             lines.push(RunLine {
@@ -435,14 +451,17 @@ mod tests {
     use std::sync::Arc;
 
     use henad_core::explore::measure::SeriesBuffer;
-    use henad_core::explore::outcome::{RunOutcome, RunStatus, StopReason};
+    use henad_core::explore::outcome::RunOutcome;
     use henad_core::explore::plan::Plan;
     use henad_core::explore::spec::SweepSpec;
-    use henad_models::example_models;
+    use henad_core::metadata::TimeUnit;
 
     use super::{ConfigBand, SeriesPlot, SeriesView, center_line, draw_plot, thin_band};
+    use crate::state::default_values;
+    use crate::tests::support::{finished_run, sir, sir_rates};
     use crate::ui::results::plot::{MAX_PLOT_POINTS, REFRESH_INTERVAL};
     use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
+    use crate::ui::sweep::draft::SweepDraft;
 
     /// Adds the text of every text shape in `shape` to `texts`, in paint order.
     fn collect_texts(shape: &Shape, texts: &mut Vec<String>) {
@@ -478,6 +497,7 @@ mod tests {
             stat: 0,
             band: BandKind::default(),
             show_runs: false,
+            time_unit: None,
             bands: configs.iter().map(|&config_id| Some(config_band(config_id))).collect(),
             configs,
             run_lines: Vec::new(),
@@ -545,23 +565,88 @@ mod tests {
         series.push(0, &[0.0, infected, 0.0]);
         series.push(10, &[0.0, infected, 0.0]);
         RunOutcome {
-            run,
-            run_key: plan.run_key(&run),
-            status: RunStatus::Ok,
-            stop_reason: StopReason::Steps,
             ticks: 10,
             population: 256,
-            build_ms: 1.0,
             wall_ms: 2.0,
-            reducers: Vec::new(),
             series,
-            note: None,
+            ..finished_run(run, plan.run_key(&run))
         }
+    }
+
+    /// The runs of a sweep over the tick length draw at the time of each tick in their own config.
+    #[test]
+    fn a_timed_model_s_series_sits_at_the_time_of_each_tick() {
+        let entry = sir_rates();
+        let schema = entry.schema();
+        let index = entry
+            .param_descriptors()
+            .iter()
+            .position(|param| param.id() == "tick_length")
+            .expect("the fixture declares a tick length");
+        let mut draft = SweepDraft::new(&schema);
+        draft.factors[index].vary = true;
+        "0.5, 2".clone_into(&mut draft.factors[index].levels_text);
+        draft.steps = 10;
+        draft.series_every = 10;
+        let mut spec = draft
+            .to_spec(&schema, &default_values(&entry))
+            .unwrap_or_else(|issues| panic!("the draft does not plan: {issues:?}"));
+        spec.measure.stats_every = 10;
+        let plan = Arc::new(spec.plan(&schema).expect("a valid spec"));
+        let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &entry, None, usize::MAX);
+        store.set_columns(&["Susceptible", "Infected", "Recovered"].map(str::to_owned), &[]);
+        store.push_run(run(&plan, 0, 2.0), false);
+        store.push_run(run(&plan, 1, 4.0), false);
+        assert_eq!(store.time_unit(), Some(TimeUnit::Day));
+
+        let mut view = SeriesView {
+            stat: 1,
+            show_runs: true,
+            ..SeriesView::default()
+        };
+        let plotted = view.cached_plot(&egui::Context::default(), &store, vec![0, 1]);
+        assert_eq!(plotted.time_unit, Some(TimeUnit::Day));
+        let mut ends = Vec::new();
+        for (position, config_id) in [0, 1].into_iter().enumerate() {
+            let length = store.config_time(config_id).expect("a timed config").tick_length;
+            let ticks = &plotted.bands[position].as_ref().expect("a band").band.ticks;
+            assert_eq!(ticks, &[0.0, 10.0 * f64::from(length)], "config {config_id}");
+            let line = plotted
+                .run_lines
+                .iter()
+                .find(|line| line.position == position)
+                .expect("a run line");
+            assert_eq!(line.points.last().map(|point| point.x), Some(10.0 * f64::from(length)));
+            ends.push(10.0 * f64::from(length));
+        }
+        ends.sort_by(f64::total_cmp);
+        assert_eq!(ends, [5.0, 20.0], "the two tick lengths");
+        let labels = ["Configuration 0".to_owned(), "Configuration 1".to_owned()];
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
+            ..egui::RawInput::default()
+        };
+        let context = egui::Context::default();
+        let output = context.run_ui(input, |ui| {
+            draw_plot(ui, plotted, &labels, "Infected");
+        });
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            collect_texts(&clipped.shape, &mut texts);
+        }
+        output.drop_without_applying_deltas();
+        assert!(texts.iter().any(|text| text == "Day"), "{texts:?}");
+        assert!(!texts.iter().any(|text| text == "Tick"), "{texts:?}");
+
+        let untimed = sir();
+        let untimed_plan = Arc::new(SweepSpec::new("sir").plan(&untimed.schema()).expect("a valid spec"));
+        let store = ResultsStore::for_sweep(untimed_plan, &untimed, None, usize::MAX);
+        assert_eq!((store.time_unit(), store.config_time(0)), (None, None));
     }
 
     #[test]
     fn a_rerun_that_replaces_a_run_refreshes_its_band() {
-        let sir = example_models().get("sir").cloned().expect("SIR is registered");
+        let sir = sir();
         let mut spec = SweepSpec::new("sir");
         spec.run.steps = 10;
         spec.run.replicates = 2;

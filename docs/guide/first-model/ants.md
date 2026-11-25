@@ -6,14 +6,14 @@ icon: material/bug-outline
 
 # Writing a CPU agent model
 
-In this tutorial we'll build the Ant Foraging model on the CPU from scratch, which automatically uses all available cores.
+In this tutorial we'll build the Ant Foraging model on the CPU from scratch, and it will automatically use all available cores.
 This is classified as an **agent model** (as opposed to a **grid model**).
 
 !!! info "Henad 0.3"
 
     This page describes Henad 0.3.
 
-This page assumes you have worked through our [CPU Grid Model](game-of-life.md) tutorial first.
+This page assumes you have worked through our [CPU Grid model](game-of-life.md) tutorial first.
 Every file on this page goes under `src/` in the same project, made from the template as [Your own project](../your-project.md) describes.
 
 ## What is Ant Foraging?
@@ -36,18 +36,18 @@ In a certain sense, the ants are finding the shortest path between the nest and 
 
 !!! info
 
-    This model is a ported version of krABMga's [Ant Foraging](https://krabmaga.github.io/antsforaging/) model.
+    This model is a ported version of krABMaga's [Ant Foraging](https://krabmaga.github.io/antsforaging/) model.
 
 ## Moving from cells to agents
 
-Assuming that you just built a [CPU Grid Model](game-of-life.md), here's a quick comparison of the two types of models.
+Assuming that you just built a [CPU Grid model](game-of-life.md), here's a quick comparison of the two types of models.
 
 |                   | Grid model                           | Agent model                                    |
 | ----------------- | ------------------------------------ | ---------------------------------------------- |
 | State             | one `u8` per cell of a fixed lattice | one `Vec` per attribute, called a **lane**     |
 | Transition        | `step_cell`, called once per cell    | a closure, called once per agent               |
 | Neighbours        | Moore or von Neumann                 | optional `SpatialHash::query_radius`           |
-| Additional Layers | —                                    | an optional [field](../../authoring/fields.md) |
+| Additional layers | —                                    | an optional [field](../../authoring/fields.md) |
 | Counting          | a pass over the grid in `stats`      | a per-chunk tally, merged as you go            |
 
 Let's set up.
@@ -64,13 +64,13 @@ The module is `pub` because the [GPU port](gpu-ants.md) imports the field's item
 Let's start by declaring the states (or attributes) that each ant needs to remember.
 
 Agent states are stored in struct-of-arrays, i.e. one `Vec` per attribute, rather than one `Vec` of structs.
-This layout means that the engine can process one attribute at a time, which is cache-friendly and allows the engine to parallelise over chunks of agents.
+This layout means that the engine can process one attribute at a time.
+That is cache-friendly, and allows the engine to parallelise over chunks of agents.
 Each array is called a **lane** in Henad.
 
-To make lives a bit easier, there's a `agent_lanes!` macro that generates it from a declaration, along with some configuration flags.
+To make lives a bit easier, there's an `agent_lanes!` macro that generates it from a declaration, along with some configuration flags.
 
-So what does an ant need to remember?
-It needs its position, the direction it last moved in, whether it is carrying food, and how much reward it has left to deposit.
+An ant needs to remember its position, the direction it last moved in, whether it is carrying food, and how much reward it has left to deposit.
 We can declare this in lane form as follows:
 
 ``` { .rust .annotate title="src/foraging/mod.rs" }
@@ -110,9 +110,10 @@ Marking it `dual` instead makes the lane double buffered under two names, which 
 See the Boids model for an example of a `dual` lane in action.
 
 Ants declares every lane `plain`, because no ant ever reads another ant's slot.
-Buffering is decided per lane rather than per model, so a model that writes everywhere in place pays nothing for a feature it never touches.
+Buffering is decided per lane rather than per model, so a model that writes everywhere in place pays nothing for double buffering.
 
-We have designated `color` to be `has_food`, which means that the engine will render the ants in the colour specified by the following palette, indexed by the `has_food` lane.
+We have designated `color` to be `has_food`.
+The engine will render the ants in the colour specified by the following palette, indexed by the `has_food` lane.
 
 ``` rust title="src/foraging/mod.rs"
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -192,7 +193,6 @@ impl ScalarFieldSpec for PheromoneField {
 
 Let's look at `COMBINE` more closely.
 All combiners have to be commutative and associative, because otherwise the result would depend on which core arrived at a cell first.
-Such a race condition should generally be avoided.
 
 Henad provides 2 combiners, `Max` and `SumFixed`.
 
@@ -348,7 +348,7 @@ impl AgentModel for ForagingModel {}
 This won't compile yet.
 We'll fill in that empty `impl` over the rest of this tutorial.
 
-### Identity and Metadata
+### Identity and metadata
 
 ``` { .rust .annotate title="src/foraging/mod.rs" }
 impl AgentModel for ForagingModel {
@@ -401,7 +401,8 @@ pub const STAT_PALETTE: [[u8; 4]; 3] = [
 
 #### Deciding on `CHUNK`
 
-We set `CHUNK` to 4096 here against a default of 512, and before changing a value like this it helps to understand that the const does two jobs at once.
+We set `CHUNK` to 4096 here against a default of 512.
+The const does two jobs at once.
 It sets the granularity of random number seeding, and it is also the unit of parallel work.
 
 If the value is too large, there are not enough chunks to fill every core: at 4096, fifty thousand boids produced just 13 chunks and paid 20% for it.
@@ -438,7 +439,8 @@ parameters for foraging (Ant Foraging):
 ```
 
 The highlighted lines are the ones the engine prepends and the one the field contributes.
-Each layer receives its own slice of the list, numbered from zero within that slice, which is why `REWARD` is parameter 1 inside the model and parameter 4 to the outside world.
+Each layer receives its own slice of the list, numbered from zero within that slice.
+`REWARD` is parameter 1 inside the model and parameter 4 to the outside world.
 
 #### Hot parameters
 
@@ -616,9 +618,9 @@ fn advect_agent(
 ```
 
 1. See rule 3.
-2. The count starts at 2, which gives the first neighbour visited twice the odds of every other neighbour. This reproduces an off-by-one quirk in the reference implementation (from krABMga) on purpose.
+2. The count starts at 2, which gives the first neighbour visited twice the odds of every other neighbour. This reproduces an off-by-one quirk in the reference implementation (from krABMaga) on purpose.
 3. `dx` iterates on the outside and `dy` on the inside. Because ties are broken by a draw, the visit order shapes the result, and this ordering will be a feature of our model.
-4. A strictly better neighbour wins outright, and equal strengths go to a reservoir draw. `reservoir_accept(bits, k)` accepts the `k`-th candidate of a run with probability `1/k`, spreading the choice evenly across however many neighbours tied. This matters because early in a run the whole grid reads zero, every direction ties, and a positional tie-break there would march the entire colony off together.
+4. A strictly better neighbour wins outright, and equal strengths go to a reservoir draw. `reservoir_accept(bits, k)` accepts the `k`-th candidate of a run with probability `1/k`, spreading the choice evenly across however many neighbours tied. Early in a run the whole grid reads zero, every direction ties, and a positional tie-break there would march the entire colony off together.
 5. This branch handles a lost ant. With no pheromone anywhere in reach, the ant most likely repeats its last step.
 6. Otherwise there is a small chance of ignoring the trail altogether. Without that escape hatch a colony settles into the first route it finds and stops looking for better ones.
 7. Two draws need two separate `next_bits` calls, because feeding one word to both would correlate the axes.
@@ -659,7 +661,7 @@ struct AntMove {
 
 ##### Running it over the population
 
-The `run_pass` method, generated for us by `agent_lanes!`, handles most nuances of parallelism and random number seeding.
+The `run_pass` method, generated for us by `agent_lanes!`, handles most of the parallelism and random number seeding.
 
 ``` { .rust .annotate title="src/foraging/mod.rs" }
 fn advect(lanes: &mut AntLanes, ctx: &StepCtx<'_, ForagingModel>, seed: u64, tick: u64) -> u64 {
@@ -702,7 +704,7 @@ That leaves `ctx`, which bundles everything an agent kernel reads beyond its own
 
 Now that movement is settled, we can circle back to the pass that actually runs first.
 An ant lays pheromone where it currently stands, before anything has moved, and every other ant has to see the same field while that happens.
-Running the deposits as a separate pass keeps that guarantee intact.
+Running the deposits as a separate pass guarantees that every ant sees the same field.
 
 Rule 2 governs how much pheromone to lay, and it is subtler than it first sounds.
 
@@ -730,8 +732,7 @@ fn deposit_value(x: i32, y: i32, reward: f32, field: &[f32], p: &AntParams) -> f
 2. At an edge, `Boundary::Bounded` returns `None` instead of wrapping. If we swapped in `Boundary::Torus`, the same call would wrap around the world.
 3. Diagonal neighbours sit further away, so they take the steeper cut. Recall that `p.diagonal` holds `cutdown` raised to √2, computed once per tick back in `from_params`.
 
-In other words, an ant never lays its reward flat.
-It gathers the strongest pheromone within reach, cuts that down by distance, adds its own reward, and deposits the total.
+An ant gathers the strongest pheromone within reach, cuts that down by distance, adds its own reward, and deposits the total.
 
 The pass itself fills three lanes, in which each agent identifies one cell and stores one value per field.
 
@@ -771,7 +772,7 @@ fn deposit(lanes: &AntLanes, deposits: &mut Deposits, ctx: &StepCtx<'_, Foraging
 }
 ```
 
-1. This makes two mutable borrows out of one `Vec<Vec<f32>>`. Nothing clever is going on, only the split that keeps the borrow checker content.
+1. This makes two mutable borrows out of one `Vec<Vec<f32>>`, a plain split that keeps the borrow checker content.
 2. This is where the ant's deposit will land. Each agent identifies one cell, and any number of agents can identify the same cell.
 3. Since everything passes through `Max`, `0.0` acts as the identity.
 
@@ -872,13 +873,17 @@ then insert our model next to the other models in `models()`:
     cargo run --release --bin my-model-cli -- foraging --steps 1000 --reps 3
     ```
 
-    To scale up, it is likely a good idea to keep the world area proportional to the agent count, so that density stays constant:
+    To scale up, keep the world area proportional to the agent count, so that density stays constant:
 
     ``` bash
     cargo run --release --bin my-model-cli -- foraging \
       --set num_agents=1000000 --set world_width=4472 --set world_height=4472 \
       --steps 1000
     ```
+
+    A run this size measures speed alone.
+    The trails reach about 300 cells at the defaults, and no ant brings food home across a world of 4,472.
+    [Larger worlds](../../reference/models.md#larger-worlds) lists the settings that make a large world forage.
 
 === "Browser"
 

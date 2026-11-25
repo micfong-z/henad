@@ -1,0 +1,335 @@
+{
+  "format": "henad-explore",
+  "format_version": 1,
+  "mode": "sweep",
+  "status": "complete",
+  "engine": {
+    "name": "henad",
+    "version": "0.3.0",
+    "commit": "",
+    "commit_date": "",
+    "dirty": null,
+    "source_hash": "331f2d37154b95f5",
+    "debug_build": false,
+    "type_path": null,
+    "crate_hashes": {
+      "henad-compute": "d94d5586924f4fae",
+      "henad-explore": "78b91e853954b22c"
+    },
+    "crate_versions": {
+      "henad-build": "0.3.0",
+      "henad-compute": "0.3.0",
+      "henad-core": "0.3.0",
+      "henad-explore": "0.3.0"
+    }
+  },
+  "model": {
+    "id": "sir",
+    "name": "SIR Epidemic",
+    "backend": "cpu",
+    "schema_hash": "6ff1dc3971fd0a96",
+    "schema": {
+      "actions": [
+        {
+          "id": "seed_outbreak",
+          "index": 0,
+          "label": "Seed outbreak"
+        }
+      ],
+      "backend": "cpu",
+      "model": "sir",
+      "name": "SIR Epidemic",
+      "params": [
+        {
+          "apply": "reload",
+          "default": 1024,
+          "format": "plain",
+          "id": "grid_width",
+          "index": 0,
+          "kind": "u32",
+          "label": "Grid Width",
+          "max": 10000,
+          "min": 1
+        },
+        {
+          "apply": "reload",
+          "default": 1024,
+          "format": "plain",
+          "id": "grid_height",
+          "index": 1,
+          "kind": "u32",
+          "label": "Grid Height",
+          "max": 10000,
+          "min": 1
+        },
+        {
+          "apply": "live",
+          "default": 0.3,
+          "format": "plain",
+          "id": "infection_rate",
+          "index": 2,
+          "kind": "f32",
+          "label": "Infection Rate",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.01
+        },
+        {
+          "apply": "live",
+          "default": 0.05,
+          "format": "plain",
+          "id": "recovery_rate",
+          "index": 3,
+          "kind": "f32",
+          "label": "Recovery Rate",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.01
+        },
+        {
+          "apply": "reload",
+          "default": 0.01,
+          "format": "percent",
+          "id": "initial_infected_pct",
+          "index": 4,
+          "kind": "f32",
+          "label": "Initial Infected",
+          "max": 1.0,
+          "min": 0.0,
+          "step": 0.001
+        }
+      ],
+      "schema_hash": "6ff1dc3971fd0a96",
+      "schema_version": 1,
+      "seed": {
+        "type": "u64"
+      },
+      "stat_columns": [
+        "Susceptible",
+        "Infected",
+        "Recovered"
+      ],
+      "stats": [
+        {
+          "color": [
+            0,
+            122,
+            245,
+            255
+          ],
+          "label": "Susceptible"
+        },
+        {
+          "color": [
+            228,
+            55,
+            72,
+            255
+          ],
+          "label": "Infected"
+        },
+        {
+          "color": [
+            128,
+            128,
+            128,
+            255
+          ],
+          "label": "Recovered"
+        }
+      ]
+    },
+    "replays_exactly": true
+  },
+  "spec": {
+    "block": [
+      {
+        "design": "factorial",
+        "factors": [
+          {
+            "param": "infection_rate",
+            "values": [
+              0.2,
+              0.4
+            ]
+          }
+        ]
+      }
+    ],
+    "measure": {
+      "default_reducers": true,
+      "series_every": 5,
+      "stats_every": 5
+    },
+    "model": "sir",
+    "run": {
+      "replicates": 1,
+      "steps": 10,
+      "warmup": 0
+    },
+    "seeds": {
+      "root": 7,
+      "scheme": "common"
+    },
+    "set": {
+      "grid_height": 16,
+      "grid_width": 16
+    }
+  },
+  "spec_source": {
+    "path": null,
+    "toml": null,
+    "tables": []
+  },
+  "argv": [
+    "/tmp/henad-s2-be338ec-target/release/henad-cli",
+    "sir",
+    "--set",
+    "grid_width=16",
+    "--set",
+    "grid_height=16",
+    "--vary",
+    "infection_rate=0.2,0.4",
+    "--reps",
+    "1",
+    "--steps",
+    "10",
+    "--stats-every",
+    "5",
+    "--seed",
+    "7",
+    "--out",
+    "crates/henad-explore/tests/fixtures/series-be338ec"
+  ],
+  "plan": {
+    "plan_hash": "8a7e64273832847d",
+    "results_fingerprint": "3528d1b240c090ba",
+    "configs": 2,
+    "replicates": 1,
+    "runs": 2,
+    "blocks": [
+      {
+        "design": "factorial",
+        "configs": 2,
+        "design_seed": null
+      }
+    ]
+  },
+  "seeds": {
+    "root": 7,
+    "scheme": "common",
+    "formula": "mix_seed(mix_seed(root ^ SWEEP_SALT) + rep)"
+  },
+  "columns": {
+    "stats": [
+      "Susceptible",
+      "Infected",
+      "Recovered"
+    ],
+    "reducers": [
+      "Susceptible:final",
+      "Susceptible:min",
+      "Susceptible:max",
+      "Susceptible:mean",
+      "Infected:final",
+      "Infected:min",
+      "Infected:max",
+      "Infected:mean",
+      "Recovered:final",
+      "Recovered:min",
+      "Recovered:max",
+      "Recovered:mean"
+    ]
+  },
+  "shard": {
+    "index": 0,
+    "count": 1
+  },
+  "execution": {
+    "backend": "cpu",
+    "concurrency": "auto",
+    "cpu_lanes": 2,
+    "threads_per_lane": 1,
+    "gpu_tracks": 0,
+    "projected_bytes": 1024,
+    "memory_budget": null,
+    "gpu_memory_budget": null
+  },
+  "runtime": {
+    "os": "macos",
+    "arch": "aarch64",
+    "logical_cpus": 14,
+    "worker_threads": 14,
+    "adapter": null,
+    "adapter_backend": null,
+    "adapter_type": null,
+    "driver": null,
+    "limits": null
+  },
+  "timestamps": {
+    "started_unix_ms": 1794043958407,
+    "started": "2026-11-07T09:32:38.407Z",
+    "finished_unix_ms": 1794043958414,
+    "finished": "2026-11-07T09:32:38.414Z"
+  },
+  "sessions": [
+    {
+      "started": "2026-11-07T09:32:38.407Z",
+      "commit": "",
+      "skipped": 0,
+      "ran": 2,
+      "engine": {
+        "name": "henad",
+        "version": "0.3.0",
+        "commit": "",
+        "commit_date": "",
+        "dirty": null,
+        "source_hash": "331f2d37154b95f5",
+        "debug_build": false,
+        "type_path": null,
+        "crate_hashes": {
+          "henad-compute": "d94d5586924f4fae",
+          "henad-explore": "78b91e853954b22c"
+        },
+        "crate_versions": {
+          "henad-build": "0.3.0",
+          "henad-compute": "0.3.0",
+          "henad-core": "0.3.0",
+          "henad-explore": "0.3.0"
+        }
+      },
+      "host": {
+        "name": "henad-cli",
+        "version": "0.3.0",
+        "commit": "",
+        "commit_date": "",
+        "dirty": null,
+        "source_hash": "d02dcc80fbd27409",
+        "debug_build": false,
+        "type_path": null,
+        "crate_hashes": {},
+        "crate_versions": {}
+      },
+      "model_source": {
+        "name": "henad-models",
+        "version": "0.3.0",
+        "commit": "",
+        "commit_date": "",
+        "dirty": null,
+        "source_hash": "9888edc19117effd",
+        "debug_build": false,
+        "type_path": "henad_models::sir::SirGridModel",
+        "crate_hashes": {},
+        "crate_versions": {}
+      }
+    }
+  ],
+  "results": {
+    "rows": 2,
+    "ok": 2,
+    "non_finite": 0,
+    "failed": 0
+  },
+  "merged_shards": null,
+  "search": null
+}

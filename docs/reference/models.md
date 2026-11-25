@@ -29,7 +29,7 @@ cargo run -p henad-cli -- --list
 | `gpu_ants` | Ant Foraging (GPU) | Agents over a field | GPU |
 
 The four GPU entries appear only when wgpu finds an adapter with compute support.
-Each GPU port starts from its CPU counterpart's tick 0 bit for bit, which makes a comparison between the two backends fair.
+Each GPU port starts from its CPU counterpart's tick 0 bit for bit, for a fair comparison between the two backends.
 
 ## Parameters
 
@@ -64,7 +64,7 @@ The `randomise` action refills the grid at the `density` that the model was buil
 
 ### SIR Epidemic
 
-The classic SIR compartmental model on a 2D grid with a Moore neighbourhood.
+The SIR compartmental model on a 2D grid with a Moore neighbourhood.
 
 | Id | Kind | Default | Range |
 |---|---|---|---|
@@ -113,6 +113,56 @@ Ants deposit into a scalar field that decays each tick, then steer by the values
 | `evaporation` | f32 | 0.999 | 0.9 to 1 |
 
 The `reset_colony` action clears both pheromone trails and puts every ant back on the nest.
+
+#### Larger worlds
+
+The model keeps the constants of the reference it was ported from, krABMaga's `antsforaging`, and they set its scale in cells.
+At the default parameters the colony brings food home steadily in worlds up to about 250 cells across.
+Past about 300 only an ant that wanders back within reach of the trail home delivers, and in a world of 700 or more none delivers by tick 12,000, even among 5,000,000 ants.
+
+An ant senses only the eight cells around it, and the nest and the food source are single cells, 0.75 of the world apart on each axis.
+A trail is the only signal that reaches further.
+It spreads one cell per deposit, cut by `update_cutdown` for each row or column step and by `update_cutdown` to the power √2 for each diagonal one.
+It fades by `evaporation` each tick, and a value below 10⁻¹⁴ counts as zero.
+A trail laid with strength `reward` reaches ln(`reward` / 10⁻¹⁴) / −ln(`update_cutdown`) cells along a row: 306 at the defaults, or 216 diagonal steps.
+The trail home starts from the reward every ant holds at tick 0, and only a delivery renews it.
+Until the first delivery its reach shrinks by ln(`evaporation`) / ln(`update_cutdown`) cells a tick, one cell every 105 ticks at the defaults.
+
+Once the trail home stops short of the food, an ant that picks up food cannot sense the way back.
+With no trail around it, an ant keeps its heading with probability `momentum`, and otherwise steps to a neighbour drawn by the reference's tie-break.
+The tie-break favours the neighbour up and to the left.
+That walk carries searching ants towards the food at about one cell every nine ticks on each axis, and carries ants holding food past it into the corner, where they stay.
+The first ant also reaches the food later as the world grows.
+More ants find the food sooner, and the trail reaches no further.
+
+The table shows 2,000 ants over 20,000 ticks of `gpu_ants`, with each event at the first sample (one every 500 ticks) that shows it.
+The CPU model meets the same thresholds.
+
+| World | First ant carrying food | First delivery | Deliveries |
+|---|---|---|---|
+| 200 | 1,000 | 1,500 | 72,182 |
+| 250 | 1,500 | 2,000 | 55,812 |
+| 300 | 1,500 | 2,500 | 1,693 |
+| 350 | 2,000 | 3,000 | 8 |
+| 400 | 3,000 | none | 0 |
+| 1,000 | 10,500 | none | 0 |
+| 2,000 | none | none | 0 |
+
+A larger world forages with longer trails and straighter walks.
+
+- `update_cutdown` = 0.99 lengthens a trail to 3,207 cells.
+- `evaporation` = 1 keeps the trail home at full length while the colony searches.
+  At 0.999 and the default `momentum`, a world of 2,000 still delivers nothing, as the trail home has shrunk by tick 23,000, when the first ant reaches the food.
+- `momentum` = 0.99 sends ants with no trail on long straight runs, and the first ant reaches the food sooner.
+
+With all three, 2,000 ants deliver food from tick 4,000 in a world of 1,000, and from tick 11,750 in a world of 2,000.
+5,000,000 ants in a world of 2,000 deliver from tick 6,500 and make 3.7 million deliveries by tick 15,000.
+With `update_cutdown` = 0.99 alone, 5,000,000 ants in a world of 1,000 make 4.6 million deliveries by tick 14,000.
+A trail has to reach about 1.1 times the world's side.
+The nest and the food lie 1.06 sides apart along the diagonal, and the obstacles lengthen the path.
+Past a world of about 2,900 that takes an `update_cutdown` above 0.99, and the app's slider snaps to steps of 0.01.
+`--set` takes any value in range: `--set update_cutdown=0.995` reaches 6,431 cells, and 0.998 reaches 16,102, more than the largest world needs.
+At 0.995 with the other two settings, 2,000 ants in a world of 4,000 first reach the food at tick 30,000 and deliver from tick 35,000.
 
 ### Virus on a Network
 
@@ -218,9 +268,11 @@ The model differs from the NetLogo version in these ways.
 `--set` accepts a parameter id and a value, and can be given more than once.
 
 ```bash
-cargo run --release -p henad-cli -- ants \
+cargo run --release -p henad-cli -- boids \
   --set num_agents=1000000 --set world_width=4472 --set world_height=4472 \
   --steps 1000
 ```
 
-Keep the world area proportional to the agent count and the density holds constant, which leaves two runs at different scales comparable.
+Keep the world area proportional to the agent count and the density holds constant.
+Two runs at different scales are then comparable.
+Ant Foraging is the exception: its trails reach a fixed number of cells, and at constant density a large world times a colony that never brings food home (see [Larger worlds](#larger-worlds)).

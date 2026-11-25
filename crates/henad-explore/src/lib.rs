@@ -8,7 +8,8 @@
 //! A sweep writes `manifest.json`, `runs.csv`, `series.csv` and `summary.csv` to a folder or to memory, and a search
 //! writes its own tables beside them. [`merge::merge`] joins the folders of a sweep's shards, and
 //! [`result_set::ResultSet`] reads a folder back. `benchmark` times a model's step loop, and `testing` holds the
-//! checks that a model's tests run against its entry.
+//! checks that a model's tests run against its entry. `model_file` reads and writes the model files that hold grid
+//! rules, graph models and sheets.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
@@ -24,6 +25,9 @@ pub mod device;
 pub mod exec;
 pub mod handle;
 pub mod merge;
+#[cfg(feature = "model-files")]
+#[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
+pub mod model_file;
 pub mod output;
 pub mod probe;
 pub mod progress;
@@ -44,8 +48,8 @@ use henad_core::provenance::BuildInfo;
 
 /// Henad's own build, stamped by henad-explore's build script over the engine's crates.
 ///
-/// In Henad's checkout the source hash covers henad-core, henad-build, henad-compute and henad-explore with the
-/// workspace's lockfile. In a package it covers henad-explore alone.
+/// In Henad's checkout the source hash covers henad-core, henad-build, henad-compute, henad-graph and henad-explore
+/// with the workspace's lockfile. In a package it covers henad-explore alone.
 pub const ENGINE_BUILD: BuildInfo = henad_core::build_info!();
 
 /// Hash of henad-explore's own `src` and manifest as 16 hexadecimal digits, empty without a stamp.

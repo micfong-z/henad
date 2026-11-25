@@ -1,0 +1,105 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "repeat_roll"
+name = "Repeat roll"
+purpose = "Two Becomes inside a Repeat that test one roll each time round: below 0.5 gives A, and otherwise B."
+next_line = 5
+
+[world]
+made_of = "agents"
+width = 1000
+height = 1000
+edges = "wrap"
+
+[[agents]]
+id = "walker"
+name = "Walker"
+count = 200000
+max_count = 200000
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "anywhere"
+key = 11
+
+[[agents.property]]
+id = "status"
+name = "Status"
+type = "states"
+states = [
+  { id = "s", name = "S", color = "#E8E8F0" },
+  { id = "a", name = "A", color = "#3DD58C" },
+  { id = "b", name = "B", color = "#E43748" },
+]
+
+[agents.property.starts_as]
+rule = "value"
+value = { state = "s" }
+
+[[measure]]
+id = "in_a"
+name = "In A"
+color = "#3DD58C"
+rule = "count_in_state"
+over = "walker"
+property = "status"
+state = "a"
+
+[[measure]]
+id = "in_b"
+name = "In B"
+color = "#E43748"
+rule = "count_in_state"
+over = "walker"
+property = "status"
+state = "b"
+
+[[card]]
+id = "walker_tick"
+every = "walker"
+runs = "each_tick"
+lines = ["l1"]
+
+[card.line.l1]
+kind = "repeat"
+times = 4
+lines = ["l2", "l3", "l4"]
+
+[card.line.l2]
+kind = "random_number"
+name = "Roll"
+key = 201
+low = 0
+high = 1
+
+[card.line.l3]
+kind = "become"
+property = "status"
+new_state = "a"
+start_state = "s"
+
+[card.line.l3.condition]
+kind = "compare"
+test = "less_than"
+left = { result = "l2" }
+right = 0.5
+
+[card.line.l4]
+kind = "become"
+property = "status"
+new_state = "b"
+start_state = "s"
+
+[card.line.l4.condition]
+kind = "compare"
+test = "at_least"
+left = { result = "l2" }
+right = 0.5

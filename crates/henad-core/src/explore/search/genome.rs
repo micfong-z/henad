@@ -200,6 +200,9 @@ impl SearchSpace {
                     u64::from(continuous_value(min, max, gene.clamp(0.0, 1.0)).to_bits())
                 }
                 &FactorDomain::WholeNumbers { min, max } => level_index(gene, u128::from(max - min) + 1) as u64,
+                &FactorDomain::IntegerF32 { min, max } => {
+                    level_index(gene, u128::from(FactorDomain::integer_span(min, max)) + 1) as u64
+                }
                 FactorDomain::Levels(levels) => level_index(gene, levels.len() as u128) as u64,
             })
             .collect();
@@ -214,6 +217,10 @@ fn level(factor: &Factor, gene: f64) -> FactorLevel {
         &FactorDomain::WholeNumbers { min, max } => {
             let offset = level_index(gene, u128::from(max - min) + 1) as u64;
             whole_number_level(factor.slot, min + offset)
+        }
+        &FactorDomain::IntegerF32 { min, max } => {
+            let offset = level_index(gene, u128::from(FactorDomain::integer_span(min, max)) + 1) as u64;
+            FactorDomain::integer_f32_level(min, offset)
         }
         FactorDomain::Levels(levels) => levels[level_index(gene, levels.len() as u128) as usize].clone(),
     }
@@ -296,7 +303,7 @@ mod tests {
     use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot, FactorSpec, FactorTarget, LevelSpec};
     use crate::explore::plan::Config;
     use crate::explore::spec::ActionSpec;
-    use crate::explore::value::check_value;
+    use crate::explore::value::{check_param, check_value};
     use crate::helpers::{choice_param, f32_param, u32_param};
     use crate::params::{ParamDescriptor, ParamValue};
 
@@ -356,9 +363,9 @@ mod tests {
             let config = space.decode(genome, &base());
             for (descriptor, value) in params.iter().zip(&config.params) {
                 assert!(
-                    check_value(&descriptor.kind, value).is_ok(),
+                    check_value(descriptor.kind(), value).is_ok(),
                     "{value:?} for {}",
-                    descriptor.id
+                    descriptor.id()
                 );
             }
             let ParamValue::F32(rate) = config.params[0] else {
@@ -557,5 +564,41 @@ mod tests {
             Some(2),
             "zero is one level"
         );
+    }
+
+    /// A search over a parameter marked integer decodes, mutates and keys whole numbers alone, and reaches every one
+    /// of them.
+    #[test]
+    fn an_integer_parameter_decodes_to_whole_numbers() {
+        let offset = f32_param("offset", "Offset", 0.0, -3.0, 3.0, Some(1.0)).integer();
+        let space = SearchSpace::resolve(
+            &[FactorSpec::param("offset", range(-3.0, 3.0))],
+            std::slice::from_ref(&offset),
+            &[],
+            &[],
+        )
+        .expect("a valid space");
+        assert_eq!(space.factors()[0].domain, FactorDomain::IntegerF32 { min: -3, max: 3 });
+        let base = Config {
+            block: 0,
+            params: vec![ParamValue::F32(0.0)],
+            action_ticks: Vec::new(),
+        };
+        let mut rng = DesignRng::new(9);
+        let mut reached = BTreeSet::new();
+        for _ in 0..2000 {
+            let genome = space.mutate(&space.random_genome(&mut rng), &mut rng, 1.0, 0.3);
+            let config = space.decode(&genome, &base);
+            let ParamValue::F32(value) = config.params[0] else {
+                panic!("offset is an f32");
+            };
+            assert_eq!(value.fract(), 0.0, "{value}");
+            assert!(check_param(&offset, &config.params[0]).is_ok(), "{value}");
+            reached.insert(value as i32);
+        }
+        assert_eq!(reached, (-3..=3).collect(), "every whole number is reachable");
+        let key = |gene: f64| space.config_key(&genome(&[gene]));
+        assert_eq!(key(0.0), key(0.1), "two genes of one whole number share a key");
+        assert_ne!(key(0.0), key(0.2));
     }
 }

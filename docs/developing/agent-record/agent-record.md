@@ -19,4 +19,8 @@ The records of issue #48 cite the maintainer's unpublished design and audit docu
 A bracketed section number such as `[7.1]`, a question number such as `Q4` and an id such as `R-048` point into those documents, and nothing on this site resolves them.
 The release checklist that those records cite as `[5.5]` is published as [Releasing](../releasing.md).
 
+The records of issue #37's editor redesign, from #71 on, cite the maintainer's unpublished redesign plan, gate and study rounds in the same way.
+A milestone such as `S16a`, a plan section and a round point into those documents.
+A decision id such as `D54` is copied with its wording into the record's "Decisions adopted for review" table, and other ids such as `C5`, `R2` or `X1` resolve nowhere on this site.
+
 See [AI usage](../contributing.md#ai-usage) for AI usage suggestions for Henad development.

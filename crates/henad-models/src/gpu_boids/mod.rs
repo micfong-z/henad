@@ -16,7 +16,8 @@ use henad_core::helpers::{extract_f32, extract_u32};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::boids::{BoidLanes, BoidsModel, HEADING_PALETTE};
+use crate::boids::{BoidLanes, BoidParams, BoidsModel, HEADING_PALETTE};
+use crate::port::{interleave, pack_palette, packed_color};
 use crate::shader_bindings::gpu_boids::randomise_headings::Params as ActionParams;
 use crate::shader_bindings::gpu_boids::reduce::Params as ReduceParams;
 use crate::shader_bindings::gpu_boids::step::Params as StepParams;
@@ -112,7 +113,7 @@ impl GpuAgentModel for GpuBoids {
         BoidsModel::init(&mut lanes, geom.extent, split_params::<BoidsModel>(params).0, &mut rng);
 
         // The CPU lane holds palette indices. The GPU draws this buffer directly, and it holds colours.
-        let colors: Vec<u32> = lanes.color.iter().map(|&c| packed_palette_color(c)).collect();
+        let colors: Vec<u32> = lanes.color.iter().map(|&c| packed_color(&HEADING_PALETTE, c)).collect();
         vec![
             bytemuck::cast_slice(&interleave(&lanes.pos_x, &lanes.pos_y)).to_vec(),
             bytemuck::cast_slice(&interleave(&lanes.vel_x, &lanes.vel_y)).to_vec(),
@@ -121,60 +122,59 @@ impl GpuAgentModel for GpuBoids {
     }
 
     fn index_cell_size(params: &[ParamValue]) -> f32 {
-        BoidsModel::index_cell_size(&BoidsModel::from_params(
-            split_params::<BoidsModel>(params).0,
-            Self::dims(params).1,
-        ))
+        BoidsModel::index_cell_size(&hot_params(params))
     }
 
     fn pass_params_bytes(pass: PassId, ctx: PassCtx<'_>, params: &[ParamValue]) -> Vec<u8> {
-        if let PassId::Action(_) = pass {
-            let hot = BoidsModel::from_params(split_params::<BoidsModel>(params).0, Self::dims(params).1);
-            return bytemuck::bytes_of(&ActionParams {
-                num_agents: ctx.geom.num_agents,
-                groups_x: ctx.groups_x,
-                seed: ctx.seed,
-                stationary: hot.min_speed.midpoint(hot.max_speed),
-                palette: packed_heading_palette(),
-            })
-            .to_vec();
-        }
-        if pass == PassId::Reduce {
-            return bytemuck::bytes_of(&ReduceParams {
+        match pass {
+            PassId::Action(_) => {
+                let hot = hot_params(params);
+                bytemuck::bytes_of(&ActionParams {
+                    num_agents: ctx.geom.num_agents,
+                    groups_x: ctx.groups_x,
+                    seed: ctx.seed,
+                    stationary: hot.min_speed.midpoint(hot.max_speed),
+                    palette: pack_palette(&HEADING_PALETTE),
+                })
+                .to_vec()
+            }
+            PassId::Reduce => bytemuck::bytes_of(&ReduceParams {
                 n: ctx.invocations,
                 lanes: Self::REDUCE.lanes as u32,
                 groups_x: ctx.groups_x,
                 _pad: 0,
             })
-            .to_vec();
+            .to_vec(),
+            // `DISPLAY` is `None`, so no pass asks for a display block.
+            PassId::Step(_) | PassId::Display => {
+                let hot = hot_params(params);
+                let grid = ctx.geom.index.expect("INDEX is declared");
+                bytemuck::bytes_of(&StepParams {
+                    num_agents: ctx.geom.num_agents,
+                    groups_x: ctx.groups_x,
+                    grid_w: grid.grid_w,
+                    grid_h: grid.grid_h,
+                    cell_w: grid.cell_w,
+                    cell_h: grid.cell_h,
+                    cell_w_inv: 1.0 / grid.cell_w,
+                    cell_h_inv: 1.0 / grid.cell_h,
+                    world_w: hot.world_w,
+                    world_h: hot.world_h,
+                    half_w: hot.half_w,
+                    half_h: hot.half_h,
+                    visual_range: hot.visual_range,
+                    visual_sq: hot.visual_sq,
+                    protected_sq: hot.protected_sq,
+                    separation: hot.separation_factor,
+                    alignment: hot.alignment_factor,
+                    cohesion: hot.cohesion_factor,
+                    max_speed: hot.max_speed,
+                    min_speed: hot.min_speed,
+                    palette: pack_palette(&HEADING_PALETTE),
+                })
+                .to_vec()
+            }
         }
-
-        let hot = BoidsModel::from_params(split_params::<BoidsModel>(params).0, Self::dims(params).1);
-        let grid = ctx.geom.index.expect("INDEX is declared");
-        bytemuck::bytes_of(&StepParams {
-            num_agents: ctx.geom.num_agents,
-            groups_x: ctx.groups_x,
-            grid_w: grid.grid_w,
-            grid_h: grid.grid_h,
-            cell_w: grid.cell_w,
-            cell_h: grid.cell_h,
-            cell_w_inv: 1.0 / grid.cell_w,
-            cell_h_inv: 1.0 / grid.cell_h,
-            world_w: hot.world_w,
-            world_h: hot.world_h,
-            half_w: hot.half_w,
-            half_h: hot.half_h,
-            visual_range: hot.visual_range,
-            visual_sq: hot.visual_sq,
-            protected_sq: hot.protected_sq,
-            separation: hot.separation_factor,
-            alignment: hot.alignment_factor,
-            cohesion: hot.cohesion_factor,
-            max_speed: hot.max_speed,
-            min_speed: hot.min_speed,
-            palette: packed_heading_palette(),
-        })
-        .to_vec()
     }
 
     fn stats(sums: &[f32], _counters: &[u32], geom: &Geometry) -> Vec<StatValue> {
@@ -189,34 +189,16 @@ impl GpuAgentModel for GpuBoids {
     }
 }
 
-/// Interleaves `xs` and `ys` into the `vec2` layout the shaders read.
-fn interleave(xs: &[f32], ys: &[f32]) -> Vec<f32> {
-    xs.iter().zip(ys).flat_map(|(&x, &y)| [x, y]).collect()
-}
-
-/// Packs [`HEADING_PALETTE`] for the step uniform, keeping both backends on one palette.
-fn packed_heading_palette() -> [[u32; 4]; 2] {
-    let mut packed = [[0u32; 4]; 2];
-    for (i, rgba) in HEADING_PALETTE.iter().enumerate() {
-        packed[i / 4][i % 4] = u32::from_le_bytes(*rgba);
-    }
-    packed
-}
-
-/// Returns palette entry `index` packed into a `u32` as the CPU agent upload packs it, or entry 0 past the end.
-fn packed_palette_color(index: u8) -> u32 {
-    let rgba = HEADING_PALETTE
-        .get(index as usize)
-        .copied()
-        .unwrap_or(HEADING_PALETTE[0]);
-    u32::from_le_bytes(rgba)
+/// Returns the [`BoidParams`] of `params`, as the CPU model reads them each tick.
+fn hot_params(params: &[ParamValue]) -> BoidParams {
+    BoidsModel::from_params(split_params::<BoidsModel>(params).0, GpuBoids::dims(params).1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use henad_compute::cpu::agent_engine::AgentModelState;
-    use henad_compute::gpu::{GpuAgentState, GpuContext};
+    use henad_compute::gpu::{GpuAgentState, GpuContext, GpuSimState as _, MAX_STEPS_PER_SUBMISSION};
     use henad_core::model::SimState as _;
     use henad_explore::testing::{TestDeviceRequest, headless_test_device};
 
@@ -229,7 +211,7 @@ mod tests {
     fn params(num_agents: u32, world: f32) -> Vec<ParamValue> {
         let mut values: Vec<ParamValue> = GpuBoids::param_descriptors()
             .iter()
-            .map(|desc| desc.kind.default_value())
+            .map(|desc| desc.kind().default_value())
             .collect();
         values[NUM_AGENTS] = ParamValue::U32(num_agents);
         values[WORLD_WIDTH] = ParamValue::F32(world);
@@ -284,7 +266,7 @@ mod tests {
 
         let values = params(4_000, 800.0);
         // The bounds come from the model's own `from_params`, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
+        let hot = hot_params(&values);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);
@@ -334,7 +316,7 @@ mod tests {
 
         let values = params(10_000, 1_000.0);
         // The bounds come from the model's own `from_params`, so the test cannot disagree with the kernel.
-        let hot = BoidsModel::from_params(split_params::<BoidsModel>(&values).0, GpuBoids::dims(&values).1);
+        let hot = hot_params(&values);
         let (max_speed, min_speed) = (hot.max_speed, hot.min_speed);
 
         let mut state = State::new(&ctx, &values);
@@ -342,7 +324,7 @@ mod tests {
         state.refresh_stats();
 
         let stats = state.stats();
-        let StatValue::Scalar(avg_speed) = stats[0].value else {
+        let StatValue::Scalar(avg_speed) = *stats[0].value() else {
             panic!("average speed is a scalar");
         };
         assert!(
@@ -385,5 +367,20 @@ mod tests {
                 "boid {i} left the world at ({x}, {y}); the dispatch fold probably missed it"
             );
         }
+    }
+
+    /// A neighbour index alone measures nothing: the stock model submits 64 steps from its first submission, and never
+    /// waits for a measurement.
+    #[test]
+    fn the_neighbour_index_alone_sizes_no_submission() {
+        let Some(ctx) = headless_context() else {
+            log::warn!("skipping the_neighbour_index_alone_sizes_no_submission: no adapter");
+            return;
+        };
+
+        let mut state = State::new(&ctx, &params(1_000, 800.0));
+        assert_eq!(state.submission_steps(false), MAX_STEPS_PER_SUBMISSION, "at tick 0");
+        state.run_batched(1);
+        assert_eq!(state.submission_steps(false), MAX_STEPS_PER_SUBMISSION, "after a step");
     }
 }

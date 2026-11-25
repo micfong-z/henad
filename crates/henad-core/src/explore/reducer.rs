@@ -39,6 +39,20 @@ pub enum ReducerKind {
 impl ReducerKind {
     /// Kinds every column other than a histogram bucket gets by default.
     pub const DEFAULTS: [Self; 4] = [Self::Final, Self::Min, Self::Max, Self::Mean];
+
+    /// Checks a kind built in code against the rules its text form meets.
+    ///
+    /// A first crossing's threshold is finite, and a window starts at or before its end.
+    pub(crate) fn check(self) -> Result<(), ReducerError> {
+        match self {
+            Self::FirstCrossing(comparison) => comparison.check().map_err(|source| ReducerError::Comparison {
+                raw: self.to_string(),
+                source,
+            }),
+            Self::WindowMean { start, end } if start > end => Err(ReducerError::BadWindow { raw: self.to_string() }),
+            _ => Ok(()),
+        }
+    }
 }
 
 impl fmt::Display for ReducerKind {
@@ -96,7 +110,7 @@ impl FromStr for ReducerKind {
 pub(crate) fn names_a_stat(column: &str, stats: &[StatDescriptor]) -> bool {
     stats.iter().any(|stat| {
         column
-            .strip_prefix(stat.label)
+            .strip_prefix(stat.label())
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
     })
 }
@@ -125,7 +139,7 @@ impl ReducerSpec {
         } else {
             Err(ReducerError::UnknownColumn {
                 column: self.column.clone(),
-                known: stats.iter().map(|stat| stat.label.to_owned()).collect(),
+                known: stats.iter().map(|stat| stat.label().to_owned()).collect(),
             })
         }
     }
@@ -254,9 +268,7 @@ impl ReducerPlan {
                 .resolve(&spec.column)
                 .ok_or_else(|| ReducerError::UnknownColumn {
                     column: spec.column.clone(),
-                    known: (0..columns.len())
-                        .map(|column| columns.name(column).to_owned())
-                        .collect(),
+                    known: columns.names().map(str::to_owned).collect(),
                 })?;
             plan.add(columns, column, spec.kind);
         }

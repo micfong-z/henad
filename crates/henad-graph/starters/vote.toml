@@ -1,0 +1,157 @@
+# Vichniac's voting rule from the model template as a graph model. The cells are 0 and 1 with no names in the
+# template, so the variant names `Zero` and `One` are this file's.
+format = "henad-model"
+format_version = 1
+kind = "graph"
+id = "node_vote"
+name = "Vote"
+description = "Each cell takes the majority of its neighbourhood"
+
+[graph]
+topology = "grid"
+library = 1
+
+[[target]]
+backend = "gpu"
+id = "node_vote"
+name = "Vote (GPU)"
+description = "Each cell takes the majority of its neighbourhood, stepped on the GPU"
+
+[grid]
+width = 1024
+height = 1024
+boundary = "torus"
+
+[[category]]
+id = "vote"
+variants = [
+  { name = "Zero", label = "0", color = [26, 26, 46, 255] },
+  { name = "One", label = "1", color = [242, 166, 59, 255] },
+]
+
+[[lane]]
+id = "vote"
+domain = "cells"
+type = "cat:vote"
+storage = "u8"
+initial = { cat = "vote.Zero" }
+
+[[param]]
+id = "density"
+label = "Initial density"
+kind = "f32"
+min = 0.0
+max = 1.0
+default = 0.5
+step = 0.01
+
+[[stat]]
+label = "Ones"
+from = "n21.One"
+color = [242, 166, 59, 255]
+
+[[pass]]
+id = "seed"
+stage = "init"
+kind = "map"
+domain = "cells"
+enabled = true
+draw_order = ["n2"]
+
+[[pass.node]]
+id = "n1"
+op = "rng.threshold"
+in.p = { param = "density" }
+
+[[pass.node]]
+id = "n2"
+op = "stream.bits"
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n3"
+op = "cmp.lt"
+in.a = "n2"
+in.b = "n1"
+
+[[pass.node]]
+id = "n4"
+op = "logic.select"
+in.cond = "n3"
+in.if_true = { cat = "vote.One" }
+in.if_false = { cat = "vote.Zero" }
+
+[[pass.node]]
+id = "n5"
+op = "lane.set"
+config.lane = "vote"
+in.value = "n4"
+
+[[pass]]
+id = "step"
+stage = "tick"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n10"
+op = "grid.count"
+config.lane = "vote"
+config.neighborhood = "moore"
+config.include_center = true
+in.value = { cat = "vote.One" }
+in.when = { bool = true }
+
+[[pass.node]]
+id = "n11"
+op = "cmp.ge"
+in.a = "n10"
+in.b = { u32 = 5 }
+
+[[pass.node]]
+id = "n12"
+op = "logic.select"
+in.cond = "n11"
+in.if_true = { cat = "vote.One" }
+in.if_false = { cat = "vote.Zero" }
+
+[[pass.node]]
+id = "n13"
+op = "lane.set"
+config.lane = "vote"
+in.value = "n12"
+
+[[pass]]
+id = "counts"
+stage = "stats"
+kind = "map"
+domain = "cells"
+enabled = true
+
+[[pass.node]]
+id = "n20"
+op = "lane.get"
+config.lane = "vote"
+
+[[pass.node]]
+id = "n21"
+op = "stat.count_by"
+config.category = "vote"
+in.value = "n20"
+
+[editor]
+version = 1
+next_id = 22
+node.n1 = { pos = [40.0, 40.0] }
+node.n2 = { pos = [40.0, 128.0] }
+node.n3 = { pos = [323.0, 40.0] }
+node.n4 = { pos = [525.0, 40.0] }
+node.n5 = { pos = [753.0, 40.0] }
+node.n10 = { pos = [40.0, 40.0], label = "Ones in the 3x3 block" }
+node.n11 = { pos = [398.0, 40.0], label = "Majority" }
+node.n12 = { pos = [638.0, 40.0] }
+node.n13 = { pos = [871.0, 40.0] }
+node.n20 = { pos = [40.0, 40.0] }
+node.n21 = { pos = [257.0, 40.0] }
+view."pass.step" = { pan = [0.0, 0.0], zoom = 1.0 }

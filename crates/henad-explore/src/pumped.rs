@@ -5,11 +5,14 @@
 //! searcher a finished batch, in its own pump.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use web_time::Instant;
 
 use henad_compute::entry::ModelEntry;
 use henad_compute::runner::{PUMP_BUDGET_MS, Pace, SimLoop};
+use henad_core::explore::measure::MeasurePlan;
+use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::plan::Plan;
 use henad_core::explore::spec::SweepSpec;
 use henad_core::metadata::Backend;
@@ -19,11 +22,11 @@ use crate::exec::{ActiveRuns, BatchEnd, Concurrency, ExecutionError, RunRequest,
 use crate::handle::{SweepChannel, SweepRunOptions, SweepStartError};
 use crate::output::OutputWriter;
 use crate::output::manifest::{Manifest, ManifestRuntime};
-use crate::output::memory::{SweepFiles, memory_writer};
+use crate::output::memory::memory_writer;
 use crate::probe::{PlanProbe, TimedProbe};
 use crate::progress::{Progress as _, ProgressEvent};
 use crate::search_run::{AskedBatch, SearchPlan, SearchPreparation, SearchWriters, watched_values};
-use crate::sweep::{ExploreError, SweepInputs, SweepOptions, SweepPreparation, SweepRecord, finish_manifest};
+use crate::sweep::{ExploreError, SpecPlan, SweepInputs, SweepOptions, SweepPreparation};
 
 /// Wall time in milliseconds one slice of steps aims to take.
 const PUMP_SLICE_MS: f64 = PUMP_BUDGET_MS / 2.0;
@@ -49,7 +52,7 @@ impl std::fmt::Debug for PumpedSweep {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PumpedSweep")
             .field("model", &self.setup.entry.id())
-            .field("runs", &self.setup.plan.run_count())
+            .field("runs", &self.setup.planned.base().run_count())
             .finish_non_exhaustive()
     }
 }
@@ -58,9 +61,7 @@ impl std::fmt::Debug for PumpedSweep {
 struct SweepSetup {
     entry: ModelEntry,
     spec: SweepSpec,
-    plan: Arc<Plan>,
-    /// Plan of a search, `None` for a sweep.
-    search_plan: Option<Arc<SearchPlan>>,
+    planned: SpecPlan,
     runtime: ManifestRuntime,
     options: SweepOptions,
     active_runs: ActiveRuns,
@@ -73,8 +74,6 @@ impl SweepSetup {
             gpu: None,
             runtime: &self.runtime,
             spec: &self.spec,
-            source: &self.options.spec_source,
-            provenance: &self.options.provenance,
             options: &self.options,
             folder: None,
             dry_run: false,
@@ -83,9 +82,7 @@ impl SweepSetup {
 
     /// Plan that the probe builds. For a search, the plan of its fixed values.
     fn probed_plan(&self) -> &Plan {
-        self.search_plan
-            .as_ref()
-            .map_or(&self.plan, |search_plan| search_plan.base())
+        self.planned.base()
     }
 }
 
@@ -138,6 +135,39 @@ struct CurrentRun {
     slice: SliceSize,
 }
 
+impl CurrentRun {
+    /// Starts the run of `request` on the entry of `setup`, measured by `measure` and ended at `timeout`, and lists it
+    /// among the active runs.
+    fn start(
+        setup: &SweepSetup,
+        measure: &Arc<MeasurePlan>,
+        request: &RunRequest<'_>,
+        timeout: Option<Duration>,
+    ) -> Self {
+        Self {
+            cursor: RunCursor::new(&setup.entry, measure, request, timeout),
+            watch: setup.active_runs.watch(request.run, measure.total()),
+            slice: SliceSize::aiming_at(PUMP_SLICE_MS),
+        }
+    }
+
+    /// Steps the run by one slice, sized to the time the last slice took.
+    ///
+    /// Returns the outcome once the run finishes.
+    fn step(&mut self) -> Option<RunOutcome> {
+        let started = Instant::now();
+        let state = self.cursor.advance(self.slice.steps());
+        self.slice.adapt(started.elapsed());
+        match state {
+            CursorState::Running => {
+                self.watch.reach(self.cursor.tick());
+                None
+            }
+            CursorState::Finished(outcome) => Some(outcome),
+        }
+    }
+}
+
 /// Work one pump of a running sweep did.
 enum PumpWork {
     /// A run was built or stepped, or written once it finished.
@@ -149,11 +179,10 @@ enum PumpWork {
 }
 
 impl PumpedSweep {
-    /// Returns a sweep of `plan`, the plan of `spec` over `entry`, that reports to `channel`.
+    /// Returns a sweep of `planned`, the plan of `spec` over `entry`, that reports to `channel`.
     ///
-    /// The sweep runs every run of the plan, one at a time, and holds its files in memory. With a `search_plan`, the
-    /// search runs instead of the plan, and its candidates start from the plan's one config. `options.concurrency` is
-    /// left unread.
+    /// The sweep runs every run of the plan, one at a time, and holds its files in memory. A search runs its batches
+    /// instead, and its candidates start from the one config of its base plan. `options.concurrency` is left unread.
     ///
     /// # Errors
     ///
@@ -161,8 +190,7 @@ impl PumpedSweep {
     pub(crate) fn new(
         entry: ModelEntry,
         spec: SweepSpec,
-        plan: Arc<Plan>,
-        search_plan: Option<Arc<SearchPlan>>,
+        planned: SpecPlan,
         channel: SweepChannel,
         options: SweepRunOptions,
     ) -> Result<Self, SweepStartError> {
@@ -180,8 +208,7 @@ impl PumpedSweep {
             setup: SweepSetup {
                 entry,
                 spec,
-                plan,
-                search_plan,
+                planned,
                 runtime: ManifestRuntime::new(None),
                 options: sweep_options,
                 active_runs,
@@ -204,11 +231,12 @@ impl PumpedSweep {
     /// Prepares the sweep from `probe`, the report of its first config that builds, reports its outline and opens
     /// its files.
     fn prepare(&mut self, probe: TimedProbe) {
-        if let Some(search_plan) = &self.setup.search_plan {
-            return self.prepare_search(Arc::clone(search_plan), probe);
-        }
+        let plan = match &self.setup.planned {
+            SpecPlan::Sweep(plan) => Arc::clone(plan),
+            SpecPlan::Search(search_plan) => return self.prepare_search(Arc::clone(search_plan), probe),
+        };
         let inputs = self.setup.inputs();
-        let preparation = match SweepPreparation::new(&inputs, Some(Arc::clone(&self.setup.plan)), Some(probe)) {
+        let preparation = match SweepPreparation::new(&inputs, plan, Some(probe)) {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
@@ -218,6 +246,7 @@ impl PumpedSweep {
                 preparation.plan(),
                 inputs.entry.param_descriptors(),
                 preparation.measure(),
+                inputs.entry.metadata().time.as_ref(),
             )?;
             Ok((manifest, writer))
         });
@@ -239,7 +268,7 @@ impl PumpedSweep {
     /// opens its files.
     fn prepare_search(&mut self, search_plan: Arc<SearchPlan>, probe: TimedProbe) {
         let inputs = self.setup.inputs();
-        let preparation = match SearchPreparation::new(&inputs, Some(search_plan), Some(probe)) {
+        let preparation = match SearchPreparation::new(&inputs, search_plan, Some(probe)) {
             Ok(preparation) => preparation,
             Err(error) => return self.fail(&error),
         };
@@ -281,24 +310,16 @@ impl PumpedSweep {
         };
         let RunQueue {
             preparation,
-            mut manifest,
+            manifest,
             writer,
             ..
         } = *runs;
-        let counts = writer.counts();
-        let end = finish_manifest(&mut manifest, end, counts);
-        match SweepFiles::assemble(writer, &manifest) {
-            Ok(files) => {
-                let report = preparation.report(end, counts, None);
-                self.channel.report(&ProgressEvent::Ended(&report));
-                self.channel.finish(SweepRecord {
-                    report,
-                    manifest,
-                    files: Some(files),
-                    search: None,
-                });
+        match preparation.finish_in_memory(writer, manifest, end) {
+            Ok(record) => {
+                self.channel.report(&ProgressEvent::Ended(&record.report));
+                self.channel.finish(record);
             }
-            Err(error) => self.channel.fail(&ExploreError::Output(error)),
+            Err(error) => self.channel.fail(&error),
         }
     }
 
@@ -322,29 +343,17 @@ impl RunQueue {
             };
             self.next_position += 1;
             let plan = self.preparation.plan();
-            let measure = self.preparation.measure();
-            let watch = setup.active_runs.watch(run, measure.total());
             let request = RunRequest::planned(plan, run);
-            let cursor = RunCursor::new(&setup.entry, measure, &request, plan.run_settings().timeout);
-            self.current = Some(CurrentRun {
-                cursor,
-                watch,
-                slice: SliceSize::aiming_at(PUMP_SLICE_MS),
-            });
+            let timeout = plan.run_settings().timeout;
+            self.current = Some(CurrentRun::start(setup, self.preparation.measure(), &request, timeout));
             return Ok(PumpWork::Stepped);
         };
-        let started = Instant::now();
-        let state = current.cursor.advance(current.slice.steps());
-        current.slice.adapt(started.elapsed());
-        match state {
-            CursorState::Running => current.watch.reach(current.cursor.tick()),
-            CursorState::Finished(outcome) => {
-                self.current = None;
-                self.writer
-                    .write_run(&outcome)
-                    .map_err(|error| ExploreError::Execution(ExecutionError::Sink(error)))?;
-                channel.report(&ProgressEvent::RunCommitted(&outcome));
-            }
+        if let Some(outcome) = current.step() {
+            self.current = None;
+            self.writer
+                .write_run(&outcome)
+                .map_err(|error| ExploreError::Execution(ExecutionError::Sink(error)))?;
+            channel.report(&ProgressEvent::RunCommitted(&outcome));
         }
         Ok(PumpWork::Stepped)
     }
@@ -380,37 +389,24 @@ impl SearchQueue {
                 None => PumpWork::Drained,
             });
         };
-        let measure = self.preparation.measure();
         if let Some(current) = &mut pumped.current {
-            let started = Instant::now();
-            let state = current.cursor.advance(current.slice.steps());
-            current.slice.adapt(started.elapsed());
-            match state {
-                CursorState::Running => current.watch.reach(current.cursor.tick()),
-                CursorState::Finished(outcome) => {
-                    pumped.current = None;
-                    self.output
-                        .writer
-                        .write_config_run(&outcome, pumped.batch.config_of(&outcome.run))
-                        .map_err(|error| ExploreError::Execution(ExecutionError::Sink(error)))?;
-                    pumped
-                        .values
-                        .push(watched_values(&outcome, self.output.session.watched_reducers()));
-                    channel.report(&ProgressEvent::RunCommitted(&outcome));
-                }
+            if let Some(outcome) = current.step() {
+                pumped.current = None;
+                self.output
+                    .writer
+                    .write_config_run(&outcome, pumped.batch.config_of(&outcome.run))
+                    .map_err(|error| ExploreError::Execution(ExecutionError::Sink(error)))?;
+                pumped
+                    .values
+                    .push(watched_values(&outcome, self.output.session.watched_reducers()));
+                channel.report(&ProgressEvent::RunCommitted(&outcome));
             }
             return Ok(PumpWork::Stepped);
         }
         if let Some(request) = pumped.batch.request(pumped.next_position) {
             pumped.next_position += 1;
-            let watch = setup.active_runs.watch(request.run, measure.total());
             let timeout = self.preparation.plan().base().run_settings().timeout;
-            let cursor = RunCursor::new(&setup.entry, measure, &request, timeout);
-            pumped.current = Some(CurrentRun {
-                cursor,
-                watch,
-                slice: SliceSize::aiming_at(PUMP_SLICE_MS),
-            });
+            pumped.current = Some(CurrentRun::start(setup, self.preparation.measure(), &request, timeout));
             return Ok(PumpWork::Stepped);
         }
         let PumpedBatch { batch, values, .. } = self.batch.take().expect("a batch is in progress");
@@ -495,7 +491,6 @@ impl SimLoop for PumpedSweep {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::mpsc::Receiver;
     use std::time::Duration;
 
@@ -508,13 +503,12 @@ mod tests {
     use henad_core::explore::spec::{BlockSpec, SweepSpec};
 
     use super::{PumpedSweep, SweepCommand};
-    use crate::handle::{SweepChannel, SweepEvent, SweepRunOptions};
+    use crate::handle::{SweepChannel, SweepEvent, SweepRunOptions, plan_for_start};
     use crate::output::manifest::now_unix_ms;
     use crate::probe::MAX_PROBED_CONFIGS;
-    use crate::search_run::SearchPlan;
     use crate::sweep::SweepEnd;
     use crate::tests::broken::DividesByParam;
-    use crate::tests::support::{entry, provenance};
+    use crate::tests::support::{entry, fixed, provenance};
 
     /// Maximum number of pumps a test makes before it gives up on the sweep.
     const MAX_PUMPS: usize = 10_000;
@@ -523,25 +517,12 @@ mod tests {
         SweepRunOptions::new(provenance())
     }
 
-    fn fixed(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|&(id, value)| (id.to_owned(), value.to_owned()))
-            .collect()
-    }
-
     /// Returns a pumped sweep of `spec` over `entry`, a search when `spec` has a `[search]` table, and the receiver of
     /// its events.
     fn pumped(entry: ModelEntry, spec: SweepSpec) -> (PumpedSweep, Receiver<SweepEvent>) {
-        let schema = entry.schema();
-        let (plan, search_plan) = if spec.search.is_some() {
-            let search_plan = Arc::new(SearchPlan::new(&spec, &schema).expect("a valid search"));
-            (Arc::clone(search_plan.base()), Some(search_plan))
-        } else {
-            (Arc::new(spec.plan(&schema).expect("a valid spec")), None)
-        };
+        let planned = plan_for_start(&entry, &spec).expect("a valid spec");
         let (channel, events, _) = SweepChannel::open(&options());
-        let sweep = PumpedSweep::new(entry, spec, plan, search_plan, channel, options()).expect("a CPU model pumps");
+        let sweep = PumpedSweep::new(entry, spec, planned, channel, options()).expect("a CPU model pumps");
         (sweep, events)
     }
 

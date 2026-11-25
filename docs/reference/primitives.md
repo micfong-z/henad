@@ -24,7 +24,7 @@ use henad::authoring::primitives::rng::{next_bits, random_float};
 Where a primitive exists in both languages, the names match.
 `henad::authoring::prelude` holds every Rust draw, and `Boundary`, `cell_index`, `offset_cell`, `dist_sq` and the three offset tables of the space helpers.
 A model imports the other space helpers from `henad::authoring::primitives::space`.
-Each entry below gives the Rust signature, and calls out the WGSL signature wherever it differs.
+Each entry below gives the Rust signature, and the WGSL signature wherever it differs.
 
 ## Index
 
@@ -32,7 +32,7 @@ Each entry below gives the Rust signature, and calls out the WGSL signature wher
 |---|---|
 | [Space](#space) | [`Boundary`](#boundary), [`wrap_index`](#wrap_index), [`wrap_coord`](#wrap_coord), [`cell_index`](#cell_index), [`offset_cell`](#offset_cell), [`axis_delta`](#axis_delta), [`dist_sq`](#dist_sq), [`heading_octant`](#heading_octant) |
 | [Neighbourhoods](#neighbourhoods) | [`MOORE_ROW_MAJOR`](#moore_row_major), [`MOORE_COLUMN_MAJOR`](#moore_column_major), [`VON_NEUMANN`](#von_neumann), [`offsets`](#offsets), [`for_each_neighbor`](#for_each_neighbor), [`neighbor_count`](#neighbor_count), [`neighbor_offset`](#neighbor_offset) |
-| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
+| [Random](#random) | [`xorshift64`](#xorshift64), [`pcg_hash`](#pcg_hash), [`pcg4d`](#pcg4d), [`mix_seed`](#mix_seed), [`next_bits`](#next_bits), [`random_float`](#random_float), [`next_float`](#next_float), [`next_index`](#next_index), [`below`](#below), [`choice3`](#choice3), [`reservoir_accept`](#reservoir_accept) |
 
 ## Space
 
@@ -219,6 +219,9 @@ See also: [`axis_delta`](#axis_delta).
 The offset tables and the two ways of walking them.
 Rust holds each table as a const slice, WGSL as an id plus an accessor.
 
+A grid rule, a GPU grid model declared as data in `henad::rules`, rejects loops and walks no table.
+Its engine template declares `neighbor(dx, dy)`, the state of the cell `dx` east and `dy` south, and `moore_count(state)` and `von_neumann_count(state)`, the neighbours in `state` around the cell.
+
 ### `MOORE_ROW_MAJOR`
 
 ```rust
@@ -395,7 +398,24 @@ The Rust twin, bit-equal to the WGSL version.
 A GPU port calls it to seed a state buffer that the shader then draws from.
 The authoring prelude brings it in.
 
-See also: [`next_bits`](#next_bits).
+See also: [`next_bits`](#next_bits), [`pcg4d`](#pcg4d).
+
+### `pcg4d`
+
+```rust
+fn pcg4d(input: [u32; 4]) -> [u32; 4]
+```
+
+```wgsl
+fn pcg4d(input: vec4<u32>) -> vec4<u32>
+```
+
+The `pcg4d` hash of Jarzynski and Olano's "Hash Functions for GPU Rendering", over four words at once, bit-equal between the two languages.
+Two rounds over a vector of counters, such as a seed word, a cell index and a tick, derive a random word from the counters alone.
+A grid rule's `rng` starts from `pcg4d(pcg4d(vec4(seed, index, tick, 0))).x`, and a node model's draws come from the same two rounds.
+Import the Rust function from `henad::authoring::primitives::rng`.
+
+See also: [`pcg_hash`](#pcg_hash).
 
 ### `mix_seed`
 
@@ -439,7 +459,7 @@ random_float(0, 1.0)          // 0.0
 random_float(u32::MAX, 1.0)   // strictly under 1.0
 ```
 
-24 bits is the f32 mantissa width, so every value the draw can produce is exact and the range really is half-open.
+24 bits is the f32 mantissa width, so every value the draw can produce is exact and the range is half-open.
 Both backends run the same form, and their results are bit-equal.
 
 See also: [`next_float`](#next_float), [`below`](#below), [`reservoir_accept`](#reservoir_accept).
@@ -545,8 +565,8 @@ Op codes come from the generated bindings.
 Integer results must match exactly, and so must [`random_float`](#random_float).
 Other float results are compared against a tolerance, because WGSL evaluates float `%` through a division where Rust implements an exact fmod.
 
-Parity covers the pure functions only.
-The generators are excluded, along with anything that has no twin.
+Parity covers the pure functions, `pcg_hash` and `pcg4d` included.
+The `next_*` forms advance a different generator in each language and are excluded, along with anything that has no twin.
 
 On a machine with no adapter the test skips silently.
 Set `HENAD_REQUIRE_GPU=1` to turn that skip into a failure.
@@ -558,6 +578,7 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 | Need | Where |
 |---|---|
 | Agents within a radius | `SpatialHash::query_radius`, on `henad::authoring::SpatialHash`. Takes a caller-provided result buffer, so a query does not allocate |
+| Agents within a radius, in WGSL | `henad::hash`. `walk_bounds` returns the columns and rows of cells a walk of `SpatialHash::for_each_within` covers, and `walk_cell` the index of one of them, whose agents a shader reads from the engine's `cell_start` and `sorted`. `MAX_VISITS` (65536) is the cap a graph model's radius fold faults past, `walk_cells` the number of cells a walk covers and `MAX_WALK_CELLS` (65536) the cap a fold faults past before it walks |
 | World size | `henad::authoring::Extent`. The engine prepends world size to every agent model's params |
 | A per-chunk RNG | The `run_pass` that `agent_lanes!` generates passes the kernel its chunk's generator, seeded from the tick and the chunk's index |
 | Counting cells | `henad::authoring::reduce_chunks` |
@@ -576,7 +597,8 @@ Some things a kernel reaches for are not primitives, and live with the engine in
 - **Dynamic populations of agents.** An agent model's agents are neither created nor removed mid-run.
   A network model can add and remove nodes through `Nodes::spawn` and `Nodes::retire`.
 - **Non-uniform activation.** Every agent steps every tick. A model wanting less carries its own phase counter.
-- **Dynamic evaluation.** Both backends compile ahead of time.
+- **Dynamic evaluation.** A model cannot build new code as it runs.
+  A compiled model compiles ahead of time, and a [model file](model-files.md) compiles when it is loaded.
 
 A primitive is written when two real models need it.
 Anything with one call site stays in that model.

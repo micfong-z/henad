@@ -17,18 +17,19 @@ use std::ops::ControlFlow;
 use henad_core::action::Fire;
 use henad_core::action::{RefusedActions, Schedule, Scheduled};
 use henad_core::explore::replay::Replay;
-use henad_core::explore::value::{ValueError, check_value, parse_value};
+use henad_core::explore::value::{ValueError, check_param, parse_param};
 use henad_core::export::state as state_export;
 use henad_core::model::SimState;
 use henad_core::params::ParamValue;
 use henad_core::send_sync::WasmNotSend;
-use henad_core::view::{EdgeView, GridView, PointView, StatEntry, StatValue};
+use henad_core::view::{EdgeView, GridView, PointView};
 
 use crate::entry::{ModelEntry, ModelState};
 use crate::fault::{BUILDING, Fault, STEPPING, catching};
 use crate::gpu::GpuContext;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::gpu::{GpuSimState, fault::catching_on, stepping};
+pub use crate::snapshot::StatSample;
 
 /// Values, seed and schedule for one build of an entry, each checked against its descriptors when set.
 ///
@@ -48,7 +49,7 @@ impl RunSetup {
         let values = entry
             .param_descriptors()
             .iter()
-            .map(|descriptor| descriptor.kind.default_value())
+            .map(|descriptor| descriptor.kind().default_value())
             .collect();
         Self {
             entry,
@@ -69,7 +70,7 @@ impl RunSetup {
     pub fn set(mut self, id: &str, value: impl Into<ParamValue>) -> Result<Self, SetupError> {
         let value = value.into();
         let index = param_index(&self.entry, id)?;
-        check_value(&self.entry.param_descriptors()[index].kind, &value).map_err(|error| param_error(id, error))?;
+        check_param(&self.entry.param_descriptors()[index], &value).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -84,7 +85,7 @@ impl RunSetup {
     pub fn set_text(mut self, id: &str, text: &str) -> Result<Self, SetupError> {
         let index = param_index(&self.entry, id)?;
         let value =
-            parse_value(&self.entry.param_descriptors()[index].kind, text).map_err(|error| param_error(id, error))?;
+            parse_param(&self.entry.param_descriptors()[index], text).map_err(|error| param_error(id, error))?;
         self.values[index] = value;
         Ok(self)
     }
@@ -153,13 +154,13 @@ impl RunSetup {
             });
         }
         for (descriptor, value) in descriptors.iter().zip(values) {
-            check_value(&descriptor.kind, value).map_err(|error| param_error(descriptor.id, error))?;
+            check_param(descriptor, value).map_err(|error| param_error(descriptor.id(), error))?;
         }
         let actions = entry.action_descriptors();
         for scheduled in schedule.entries() {
             if actions
                 .get(scheduled.index)
-                .is_none_or(|action| action.id != scheduled.id)
+                .is_none_or(|action| action.id() != scheduled.id)
             {
                 return Err(SetupError::UnknownAction {
                     id: scheduled.id.clone(),
@@ -248,7 +249,7 @@ fn param_index(entry: &ModelEntry, id: &str) -> Result<usize, SetupError> {
             known: entry
                 .param_descriptors()
                 .iter()
-                .map(|descriptor| descriptor.id)
+                .map(|descriptor| descriptor.id().to_owned())
                 .collect(),
         })
     })
@@ -279,7 +280,7 @@ fn refusal(refused: &RefusedActions<'_>, during: &'static str) -> Result<(), Fau
         Some(action) => Err(Fault::refused(
             during,
             format!(
-                "the model refused its own action '{}' at tick {}",
+                "the model rejected its own action '{}' at tick {}",
                 action.id, action.tick
             ),
         )),
@@ -291,7 +292,7 @@ fn refusal(refused: &RefusedActions<'_>, during: &'static str) -> Result<(), Fau
 fn gpu_in_browser(id: &str) -> Fault {
     Fault::refused(
         BUILDING,
-        format!("model '{id}' runs on the GPU, and a browser steps a GPU model through GpuSimThread alone"),
+        format!("GPU model '{id}' must run on GpuSimThread in a browser"),
     )
 }
 
@@ -360,14 +361,14 @@ impl fmt::Display for SetupError {
         match self {
             Self::Param(_) => f.write_str("cannot set the parameter"),
             Self::ParamCount { expected, found } => {
-                write!(f, "expected {expected} parameter values, found {found}")
+                write!(f, "expected {expected} parameter values, got {found}")
             }
-            Self::UnknownAction { id } => write!(f, "model has no action '{id}'"),
+            Self::UnknownAction { id } => write!(f, "unknown action '{id}'"),
             Self::ReloadOnly { id } => write!(f, "parameter '{id}' applies only when the model is built"),
             Self::WrongModel { expected, found } => {
-                write!(f, "the run is of model '{found}', not '{expected}'")
+                write!(f, "the run is for model '{found}', expected '{expected}'")
             }
-            Self::Fault(_) => f.write_str("the model faulted"),
+            Self::Fault(_) => f.write_str("the model failed"),
         }
     }
 }
@@ -568,7 +569,7 @@ impl Simulation {
         &mut self,
         end_tick: u64,
         interval: u64,
-        mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B> + WasmNotSend,
+        on_sample: impl FnMut(&StatSample) -> ControlFlow<B> + WasmNotSend,
     ) -> Result<ControlFlow<B>, Fault> {
         assert!(interval > 0, "a sampling interval is at least one tick");
         self.check_earlier_fault()?;
@@ -577,24 +578,26 @@ impl Simulation {
         let sampled = match engine {
             // One pool entry for the whole call. A pool entry per sample costs more than a small model's tick.
             Engine::Cpu(state) => in_pool(|| {
-                let first = catching(STEPPING, || sample_cpu(&mut **state))?;
-                if let ControlFlow::Break(stop) = on_sample(&first) {
-                    return Ok(ControlFlow::Break(stop));
-                }
-                while state.tick() < end_tick {
-                    let next = next_sample_tick(state.tick(), interval, end_tick);
-                    let sample = catching(STEPPING, || {
-                        step_cpu(&mut **state, schedule, next)?;
+                let sample_at = |next: Option<u64>| {
+                    catching(STEPPING, || {
+                        if let Some(next) = next {
+                            step_cpu(&mut **state, schedule, next)?;
+                        }
                         Ok(sample_cpu(&mut **state))
-                    })??;
-                    if let ControlFlow::Break(stop) = on_sample(&sample) {
-                        return Ok(ControlFlow::Break(stop));
-                    }
-                }
-                Ok(ControlFlow::Continue(()))
+                    })?
+                };
+                sample_until(end_tick, interval, sample_at, on_sample)
             }),
             #[cfg(not(target_arch = "wasm32"))]
-            Engine::Gpu { state, ctx } => run_sampled_gpu(&mut **state, ctx, schedule, end_tick, interval, on_sample),
+            Engine::Gpu { state, ctx } => {
+                let sample_at = |next: Option<u64>| {
+                    if let Some(next) = next {
+                        advance_gpu(&mut **state, ctx, schedule, next)?;
+                    }
+                    sample_gpu(&mut **state, ctx)
+                };
+                sample_until(end_tick, interval, sample_at, on_sample)
+            }
         };
         self.record(sampled)
     }
@@ -626,7 +629,9 @@ impl Simulation {
     /// Returns [`SetupError::Param`] for an unknown id or a value the descriptor rejects, [`SetupError::ReloadOnly`]
     /// for a parameter that takes effect only when the model is built, and [`SetupError::Fault`] when the model panics
     /// or the device reports an error. Once an earlier call returned a fault, a value the descriptor accepts gets
-    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost.
+    /// [`FaultKind::Refused`], or [`FaultKind::DeviceLost`] once the device is lost. Note that a GPU agent model whose
+    /// hooks cannot write a uniform block at the new value also returns [`SetupError::ReloadOnly`], with the run
+    /// unchanged.
     ///
     /// [`FaultKind::DeviceLost`]: crate::fault::FaultKind::DeviceLost
     /// [`FaultKind::Refused`]: crate::fault::FaultKind::Refused
@@ -634,7 +639,7 @@ impl Simulation {
         let value = value.into();
         let index = param_index(&self.setup.entry, id)?;
         let descriptor = &self.setup.entry.param_descriptors()[index];
-        check_value(&descriptor.kind, &value).map_err(|error| param_error(id, error))?;
+        check_param(descriptor, &value).map_err(|error| param_error(id, error))?;
         self.check_earlier_fault()?;
         // The state rejects a reload-only index itself, from the descriptors it was built with.
         let accepted = match &mut self.engine {
@@ -662,7 +667,7 @@ impl Simulation {
     pub fn act(&mut self, action_id: &str) -> Result<(), SetupError> {
         let index = action_index(&self.setup.entry, action_id)?;
         self.check_earlier_fault()?;
-        let refused = || Fault::refused(STEPPING, format!("the model refused its own action '{action_id}'"));
+        let refused = || Fault::refused(STEPPING, format!("the model rejected its own action '{action_id}'"));
         let acted = match &mut self.engine {
             Engine::Cpu(state) => cpu_call(STEPPING, || if state.act(index) { Ok(()) } else { Err(refused()) }),
             #[cfg(not(target_arch = "wasm32"))]
@@ -805,7 +810,7 @@ impl Simulation {
         }
         Err(Fault::refused(
             STEPPING,
-            format!("an earlier call faulted and the simulation has to be rebuilt ({earlier})"),
+            format!("an earlier call failed and the simulation must be rebuilt ({earlier})"),
         ))
     }
 
@@ -820,29 +825,27 @@ impl Simulation {
     }
 }
 
-/// Runs a GPU state to `end_tick` as [`Simulation::run_sampled`] does.
-#[cfg(not(target_arch = "wasm32"))]
-fn run_sampled_gpu<B>(
-    state: &mut dyn GpuSimState,
-    ctx: &GpuContext,
-    schedule: &Schedule,
+/// Calls `on_sample` with a sample of the current tick, then with a sample at each sample tick up to `end_tick`, as
+/// [`Simulation::run_sampled`] does.
+///
+/// `sample_at(None)` samples the current tick, and `sample_at(Some(next))` steps to `next` first.
+fn sample_until<B>(
     end_tick: u64,
     interval: u64,
+    mut sample_at: impl FnMut(Option<u64>) -> Result<StatSample, Fault>,
     mut on_sample: impl FnMut(&StatSample) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, Fault> {
-    let first = sample_gpu(state, ctx)?;
-    if let ControlFlow::Break(stop) = on_sample(&first) {
-        return Ok(ControlFlow::Break(stop));
-    }
-    while state.tick() < end_tick {
-        let next = next_sample_tick(state.tick(), interval, end_tick);
-        advance_gpu(state, ctx, schedule, next)?;
-        let sample = sample_gpu(state, ctx)?;
+    let mut sample = sample_at(None)?;
+    loop {
         if let ControlFlow::Break(stop) = on_sample(&sample) {
             return Ok(ControlFlow::Break(stop));
         }
+        let tick = sample.tick();
+        if tick >= end_tick {
+            return Ok(ControlFlow::Continue(()));
+        }
+        sample = sample_at(Some(next_sample_tick(tick, interval, end_tick)))?;
     }
-    Ok(ControlFlow::Continue(()))
 }
 
 /// Runs `f` inside the fault scopes. Once the device is lost, the loss is returned instead of the errors it caused.
@@ -901,10 +904,7 @@ fn step_cpu(state: &mut dyn SimState, schedule: &Schedule, end: u64) -> Result<(
 /// Returns the stats of a CPU state's current tick, prepared as a publish prepares them.
 fn sample_cpu(state: &mut dyn SimState) -> StatSample {
     state.prepare_view();
-    StatSample {
-        tick: state.tick(),
-        entries: state.stats(),
-    }
+    StatSample::new(state.tick(), state.stats())
 }
 
 /// Returns the stats of a GPU state's current tick, blocking on a stats-only readback.
@@ -913,10 +913,7 @@ fn sample_gpu(state: &mut dyn GpuSimState, ctx: &GpuContext) -> Result<StatSampl
     let entries = gpu_call(ctx, STEPPING, || stepping::sample_stats(state, ctx))?;
     // Reports a fault the sample raised outside the scopes. No later call might wait.
     stepping::wait(ctx)?;
-    Ok(StatSample {
-        tick: state.tick(),
-        entries,
-    })
+    Ok(StatSample::new(state.tick(), entries))
 }
 
 /// Writes every view of a prepared CPU state to `writer`.
@@ -962,9 +959,9 @@ pub enum ExportError {
 impl fmt::Display for ExportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::GpuState => f.write_str("a GPU model's state stays on the device and cannot be exported"),
+            Self::GpuState => f.write_str("a GPU model's state is stored on the device and cannot be exported"),
             Self::Io(_) => f.write_str("cannot write the state"),
-            Self::Fault(_) => f.write_str("the model faulted while preparing its views"),
+            Self::Fault(_) => f.write_str("the model failed while preparing its views"),
         }
     }
 }
@@ -988,38 +985,5 @@ impl From<io::Error> for ExportError {
 impl From<Fault> for ExportError {
     fn from(fault: Fault) -> Self {
         Self::Fault(fault)
-    }
-}
-
-/// One sample of a model's stats.
-#[derive(Debug, Clone)]
-pub struct StatSample {
-    tick: u64,
-    entries: Vec<StatEntry>,
-}
-
-impl StatSample {
-    /// Tick the sample was taken at.
-    pub fn tick(&self) -> u64 {
-        self.tick
-    }
-
-    /// Every stat the model reports, in the order it reports them.
-    pub fn entries(&self) -> &[StatEntry] {
-        &self.entries
-    }
-
-    /// Returns the value of stat `label`, `None` for a label the model does not report.
-    pub fn get(&self, label: &str) -> Option<&StatValue> {
-        self.entries
-            .iter()
-            .find(|entry| entry.label == label)
-            .map(|entry| &entry.value)
-    }
-
-    /// Returns [`StatValue::scalar`] of stat `label`: a scalar's value, a vector's magnitude, a histogram's total
-    /// count. `None` for a label the model does not report.
-    pub fn scalar(&self, label: &str) -> Option<f64> {
-        self.get(label).map(StatValue::scalar)
     }
 }

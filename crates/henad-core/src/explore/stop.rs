@@ -225,7 +225,7 @@ impl StopSpec {
         } else {
             Err(StopError::UnknownColumn {
                 column: self.column.clone(),
-                known: stats.iter().map(|stat| stat.label.to_owned()).collect(),
+                known: stats.iter().map(|stat| stat.label().to_owned()).collect(),
             })
         }
     }
@@ -271,7 +271,7 @@ pub enum StopError {
 impl fmt::Display for StopError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingColumn { raw } => write!(f, "stop condition '{raw}' names no column"),
+            Self::MissingColumn { raw } => write!(f, "stop condition '{raw}' has no column"),
             Self::Comparison { raw, .. } => {
                 write!(
                     f,
@@ -318,9 +318,7 @@ impl StopCondition {
     pub fn bind(spec: &StopSpec, columns: &StatColumns) -> Result<Self, StopError> {
         let column = columns.resolve(&spec.column).ok_or_else(|| StopError::UnknownColumn {
             column: spec.column.clone(),
-            known: (0..columns.len())
-                .map(|column| columns.name(column).to_owned())
-                .collect(),
+            known: columns.names().map(str::to_owned).collect(),
         })?;
         Ok(Self {
             column,

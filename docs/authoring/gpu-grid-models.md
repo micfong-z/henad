@@ -50,7 +50,8 @@ You supply two numbers instead: `buffer_lens` for the buffer lengths, and `step_
 Both default to one `u32` per cell and one invocation per cell, the unpacked arrangement most models want.
 
 A bit-packed model overrides both and works in words.
-GPU Game of Life packs 32 cells into each `u32` and pads rows to whole words, which gives one invocation a whole word to own and stops any two invocations writing the same word.
+GPU Game of Life packs 32 cells into each `u32` and pads rows to whole words.
+Each invocation owns a whole word, and no two invocations write the same word.
 Its step then evaluates the rule SWAR-style: the neighbour count stays bit-sliced and is summed by a carry-save adder built from plain XOR and AND, which resolves all 32 cells at once without a loop.
 
 Reduce always dispatches one invocation per *cell*, so a packed model's reduce shader reads the containing word and extracts its own bit.
@@ -58,7 +59,8 @@ Reduce always dispatches one invocation per *cell*, so a packed model's reduce s
 ## Display is a sampled view
 
 The display texture is capped at 4096 texels a side, well under the largest grids.
-A texture with one texel per cell would bound the grid at the device's maximum texture dimension and cost four bytes per cell, which at 16384^2^ comes to over a gigabyte of RGBA for something drawn into a panel roughly a thousand pixels wide.
+A texture with one texel per cell would bound the grid at the device's maximum texture dimension and cost four bytes per cell.
+At 16384^2^ that comes to over a gigabyte of RGBA, for a panel roughly a thousand pixels wide.
 
 The display pass instead dispatches one invocation per *texel* and reads the cell at `texel * grid / tex`.
 Both pairs of dimensions arrive in a shared `Dims` uniform, and they stay equal until the grid outgrows the cap.
@@ -79,7 +81,7 @@ Only the stats UI reads `PALETTE`, so keeping the two copies in agreement is you
 ## Parameters
 
 Unlike a CPU `GridModel`, nothing is prepended to the parameter list here.
-A GPU model spells out its whole descriptor list itself, which lets it mirror the parameter order of the CPU model it is compared against.
+A GPU model spells out its whole descriptor list itself, and can mirror the parameter order of the CPU model it is compared against.
 Both shipped ports do this and reuse the CPU model's list verbatim.
 
 The engine reads width and height back out of that list for `dims`, clamping both to at least 1.
@@ -116,6 +118,6 @@ Every other construction error reaches the UI as a modal.
 
 ## Next
 
-- [Shaders and bindings](shaders.md) covers the WGSL side, from imports and generated uniform structs to reading back what was actually compiled.
+- [Shaders and bindings](shaders.md) covers imports, generated uniform structs and the composed source the engine compiles.
 - [Porting a model to the GPU](porting.md) explains how to get from a working CPU model to this trait.
 - [GPU agent models](gpu-agent-models.md) covers the counterpart trait for agent populations.

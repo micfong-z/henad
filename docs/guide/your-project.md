@@ -46,7 +46,7 @@ my-model/
 ├── rust-toolchain.toml        # the stable toolchain Henad pins, with the wasm32 target
 ├── rustfmt.toml               # the 120 columns Henad formats at
 ├── .gitignore
-├── .gitattributes             # LF line ends for the scripts and the pins
+├── .gitattributes             # LF line ends for every text file
 ├── .cargo/config.toml         # the wasm32 flags of the threaded web build
 ├── index.html                 # the web page, for Trunk
 ├── Trunk.toml                 # file names, the two headers and the port of the web build

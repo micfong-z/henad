@@ -8,12 +8,27 @@ use henad_compute::gpu::GpuNeeds;
 
 use crate::ui::mcs;
 
+/// Name of the font family of the semibold Henad Sans, the one bold face the app embeds.
+const SEMIBOLD_FAMILY: &str = "henad_sans_semibold";
+
+/// Returns the font of the semibold face at `size` points, or the regular face where `ctx` holds no semibold family,
+/// as a test's context does.
+pub fn semibold_font(ctx: &egui::Context, size: f32) -> egui::FontId {
+    let family = egui::FontFamily::Name(SEMIBOLD_FAMILY.into());
+    let bound = ctx.fonts(|fonts| fonts.definitions().families.contains_key(&family));
+    egui::FontId::new(size, if bound { family } else { egui::FontFamily::Proportional })
+}
+
 pub fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
     fonts.font_data.insert(
         "ibm_plex_sans_font".to_owned(),
         egui::FontData::from_static(include_bytes!("../assets/fonts/Henad Sans Regular.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "henad_sans_semibold_font".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/Henad Sans SemiBold.ttf")).into(),
     );
     fonts.font_data.insert(
         "ibm_plex_mono_font".to_owned(),
@@ -48,6 +63,15 @@ pub fn setup_custom_fonts(ctx: &egui::Context) {
         .entry(egui::FontFamily::Monospace)
         .or_default()
         .insert(0, "ibm_plex_mono_font".to_owned());
+    // The semibold face falls back to the icon fonts, as the regular face does.
+    fonts.families.insert(
+        egui::FontFamily::Name(SEMIBOLD_FAMILY.into()),
+        vec![
+            "henad_sans_semibold_font".to_owned(),
+            "material_design_icons_font".to_owned(),
+            "material_symbols_font".to_owned(),
+        ],
+    );
 
     ctx.set_fonts(fonts);
 }

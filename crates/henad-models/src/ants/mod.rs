@@ -19,7 +19,7 @@ use henad_core::helpers::{extract_f32, f32_param};
 use henad_core::params::{ParamDescriptor, ParamValue};
 use henad_core::view::{StatDescriptor, StatValue};
 
-use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_cell};
+use crate::ants::field::{PheromoneField, TO_FOOD, TO_HOME, nest_position};
 
 /// Ant colours, indexed by the `has_food` lane: searching, then carrying food.
 pub const ANT_PALETTE: [[u8; 4]; 2] = [
@@ -52,6 +52,16 @@ henad_core::actions! {
 /// field. The RNG is seeded per chunk per tick instead of drawn per call.
 ///
 /// The reference's biased neighbour tie-break is reproduced as it is (see `step::advect_agent`).
+///
+/// The reference's constants fix the model's scale in cells. An ant senses only the eight cells around it, and the
+/// nest and the food source are single cells 0.75 of the world apart on each axis. A trail spreads one cell per
+/// deposit, cut by `update_cutdown` on a row or column step and by `update_cutdown` to the power of the square root
+/// of 2 on a diagonal one. It decays by `evaporation` each tick and is zero below
+/// [`LOW_PHEROMONE`](field::LOW_PHEROMONE). A trail laid with `reward` reaches
+/// `ln(reward / LOW_PHEROMONE) / -ln(update_cutdown)` row steps, 306 at the defaults. Only a delivery renews the trail
+/// home, and until the first one its reach shrinks by `ln(evaporation) / ln(update_cutdown)` steps each tick. Once the
+/// trail home stops short of the food, ants carrying food cannot find the nest, and the tie-break carries them up and
+/// to the left, past the food. At the defaults this happens in worlds wider than about 290 cells.
 #[derive(Debug)]
 pub struct AntsModel;
 
@@ -120,8 +130,7 @@ impl AgentModel for AntsModel {
     /// gradient to navigate back along.
     fn init(lanes: &mut AntLanes, extent: Extent, params: &[ParamValue], _rng: &mut u64) {
         let (width, height) = extent.cells();
-        let nest = nest_cell(width, height) as u32;
-        let (x, y) = ((nest % width) as f32, (nest / width) as f32);
+        let (x, y) = nest_position(width, height);
         let reward = extract_f32(params, REWARD, 1.0);
         for i in 0..lanes.pos_x.len() {
             lanes.pos_x[i] = x;
@@ -216,8 +225,7 @@ mod tests {
     fn every_ant_starts_on_the_nest_holding_a_reward() {
         let state = default_state();
         let lanes = state.lanes();
-        let nest = nest_cell(200, 200) as u32;
-        let (nx, ny) = ((nest % 200) as f32, (nest / 200) as f32);
+        let (nx, ny) = nest_position(200, 200);
         for i in 0..lanes.pos_x.len() {
             assert_eq!((lanes.pos_x[i], lanes.pos_y[i]), (nx, ny), "ant {i} is not on the nest");
             assert_eq!(lanes.reward[i], 1.0, "ant {i} has no reward to spend");

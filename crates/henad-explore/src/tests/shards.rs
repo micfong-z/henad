@@ -2,38 +2,32 @@
 
 use std::path::PathBuf;
 
-use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
-use henad_core::explore::plan::Shard;
-use henad_core::explore::spec::{BlockSpec, SweepSpec};
+use henad_core::explore::factor::FactorSpec;
+use henad_core::explore::spec::SweepSpec;
 
 use crate::exec::Concurrency;
 use crate::merge::{MergeError, merge};
 use crate::output::OutputDir;
 use crate::output::manifest::ManifestStatus;
-use crate::sweep::{SweepOptions, SweepWarning};
-use crate::tests::support::{OutputTables, Recorder, ScratchDir, entry, manifest, sweep, sweep_options, sweep_with};
+use crate::sweep::SweepWarning;
+use crate::tests::support::{
+    OutputTables, Recorder, ScratchDir, entry, factorial, fixed, manifest, rewrite_manifest, shard_options, sweep,
+    sweep_options, sweep_with, values,
+};
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 3 replicates each, 9 runs.
 fn sir_spec() -> SweepSpec {
     let mut spec = SweepSpec::new("sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "16".to_owned()),
-        ("grid_height".to_owned(), "16".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
     spec.run.steps = 24;
     spec.run.replicates = 3;
     spec.measure.stats_every = 4;
     spec.measure.series_every = 8;
     spec.seeds.root = 12;
-    spec.blocks = vec![BlockSpec {
-        design: DesignKind::Factorial,
-        factors: vec![FactorSpec::param(
-            "infection_rate",
-            LevelSpec::Values(vec!["0.2".to_owned(), "0.4".to_owned(), "0.6".to_owned()]),
-        )],
-        design_seed: None,
-    }];
+    spec.blocks = vec![factorial(vec![FactorSpec::param(
+        "infection_rate",
+        values(&["0.2", "0.4", "0.6"]),
+    )])];
     spec
 }
 
@@ -48,10 +42,7 @@ fn merged_shards_equal_an_unsharded_sweep() {
     let shard_dirs: Vec<PathBuf> = (0..3)
         .map(|index| {
             let shard_dir = scratch.path().join(format!("shard-{index}"));
-            let options = SweepOptions {
-                shard: Shard::new(index, 3).expect("a valid shard"),
-                ..sweep_options(false)
-            };
+            let options = shard_options(index, 3);
             let mut progress = Recorder::default();
             let report = sweep_with(&sir, None, &spec, &shard_dir, &options, &mut progress).expect("the shard runs");
             assert_eq!(report.outline.pending, 3);
@@ -91,10 +82,7 @@ fn a_shard_whose_ids_its_manifest_does_not_give_is_refused() {
     let spec = sir_spec();
     let scratch = ScratchDir::new("renumbered-shard");
     let shard_dir = scratch.path().join("shard-0");
-    let options = SweepOptions {
-        shard: Shard::new(0, 3).expect("a valid shard"),
-        ..sweep_options(false)
-    };
+    let options = shard_options(0, 3);
     sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
 
     // A resume that raised the replicate count wrote its manifest, and ended before renumbering the rows.
@@ -130,10 +118,7 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
         .into_iter()
         .map(|index| {
             let shard_dir = scratch.path().join(format!("shard-{index}"));
-            let options = SweepOptions {
-                shard: Shard::new(index, 3).expect("a valid shard"),
-                ..sweep_options(false)
-            };
+            let options = shard_options(index, 3);
             sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
             shard_dir
         })
@@ -158,4 +143,29 @@ fn a_merge_missing_a_shard_is_filled_in_by_a_resume() {
     sweep(&sir, None, &spec, &whole_dir, Concurrency::Auto);
     assert_eq!(OutputTables::read(&merged_dir), OutputTables::read(&whole_dir));
     assert_eq!(manifest(&merged_dir).status, ManifestStatus::Complete);
+}
+
+/// A merge refuses shards whose runs were timed on different time scales. The schema hash leaves the time scale out,
+/// and a compiled model's changed code only warns.
+#[test]
+fn shards_on_different_time_scales_are_refused() {
+    let sir = entry("sir", None);
+    let spec = sir_spec();
+    let scratch = ScratchDir::new("time-scale-shards");
+    let shard_dirs: Vec<PathBuf> = (0..2)
+        .map(|index| {
+            let shard_dir = scratch.path().join(format!("shard-{index}"));
+            let options = shard_options(index, 3);
+            sweep_with(&sir, None, &spec, &shard_dir, &options, &mut Recorder::default()).expect("the shard runs");
+            shard_dir
+        })
+        .collect();
+    // A build whose model counted its ticks in days wrote the second shard.
+    rewrite_manifest(&shard_dirs[1], |recorded| {
+        recorded.model.schema["time"] = serde_json::json!({ "unit": "day", "tick_length": "infection_rate" });
+    });
+    let merged_dir = scratch.path().join("merged");
+    let error = merge(&shard_dirs, &merged_dir, &mut Recorder::default()).expect_err("another time scale");
+    assert!(matches!(error, MergeError::PlanDiffers { .. }), "{error:?}");
+    assert!(!merged_dir.exists(), "a refused merge writes nothing");
 }

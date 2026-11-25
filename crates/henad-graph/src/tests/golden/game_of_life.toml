@@ -1,0 +1,129 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "game_of_life"
+name = "Game of Life"
+purpose = "Conway's Game of Life. Look for gliders and other shapes that persist and travel."
+next_line = 5
+
+[world]
+made_of = "cells"
+width = 1024
+height = 1024
+edges = "wrap"
+
+[[cells.property]]
+id = "status"
+name = "Status"
+type = "states"
+states = [
+  { id = "dead", name = "Dead", color = "#151515" },
+  { id = "alive", name = "Alive", color = "#00E676" },
+]
+
+[cells.property.starts_as]
+rule = "by_chance"
+key = 2929187291
+otherwise = "dead"
+
+[[cells.property.starts_as.row]]
+state = "alive"
+chance = { param = "initial_density" }
+
+[[parameter]]
+id = "initial_density"
+name = "Initial density"
+type = "number"
+min = 0
+max = 1
+default = 0.3
+step = 0.01
+means = "Share of cells alive at the start"
+
+[[measure]]
+id = "alive"
+name = "Alive"
+color = "#00E676"
+rule = "count_in_state"
+over = "cells"
+property = "status"
+state = "alive"
+
+[color.cells]
+rule = "by_state"
+property = "status"
+
+[[button]]
+id = "randomise"
+name = "Randomise"
+
+[[button.does]]
+rule = "start_again"
+properties = ["status"]
+
+[[button]]
+id = "clear"
+name = "Clear"
+
+[[button.does]]
+rule = "run_once"
+card = "clear"
+
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3"]
+
+[card.line.l1]
+kind = "count"
+name = "Alive neighbours"
+around = "cells_8"
+
+[card.line.l1.whose]
+kind = "compare"
+test = "is"
+left = { their = "status" }
+right = { state = "alive" }
+
+[card.line.l2]
+kind = "become"
+property = "status"
+new_state = "alive"
+start_state = "dead"
+
+[card.line.l2.condition]
+kind = "compare"
+test = "is"
+left = { result = "l1" }
+right = 3
+
+[card.line.l3]
+kind = "become"
+property = "status"
+new_state = "dead"
+start_state = "alive"
+
+[card.line.l3.condition]
+kind = "compare"
+test = "not_one_of"
+left = { result = "l1" }
+right = [2, 3]
+
+[[card]]
+id = "clear"
+every = "cells"
+runs = "once"
+lines = ["l4"]
+
+[card.line.l4]
+kind = "become"
+property = "status"
+new_state = "dead"
+start_state = "any_state"
+
+[card.line.l4.condition]
+kind = "always"

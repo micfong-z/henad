@@ -23,7 +23,7 @@ use std::str::FromStr;
 
 use crate::explore::design::MAX_CONFIGS;
 use crate::explore::factor::FactorSpec;
-use crate::explore::search::evaluation_log::CandidateRecord;
+use crate::explore::search::evaluation_log::{CandidateRecord, EvaluationLog};
 use crate::explore::search::genetic::{GeneticAlgorithm, GeneticSettings};
 use crate::explore::search::genome::{ConfigKey, Genome, SearchSpace};
 use crate::explore::search::hill_climb::{HillClimb, HillClimbSettings};
@@ -639,6 +639,32 @@ enum ConfigDraw {
     Known { candidate_id: u64 },
     /// Every draw produced a known config. The first draw produced the config of a proposal not yet requested.
     Proposed,
+}
+
+impl ConfigDraw {
+    /// Returns the proposal this draw makes for a candidate of `origin`, or `None` for a draw that proposes nothing.
+    ///
+    /// A new config becomes a first evaluation, and its key joins `proposed`. A known config becomes a re-evaluation
+    /// of its candidate, whose evaluations `log` holds, unless `reevaluated` holds that candidate already.
+    fn into_proposal(
+        self,
+        origin: CandidateOrigin,
+        log: &EvaluationLog,
+        proposed: &mut BTreeSet<ConfigKey>,
+        reevaluated: &mut BTreeSet<u64>,
+    ) -> Option<Proposal> {
+        match self {
+            Self::New(genome, key) => {
+                proposed.insert(key);
+                Some(Proposal::first_evaluation(genome, origin))
+            }
+            Self::Known { candidate_id } => reevaluated.insert(candidate_id).then(|| {
+                let record = log.get(candidate_id).expect("a candidate with a config was evaluated");
+                Proposal::reevaluation(candidate_id, record)
+            }),
+            Self::Proposed => None,
+        }
+    }
 }
 
 /// Draws genomes with `draw`, at most [`MAX_CONFIG_DRAWS`] times, until a genome decodes to a config that no

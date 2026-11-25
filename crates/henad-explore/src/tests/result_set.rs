@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use henad_core::explore::design::DesignKind;
-use henad_core::explore::factor::{FactorSpec, LevelSpec};
+use henad_core::explore::factor::FactorSpec;
 use henad_core::explore::outcome::RunOutcome;
 use henad_core::explore::spec::{ActionSpec, BlockSpec, SweepSpec};
 
@@ -15,19 +15,12 @@ use crate::output::read::ReadError;
 use crate::output::{MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE};
 use crate::progress::{Progress, ProgressEvent};
 use crate::result_set::{ResultReplayError, ResultSet, ResultSetError, read_directory_series};
-use crate::tests::support::{ScratchDir, entry, sweep_options, sweep_with};
-
-fn values(raw: &[&str]) -> LevelSpec {
-    LevelSpec::Values(raw.iter().map(|&text| text.to_owned()).collect())
-}
+use crate::tests::support::{ScratchDir, entry, file_bytes, fixed, sweep_options, sweep_with, untimed, values};
 
 /// Returns 3 configs of SIR on a 16 by 16 grid with 2 replicates of 30 steps, and an action whose tick varies.
 fn sir_spec() -> SweepSpec {
     let mut spec = SweepSpec::new("sir");
-    spec.fixed = vec![
-        ("grid_width".to_owned(), "16".to_owned()),
-        ("grid_height".to_owned(), "16".to_owned()),
-    ];
+    spec.fixed = fixed(&[("grid_width", "16"), ("grid_height", "16")]);
     spec.run.steps = 30;
     spec.run.replicates = 2;
     spec.measure.stats_every = 3;
@@ -80,23 +73,11 @@ fn run_sweep(dir: &Path, spec: &SweepSpec) -> Vec<RunOutcome> {
     outcomes.0
 }
 
-/// Returns `outcome` with its timings zeroed, since `runs.csv` rounds them.
-fn untimed(outcome: &RunOutcome) -> RunOutcome {
-    RunOutcome {
-        build_ms: 0.0,
-        wall_ms: 0.0,
-        ..outcome.clone()
-    }
-}
-
 /// Returns every file of the directory `dir`, each as its name and bytes.
 fn directory_entries(dir: &Path) -> Vec<(String, Vec<u8>)> {
-    [MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE]
-        .iter()
-        .map(|&file| {
-            let bytes = fs::read(dir.join(file)).expect("the file is written");
-            (format!("picked/{file}"), bytes)
-        })
+    file_bytes(dir, &[MANIFEST_FILE, RUNS_FILE, SERIES_FILE, SUMMARY_FILE])
+        .into_iter()
+        .map(|(file, bytes)| (format!("picked/{file}"), bytes))
         .collect()
 }
 
@@ -117,7 +98,7 @@ fn a_result_set_reads_back_every_run_of_a_directory() {
     let mut value_columns: Vec<String> = sir
         .param_descriptors()
         .iter()
-        .map(|param| param.id.to_owned())
+        .map(|param| param.id().to_owned())
         .collect();
     value_columns.push("action.wave".to_owned());
     assert_eq!(set.value_columns(), value_columns);
@@ -280,6 +261,107 @@ fn a_series_header_with_other_columns_is_refused() {
             error,
             ResultSetError::Table(ReadError::MissingColumn { column: "tick", .. })
         ),
+        "{error:?}"
+    );
+}
+
+/// Returns the folder a sweep of SIR wrote at `79e6d1c`, before `series.csv` could hold a `time` column.
+///
+/// `tests/fixtures/series-without-time/README.md` gives the procedure that recorded it.
+fn folder_without_time() -> std::path::PathBuf {
+    let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/series-without-time");
+    assert!(
+        folder.join(MANIFEST_FILE).is_file(),
+        "{} holds no manifest. Its README.md gives the procedure that records it",
+        folder.display()
+    );
+    folder
+}
+
+/// Ticks and values of every run's series in `set`, in run order.
+fn series_rows(set: &ResultSet) -> Vec<Vec<(u64, Vec<f64>)>> {
+    set.runs()
+        .iter()
+        .map(|run| {
+            run.outcome
+                .series
+                .rows()
+                .map(|(tick, values)| (tick, values.to_vec()))
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn a_folder_written_before_the_time_column_still_reads() {
+    let folder = folder_without_time();
+    let set = ResultSet::open_dir(&folder, usize::MAX).expect("the folder reads");
+    assert_eq!(set.stat_columns(), ["Susceptible", "Infected", "Recovered"]);
+    let rows = series_rows(&set);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0][0], (0, vec![254.0, 2.0, 0.0]));
+    assert_eq!(rows[1][2], (10, vec![0.0, 204.0, 52.0]));
+    let read = read_directory_series(&folder, set.stat_columns(), &[0, 1].into(), usize::MAX)
+        .expect("the series reads on its own");
+    assert_eq!(read.series.len(), 2);
+}
+
+/// A model with a time scale writes `time` after `tick`. The reader takes the id columns from the header, and holds
+/// the same series as the folder without the column.
+#[test]
+fn a_series_with_a_time_column_reads_by_its_header() {
+    let folder = folder_without_time();
+    let read = |file: &str| fs::read(folder.join(file)).expect("the fixture holds the file");
+    let series = String::from_utf8(read(SERIES_FILE)).expect("the rows are UTF-8");
+    let timed: String = series
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let (ids, stats) = line.split_at(line.match_indices(',').nth(1).expect("two id columns").0);
+            let time = if index == 0 {
+                "time".to_owned()
+            } else {
+                let tick: u64 = ids
+                    .split(',')
+                    .nth(1)
+                    .and_then(|tick| tick.parse().ok())
+                    .expect("a tick");
+                (tick as f64 * 0.25).to_string()
+            };
+            format!("{ids},{time}{stats}\n")
+        })
+        .collect();
+    assert!(timed.starts_with("run_id,tick,time,Susceptible,"), "{timed}");
+    let files = |series: String| {
+        vec![
+            (MANIFEST_FILE.to_owned(), read(MANIFEST_FILE)),
+            (RUNS_FILE.to_owned(), read(RUNS_FILE)),
+            (SERIES_FILE.to_owned(), series.into_bytes()),
+        ]
+    };
+    let plain = ResultSet::from_files(files(series.clone()), usize::MAX).expect("the plain folder reads");
+    let with_time = ResultSet::from_files(files(timed.clone()), usize::MAX).expect("the timed folder reads");
+    assert_eq!(series_rows(&with_time), series_rows(&plain));
+    assert_eq!(with_time.held_series_count(), 2);
+
+    let scratch = ScratchDir::new("result-set-time-column");
+    fs::create_dir_all(scratch.path()).expect("the scratch directory can be made");
+    for file in [MANIFEST_FILE, RUNS_FILE] {
+        fs::copy(folder.join(file), scratch.path().join(file)).expect("the fixture copies");
+    }
+    fs::write(scratch.path().join(SERIES_FILE), &timed).expect("series.csv is written");
+    let opened = ResultSet::open_dir(scratch.path(), usize::MAX).expect("the timed directory reads");
+    assert_eq!(series_rows(&opened), series_rows(&plain));
+    let columns = opened.stat_columns().to_vec();
+    let on_its_own = read_directory_series(scratch.path(), &columns, &[1].into(), usize::MAX)
+        .expect("the timed series reads on its own");
+    assert_eq!(on_its_own.series[&1].ticks(), [0, 5, 10]);
+
+    let bad = timed.replacen(",1.25,", ",soon,", 1);
+    assert_ne!(bad, timed);
+    let error = ResultSet::from_files(files(bad), usize::MAX).expect_err("a time is a number");
+    assert!(
+        matches!(&error, ResultSetError::Table(ReadError::BadField { column, text, .. }) if column == "time" && text == "soon"),
         "{error:?}"
     );
 }

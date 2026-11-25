@@ -1,0 +1,284 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "values"
+name = "Worked-out values"
+purpose = "Every line kind that works out a value from the cells around, for the lowering's tests."
+next_line = 16
+
+[world]
+made_of = "cells"
+width = 8
+height = 8
+edges = "wrap"
+
+[[cells.property]]
+id = "status"
+name = "Status"
+type = "states"
+states = [
+  { id = "dead", name = "Dead", color = "#151515" },
+  { id = "alive", name = "Alive", color = "#00E676" },
+]
+
+[cells.property.starts_as]
+rule = "value"
+value = { state = "dead" }
+
+[[cells.property]]
+id = "level"
+name = "Level"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "flag"
+name = "Flag"
+type = "yes_no"
+
+[cells.property.starts_as]
+rule = "value"
+value = false
+
+[[cells.property]]
+id = "score"
+name = "Score"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "band"
+name = "Band"
+type = "whole_number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "total"
+name = "Total"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "bright"
+name = "Bright"
+type = "whole_number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "high_mean"
+name = "High mean"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "high_top"
+name = "High top"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+[[cells.property]]
+id = "high_low"
+name = "High low"
+type = "number"
+
+[cells.property.starts_as]
+rule = "value"
+value = 0
+
+# Each tick, every cell
+[[card]]
+id = "cell_tick"
+every = "cells"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8", "l9", "l10", "l11", "l12", "l13", "l14", "l15"]
+
+# Levels around = look at the 8 cells around me: total of their Level (level total), largest of their Level (level top), smallest of their Level (level low)
+[card.line.l1]
+kind = "look_around"
+name = "Levels around"
+around = "cells_8"
+summaries = [
+  { id = "level_total", name = "level total", summary = "total", value = { their = "level" } },
+  { id = "level_top", name = "level top", summary = "largest", value = { their = "level" } },
+  { id = "level_low", name = "level low", summary = "smallest", value = { their = "level" } },
+]
+
+# Alive beside = look at the 4 cells around me, only those whose Status is Alive: count (alive near), average of their Level (alive level), any of their Flag (any flagged), all of their Flag (all flagged)
+[card.line.l2]
+kind = "look_around"
+name = "Alive beside"
+around = "cells_4"
+summaries = [
+  { id = "alive_near", name = "alive near", summary = "count" },
+  { id = "alive_level", name = "alive level", summary = "average", value = { their = "level" } },
+  { id = "any_flagged", name = "any flagged", summary = "any", value = { their = "flag" } },
+  { id = "all_flagged", name = "all flagged", summary = "all", value = { their = "flag" } },
+]
+
+[card.line.l2.only]
+kind = "compare"
+test = "is"
+left = { their = "status" }
+right = { state = "alive" }
+
+# Spread = (Levels around's level top minus Levels around's level low) divided by 2 plus larger of Alive beside's alive near and 1 to the power of 2 minus my Level
+[card.line.l3]
+kind = "calculate"
+name = "Spread"
+formula = "(l1.level_top - l1.level_low) / 2 + larger(l2.alive_near, 1) ^ 2 - my.level"
+
+# Band choice = choose, first that applies: 1, when Alive beside's alive level is at least 0.5; 2, when Alive beside's any flagged; otherwise 3
+[card.line.l4]
+kind = "choose"
+name = "Band choice"
+otherwise = 3
+
+[[card.line.l4.row]]
+value = 1
+
+[card.line.l4.row.condition]
+kind = "compare"
+test = "at_least"
+left = { result = "l2", part = "alive_level" }
+right = 0.5
+
+[[card.line.l4.row]]
+value = 2
+condition = { result = "l2", part = "any_flagged" }
+
+# By status = depending on my Status: Dead → Spread, Alive → 10
+[card.line.l5]
+kind = "depending_on"
+name = "By status"
+property = "status"
+branches = { dead = { result = "l3" }, alive = 10 }
+
+# Set Score to By status, always
+[card.line.l6]
+kind = "set"
+property = "score"
+value = { result = "l5" }
+
+[card.line.l6.condition]
+kind = "always"
+
+# Set Band to Band choice, always
+[card.line.l7]
+kind = "set"
+property = "band"
+value = { result = "l4" }
+
+[card.line.l7.condition]
+kind = "always"
+
+# Set Total to Levels around's level total, always
+[card.line.l8]
+kind = "set"
+property = "total"
+value = { result = "l1", part = "level_total" }
+
+[card.line.l8.condition]
+kind = "always"
+
+# Become Alive from Dead, when Alive beside's all flagged
+[card.line.l9]
+kind = "become"
+property = "status"
+new_state = "alive"
+start_state = "dead"
+condition = { result = "l2", part = "all_flagged" }
+
+# Bright alive = count of the 8 cells around me whose Status is Alive, only those whose Level is at least 0.5
+[card.line.l10]
+kind = "count"
+name = "Bright alive"
+around = "cells_8"
+
+[card.line.l10.only]
+kind = "compare"
+test = "at_least"
+left = { their = "level" }
+right = 0.5
+
+[card.line.l10.whose]
+kind = "compare"
+test = "is"
+left = { their = "status" }
+right = { state = "alive" }
+
+# Set Bright to Bright alive, always
+[card.line.l11]
+kind = "set"
+property = "bright"
+value = { result = "l10" }
+
+[card.line.l11.condition]
+kind = "always"
+
+# High around = look at the 8 cells around me, only those whose Level is at least 0.8: average of their Level (high average), largest of their Level (high largest), smallest of their Level (high smallest)
+[card.line.l12]
+kind = "look_around"
+name = "High around"
+around = "cells_8"
+summaries = [
+  { id = "high_average", name = "high average", summary = "average", value = { their = "level" } },
+  { id = "high_largest", name = "high largest", summary = "largest", value = { their = "level" } },
+  { id = "high_smallest", name = "high smallest", summary = "smallest", value = { their = "level" } },
+]
+
+[card.line.l12.only]
+kind = "compare"
+test = "at_least"
+left = { their = "level" }
+right = 0.8
+
+# Set High mean to High around's high average, always
+[card.line.l13]
+kind = "set"
+property = "high_mean"
+value = { result = "l12", part = "high_average" }
+
+[card.line.l13.condition]
+kind = "always"
+
+# Set High top to High around's high largest, always
+[card.line.l14]
+kind = "set"
+property = "high_top"
+value = { result = "l12", part = "high_largest" }
+
+[card.line.l14.condition]
+kind = "always"
+
+# Set High low to High around's high smallest, always
+[card.line.l15]
+kind = "set"
+property = "high_low"
+value = { result = "l12", part = "high_smallest" }
+
+[card.line.l15.condition]
+kind = "always"

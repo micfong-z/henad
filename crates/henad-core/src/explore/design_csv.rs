@@ -7,7 +7,7 @@ use std::fmt;
 
 use crate::explore::factor::{Factor, FactorDomain, FactorLevel, FactorSlot};
 use crate::explore::spec::{ACTION_COLUMN_PREFIX, ActionSpec};
-use crate::explore::value::{ValueError, parse_value};
+use crate::explore::value::{ValueError, parse_param};
 use crate::export::csv::{CsvError, parse_records};
 use crate::params::ParamDescriptor;
 
@@ -91,14 +91,14 @@ fn column_slot(
             .map(FactorSlot::Action),
         None => params
             .iter()
-            .position(|descriptor| descriptor.id == column)
+            .position(|descriptor| descriptor.id() == column)
             .map(FactorSlot::Param),
     };
     slot.ok_or_else(|| DesignTableError::UnknownColumn {
         column: column.to_owned(),
         known: params
             .iter()
-            .map(|descriptor| descriptor.id.to_owned())
+            .map(|descriptor| descriptor.id().to_owned())
             .chain(actions.iter().map(ActionSpec::column_name))
             .collect(),
     })
@@ -111,7 +111,7 @@ fn table_level(
     params: &[ParamDescriptor],
 ) -> Result<FactorLevel, DesignTableValueError> {
     match slot {
-        FactorSlot::Param(index) => parse_value(&params[index].kind, field)
+        FactorSlot::Param(index) => parse_param(&params[index], field)
             .map(FactorLevel::Param)
             .map_err(DesignTableValueError::Param),
         FactorSlot::Action(_) => field
@@ -244,7 +244,7 @@ mod tests {
     use crate::helpers::{bool_param, choice_param, f32_param, u32_param};
     use crate::params::{ParamDescriptor, ParamValue};
 
-    const NEIGHBORHOODS: &[&str] = &["moore", "von neumann, wide"];
+    const NEIGHBORHOODS: &[&str] = &["moore", "von \"neumann\" wide"];
 
     fn params() -> Vec<ParamDescriptor> {
         vec![
@@ -262,7 +262,7 @@ mod tests {
     fn base() -> Config {
         Config {
             block: 0,
-            params: params().iter().map(|param| param.kind.default_value()).collect(),
+            params: params().iter().map(|param| param.kind().default_value()).collect(),
             action_ticks: vec![40],
         }
     }
@@ -281,14 +281,14 @@ mod tests {
     /// Returns `configs` as a design table over every parameter and action.
     fn table(configs: &[Config]) -> String {
         let params = params();
-        let mut header: Vec<String> = params.iter().map(|param| param.id.to_owned()).collect();
+        let mut header: Vec<String> = params.iter().map(|param| param.id().to_owned()).collect();
         header.extend(actions().iter().map(ActionSpec::column_name));
         let mut lines = vec![header.join(",")];
         for config in configs {
             let mut fields: Vec<String> = params
                 .iter()
                 .zip(&config.params)
-                .map(|(param, value)| escape_field(&format_value(&param.kind, value)))
+                .map(|(param, value)| escape_field(&format_value(param.kind(), value)))
                 .collect();
             fields.extend(config.action_ticks.iter().map(ToString::to_string));
             lines.push(fields.join(","));
@@ -314,14 +314,14 @@ mod tests {
     fn a_design_table_round_trips() {
         let text = "rate,neighborhood,action.seed_outbreak,wrap\n\
                     0.1,moore,10,true\n\
-                    0.30000001,\"von neumann, wide\",0,false\n\
+                    0.30000001,\"von \"\"neumann\"\" wide\",0,false\n\
                     1,1,18446744073709551615,true\n";
         let first = configs(text).expect("a valid table");
         assert_eq!(first[1].params[0], ParamValue::F32(0.3));
         assert_eq!(
             first[1].params[3],
             ParamValue::Choice(1),
-            "a quoted option keeps its comma"
+            "a quoted option keeps its quotes"
         );
         assert_eq!(first[2].params[3], ParamValue::Choice(1), "an option by index");
         assert_eq!(first[2].action_ticks, [u64::MAX]);

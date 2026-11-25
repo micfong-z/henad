@@ -1,0 +1,369 @@
+//! Uniform blocks of generated shaders: the members a shader reads, their layout, and the bytes the host writes.
+//!
+//! A *member* is one member of a shader's `HenadParams` struct. Its value comes from the host: the grid's size, a value
+//! of the pass's prelude that the host evaluates, a draw's key word, the press count, a table of powers, whether a
+//! pass bound to a parameter runs, or whether a step counts its probes. Members follow WGSL's layout rules for the
+//! uniform address space: a scalar takes 4 bytes, a `vec2` takes 8 bytes at an 8-byte offset, and a table takes 16
+//! bytes per four entries at a 16-byte offset.
+
+use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+
+use henad_core::spatial_hash::HashGrid;
+
+use crate::document::Domain;
+use crate::draw::key_word;
+use crate::host::program::Program;
+use crate::host::value::HostValue;
+use crate::host::{HostEvaluator, HostWorld, RunContext, run};
+
+/// Type of a value a generated shader computes or reads, as WGSL holds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WgslType {
+    Bool,
+    U32,
+    I32,
+    F32,
+    Vec2U,
+    Vec2I,
+    Vec2F,
+}
+
+impl WgslType {
+    /// Returns the type that holds `value_type` in a shader, a category as its variant number, or `None` for a type
+    /// only the host holds.
+    pub(crate) fn of(value_type: &crate::types::ValueType) -> Option<Self> {
+        use crate::types::ValueType;
+        Some(match value_type {
+            ValueType::Bool => Self::Bool,
+            ValueType::U32 | ValueType::Category(_) | ValueType::Layer(_) | ValueType::Cell | ValueType::Agent => {
+                Self::U32
+            }
+            ValueType::I32 => Self::I32,
+            ValueType::F32 => Self::F32,
+            ValueType::Vec2U => Self::Vec2U,
+            ValueType::Vec2I => Self::Vec2I,
+            ValueType::Vec2F => Self::Vec2F,
+            _ => return None,
+        })
+    }
+
+    /// Returns the type of `value`, or `None` for a value only the host holds.
+    pub(crate) fn of_value(value: HostValue) -> Option<Self> {
+        Some(match value {
+            HostValue::Bool(_) => Self::Bool,
+            HostValue::U32(_)
+            | HostValue::Category(_)
+            | HostValue::Layer(_)
+            | HostValue::Cell(_)
+            | HostValue::Agent(_) => Self::U32,
+            HostValue::I32(_) => Self::I32,
+            HostValue::F32(_) => Self::F32,
+            HostValue::Vec2U(_) => Self::Vec2U,
+            HostValue::Vec2I(_) => Self::Vec2I,
+            HostValue::Vec2F(_) => Self::Vec2F,
+            _ => return None,
+        })
+    }
+
+    /// Returns the WGSL name of the type.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::U32 => "u32",
+            Self::I32 => "i32",
+            Self::F32 => "f32",
+            Self::Vec2U => "vec2<u32>",
+            Self::Vec2I => "vec2<i32>",
+            Self::Vec2F => "vec2<f32>",
+        }
+    }
+
+    /// Returns the WGSL name of the type a buffer or a uniform member stores it as: a `bool` as a `u32`.
+    pub(crate) fn stored(self) -> &'static str {
+        match self {
+            Self::Bool => "u32",
+            other => other.name(),
+        }
+    }
+
+    /// Returns the WGSL literal of the type's zero.
+    pub(crate) fn zero(self) -> String {
+        match self {
+            Self::Bool => "false",
+            Self::U32 => "0u",
+            Self::I32 => "0i",
+            Self::F32 => "0.0f",
+            Self::Vec2U => "vec2<u32>(0u, 0u)",
+            Self::Vec2I => "vec2<i32>(0i, 0i)",
+            Self::Vec2F => "vec2<f32>(0.0f, 0.0f)",
+        }
+        .to_owned()
+    }
+
+    /// Returns whether the type is a vector.
+    pub(crate) fn is_vector(self) -> bool {
+        matches!(self, Self::Vec2U | Self::Vec2I | Self::Vec2F)
+    }
+
+    /// Returns whether values of the type have an order that the comparison kinds read.
+    pub(crate) fn is_ordered(self) -> bool {
+        matches!(self, Self::U32 | Self::I32 | Self::F32)
+    }
+}
+
+/// Where the value of a uniform member comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MemberSource {
+    /// Columns of the grid.
+    Width,
+    /// Rows of the grid.
+    Height,
+    /// A slot of the prelude of the pass at a document position, which the host evaluates.
+    Slot { position: usize, slot: usize },
+    /// The key word of draw number `draw` of the pass at a document position.
+    Key { position: usize, draw: usize },
+    /// The number of the press, the tick word of a draw in an action.
+    Press,
+    /// Powers `base^0` to `base^max` of the prelude slot `base` of the pass at a document position.
+    Table { position: usize, base: usize, max: u32 },
+    /// Whether the pass at a document position runs, 1 or 0.
+    Enabled { position: usize },
+    /// Number of elements of a domain of the world.
+    Count(Domain),
+    /// Fold width of the dispatch, which `henad::dispatch::linear_index` reads.
+    GroupsX,
+    /// Size of an agents world in world units.
+    World,
+    /// Size of the neighbour index in cells.
+    HashGrid,
+    /// Size of one cell of the neighbour index in world units.
+    HashCell,
+    /// Inverse of the size of one cell of the neighbour index, as the host computes it.
+    HashInverse,
+    /// Size of the display texture in texels.
+    Texture,
+    /// Whether the block is a step's counting block, 1 or 0. A step's probes count under it.
+    CountFires,
+}
+
+/// Values of the engine's dispatch of a pass that a uniform block of an agents world reads.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Dispatch {
+    /// Fold width of the dispatch.
+    pub groups_x: u32,
+    /// Cell geometry of the neighbour index, when the model has one.
+    pub hash: Option<HashGrid>,
+    /// Size of the display texture.
+    pub texture: [u32; 2],
+    /// Whether the block is a step's counting block.
+    pub counting: bool,
+}
+
+/// Shape of a uniform member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MemberShape {
+    /// One value of this type.
+    Value(WgslType),
+    /// `len` `f32` entries packed four to a `vec4<f32>`.
+    Table { len: u32 },
+}
+
+impl MemberShape {
+    /// Returns the alignment and the size of the member in bytes.
+    fn align_size(self) -> (usize, usize) {
+        match self {
+            Self::Value(value) if value.is_vector() => (8, 8),
+            Self::Value(_) => (4, 4),
+            Self::Table { len } => (16, 16 * (len as usize).div_ceil(4)),
+        }
+    }
+
+    /// Returns the WGSL type of the member.
+    pub(crate) fn wgsl(self) -> String {
+        match self {
+            Self::Value(value) => value.stored().to_owned(),
+            Self::Table { len } => format!("array<vec4<f32>, {}>", len.div_ceil(4)),
+        }
+    }
+}
+
+/// One member of a shader's uniform block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UniformMember {
+    /// Name of the member.
+    pub name: String,
+    /// Shape of the member.
+    pub shape: MemberShape,
+    /// Where its value comes from.
+    pub source: MemberSource,
+    /// Byte offset of the member in the block.
+    pub offset: usize,
+}
+
+/// Uniform block of one shader.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct UniformBlock {
+    /// Members in offset order.
+    pub members: Vec<UniformMember>,
+    /// Size of the block in bytes, a multiple of 16.
+    pub size: usize,
+}
+
+impl UniformBlock {
+    /// Returns the block of `members`, laid out in order with the tables last.
+    pub(crate) fn new(mut members: Vec<(String, MemberShape, MemberSource)>) -> Self {
+        // Tables last, so no member follows an array. Vectors before them keep the scalars packed.
+        members.sort_by_key(|(_, shape, _)| match shape {
+            MemberShape::Value(value) if value.is_vector() => 1,
+            MemberShape::Value(_) => 0,
+            MemberShape::Table { .. } => 2,
+        });
+        let mut offset: usize = 0;
+        let mut laid = Vec::with_capacity(members.len());
+        for (name, shape, source) in members {
+            let (align, size) = shape.align_size();
+            offset = offset.next_multiple_of(align);
+            laid.push(UniformMember {
+                name,
+                shape,
+                source,
+                offset,
+            });
+            offset += size;
+        }
+        Self {
+            members: laid,
+            size: offset.next_multiple_of(16).max(16),
+        }
+    }
+
+    /// Returns the WGSL declaration of the struct `HenadParams`.
+    pub(crate) fn declaration(&self) -> String {
+        let mut text = String::from("struct HenadParams {\n");
+        for member in &self.members {
+            text.push_str(&format!("    {}: {},\n", member.name, member.shape.wgsl()));
+        }
+        text.push_str("}\n");
+        text
+    }
+
+    /// Returns the bytes of the block over `world` with the document's parameters `params`, in `context`, for a pass
+    /// the engine dispatches as `dispatch` says.
+    ///
+    /// # Errors
+    ///
+    /// Returns the fault of a prelude the host cannot evaluate.
+    pub(crate) fn bytes(
+        &self,
+        evaluator: &HostEvaluator,
+        world: HostWorld,
+        params: &[HostValue],
+        context: &RunContext,
+        dispatch: &Dispatch,
+    ) -> Result<Vec<u8>, String> {
+        let (width, height, _) = world.domain_grid();
+        let hash = dispatch.hash.unwrap_or(HashGrid {
+            grid_w: 1,
+            grid_h: 1,
+            cell_w: 1.0,
+            cell_h: 1.0,
+        });
+        let mut frames: BTreeMap<usize, Vec<HostValue>> = BTreeMap::new();
+        let mut bytes = vec![0u8; self.size];
+        for member in &self.members {
+            let words: Vec<u32> = match &member.source {
+                MemberSource::Width => vec![width],
+                MemberSource::Height => vec![height],
+                MemberSource::Count(domain) => {
+                    vec![
+                        world
+                            .elements(*domain)
+                            .map_or(0, |count| u32::try_from(count).unwrap_or(u32::MAX)),
+                    ]
+                }
+                MemberSource::GroupsX => vec![dispatch.groups_x],
+                MemberSource::World => world.extent().iter().map(|side| side.to_bits()).collect(),
+                MemberSource::HashGrid => vec![hash.grid_w, hash.grid_h],
+                MemberSource::HashCell => vec![hash.cell_w.to_bits(), hash.cell_h.to_bits()],
+                MemberSource::HashInverse => vec![(1.0 / hash.cell_w).to_bits(), (1.0 / hash.cell_h).to_bits()],
+                MemberSource::Texture => dispatch.texture.to_vec(),
+                MemberSource::CountFires => vec![u32::from(dispatch.counting)],
+                MemberSource::Press => vec![context.press],
+                MemberSource::Enabled { position } => vec![u32::from(evaluator.is_enabled(*position, params))],
+                MemberSource::Key { position, draw } => {
+                    let key = program_of(evaluator, *position)?
+                        .draw_keys
+                        .get(*draw)
+                        .copied()
+                        .unwrap_or_default();
+                    vec![key_word(key, context.phase, context.seed)]
+                }
+                MemberSource::Slot { position, slot } => {
+                    let frame = frame_of(&mut frames, evaluator, *position, world, params, context)?;
+                    value_words(frame.get(*slot).copied().unwrap_or(HostValue::U32(0)))
+                }
+                MemberSource::Table { position, base, max } => {
+                    let frame = frame_of(&mut frames, evaluator, *position, world, params, context)?;
+                    let base = frame.get(*base).and_then(|value| value.as_f32()).unwrap_or(0.0);
+                    (0..=*max)
+                        .map(|exponent| base.powi(i32::try_from(exponent).unwrap_or(i32::MAX)).to_bits())
+                        .collect()
+                }
+            };
+            for (k, word) in words.iter().enumerate() {
+                let start = member.offset + 4 * k;
+                if let Some(target) = bytes.get_mut(start..start + 4) {
+                    target.copy_from_slice(&word.to_le_bytes());
+                }
+            }
+        }
+        Ok(bytes)
+    }
+}
+
+/// Returns the program of the pass at `position`.
+fn program_of(evaluator: &HostEvaluator, position: usize) -> Result<&Program, String> {
+    match evaluator.program_at(position) {
+        Some(Ok(program)) => Ok(program),
+        Some(Err(error)) => Err(error.to_string()),
+        None => Err(format!("the file has no pass at position {position}")),
+    }
+}
+
+/// Returns the prelude frame of the pass at `position`, evaluating it once per block.
+fn frame_of<'a>(
+    frames: &'a mut BTreeMap<usize, Vec<HostValue>>,
+    evaluator: &HostEvaluator,
+    position: usize,
+    world: HostWorld,
+    params: &[HostValue],
+    context: &RunContext,
+) -> Result<&'a [HostValue], String> {
+    match frames.entry(position) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => {
+            let program = program_of(evaluator, position)?;
+            let frame = run::prelude(program, params, context, world).map_err(|error| error.to_string())?;
+            Ok(entry.insert(frame))
+        }
+    }
+}
+
+/// Returns the words a uniform member holds for `value`: a `bool` as 0 or 1, a vector as two words.
+fn value_words(value: HostValue) -> Vec<u32> {
+    match value {
+        HostValue::Bool(flag) => vec![u32::from(flag)],
+        HostValue::U32(word)
+        | HostValue::Category(word)
+        | HostValue::Layer(word)
+        | HostValue::Cell(word)
+        | HostValue::Agent(word) => vec![word],
+        HostValue::I32(word) => vec![word as u32],
+        HostValue::F32(word) => vec![word.to_bits()],
+        HostValue::Vec2U([x, y]) => vec![x, y],
+        HostValue::Vec2I([x, y]) => vec![x as u32, y as u32],
+        HostValue::Vec2F([x, y]) => vec![x.to_bits(), y.to_bits()],
+        HostValue::U64(_) | HostValue::F64(_) | HostValue::Vec2D(_) => vec![0],
+    }
+}

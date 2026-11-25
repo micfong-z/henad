@@ -10,6 +10,8 @@ use egui::{Color32, Mesh, Rect, Shape, TextStyle};
 use egui_plot::{GridMark, PlotBounds, PlotGeometry, PlotItem, PlotItemBase, PlotPoint, PlotTransform};
 use web_time::Instant;
 
+use crate::ui::text::text_width;
+
 /// Colours of the configurations a view draws, in order. A config's band and mean line share one colour.
 pub const CONFIG_COLORS: [Color32; 10] = [
     Color32::from_rgb(0x4e, 0x79, 0xa7),
@@ -48,7 +50,7 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 /// Returns whether a view computed at `computed_at`, from a store that has changed since, is due to compute again.
 ///
 /// Before [`REFRESH_INTERVAL`] has passed, `ctx` repaints once the interval ends.
-pub fn refresh_due(ctx: &egui::Context, computed_at: Instant) -> bool {
+fn refresh_due(ctx: &egui::Context, computed_at: Instant) -> bool {
     match REFRESH_INTERVAL.checked_sub(computed_at.elapsed()) {
         Some(wait) if !wait.is_zero() => {
             ctx.request_repaint_after(wait);
@@ -56,6 +58,15 @@ pub fn refresh_due(ctx: &egui::Context, computed_at: Instant) -> bool {
         }
         _ => true,
     }
+}
+
+/// Returns whether a view computed at `computed_at` is due to compute again.
+///
+/// A view whose `settings_changed` computes at once, and a view whose store has not changed never does. A view whose
+/// store has changed computes once [`REFRESH_INTERVAL`] has passed since `computed_at`, and `ctx` repaints when the
+/// interval ends.
+pub fn cache_stale(ctx: &egui::Context, settings_changed: bool, store_changed: bool, computed_at: Instant) -> bool {
+    settings_changed || (store_changed && refresh_due(ctx, computed_at))
 }
 
 /// Returns the colour of config number `position` in a view.
@@ -329,12 +340,6 @@ pub fn labeled_combo(
         .labelled_by(label.id)
 }
 
-/// Returns the width of `text` in `style` on one line.
-pub fn text_width(ui: &egui::Ui, text: &str, style: egui::TextStyle) -> f32 {
-    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, style);
-    galley.size().x
-}
-
 /// Returns `value` with four significant digits, or a dash for a value that is not finite.
 ///
 /// A value from 1000 up to a trillion is rounded to a whole number with its digits grouped in threes. Only a value
@@ -427,12 +432,43 @@ mod tests {
     use egui::{Color32, Rect, Shape, pos2};
     use egui_plot::{PlotItem as _, PlotPoint, PlotTransform};
 
+    use std::time::Duration;
+
+    use web_time::Instant;
+
     use super::{
-        HeatmapTiles, NO_DATA_COLOR, decimate, format_precise, format_significant, heat_color, tile_text_color,
+        HeatmapTiles, NO_DATA_COLOR, REFRESH_INTERVAL, cache_stale, decimate, format_precise, format_significant,
+        heat_color, tile_text_color,
     };
 
     fn series(values: &[f64]) -> Vec<[f64; 2]> {
         values.iter().enumerate().map(|(x, &y)| [x as f64, y]).collect()
+    }
+
+    #[test]
+    fn a_view_computes_at_once_for_its_settings_and_paced_for_its_store() {
+        let ctx = egui::Context::default();
+        let now = Instant::now();
+        let earlier = now
+            .checked_sub(REFRESH_INTERVAL + Duration::from_millis(1))
+            .expect("the clock reaches back one interval");
+        assert!(cache_stale(&ctx, true, false, now), "new settings compute at once");
+        assert!(
+            cache_stale(&ctx, true, true, now),
+            "new settings do not wait for the interval"
+        );
+        assert!(
+            !cache_stale(&ctx, false, false, earlier),
+            "an unchanged store never computes again"
+        );
+        assert!(
+            !cache_stale(&ctx, false, true, now),
+            "a changed store waits for the interval"
+        );
+        assert!(
+            cache_stale(&ctx, false, true, earlier),
+            "a changed store computes once the interval passed"
+        );
     }
 
     #[test]

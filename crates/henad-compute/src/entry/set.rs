@@ -6,7 +6,7 @@
 use std::fmt;
 use std::iter::FusedIterator;
 
-use henad_core::provenance::{BuildInfo, ModelSource};
+use henad_core::provenance::{BuildInfo, CodeOrigin, ModelSource};
 
 use super::ModelEntry;
 use crate::gpu::{GpuContext, GpuNeeds};
@@ -28,8 +28,8 @@ impl ModelSet {
         }
     }
 
-    /// Adds `entry`. An entry whose source records no build yet receives the set's build, and any other entry keeps
-    /// the build it records.
+    /// Adds `entry`. An entry whose compiled source records no build yet receives the set's build, and any other entry
+    /// keeps the build it records. A model composed at run time records its code, and receives no build.
     ///
     /// Note that an entry registered from a type in a third-party crate also receives the set's build. Its source's
     /// type path still refers to the real crate. A model library therefore exports a set built from its own
@@ -42,14 +42,28 @@ impl ModelSet {
     pub fn insert(&mut self, entry: ModelEntry) -> Result<&mut Self, ModelSetError> {
         check_id(entry.id())?;
         self.check_free(&entry)?;
-        let entry = if entry.source().build().is_some() {
-            entry
-        } else {
-            let source = entry.source().clone().__with_build(self.build);
-            entry.with_source(source)
-        };
+        let entry = self.stamped(entry);
         self.entries.push(entry);
         Ok(self)
+    }
+
+    /// Puts `entry` in place of the entry with its id, at that entry's position, and returns the entry it replaced.
+    /// Adds `entry` at the end when the set holds no entry with its id, and returns `None`.
+    ///
+    /// The entry's source receives the set's build as [`Self::insert`] gives it. Work that holds a clone of the
+    /// replaced entry, such as a running sweep or simulation, keeps it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelSetError::InvalidId`] for an id outside the grammar. The set is unchanged on an error.
+    pub fn replace(&mut self, entry: ModelEntry) -> Result<Option<ModelEntry>, ModelSetError> {
+        check_id(entry.id())?;
+        let entry = self.stamped(entry);
+        if let Some(held) = self.entries.iter_mut().find(|held| held.id() == entry.id()) {
+            return Ok(Some(std::mem::replace(held, entry)));
+        }
+        self.entries.push(entry);
+        Ok(None)
     }
 
     /// Adds every entry of `other`, each keeping its own source.
@@ -78,23 +92,17 @@ impl ModelSet {
     /// Returns [`ModelLookupError::NotInSet`] for an id missing from the set, and
     /// [`ModelLookupError::NeedsGpu`] for a GPU model when `gpu` is `None`.
     pub fn lookup(&self, id: &str, gpu: Option<&GpuContext>) -> Result<&ModelEntry, ModelLookupError> {
-        if let Some(entry) = self.runnable(gpu).find(|entry| entry.id() == id) {
-            return Ok(entry);
+        match self.get(id) {
+            Some(entry) if runs_with(entry, gpu.is_some()) => Ok(entry),
+            Some(_) => Err(ModelLookupError::NeedsGpu { id: id.to_owned() }),
+            None => Err(ModelLookupError::NotInSet { id: id.to_owned() }),
         }
-        let id = id.to_owned();
-        Err(if self.get(&id).is_some() {
-            ModelLookupError::NeedsGpu { id }
-        } else {
-            ModelLookupError::NotInSet { id }
-        })
     }
 
     /// Returns the entries a host with `gpu` can run, in the set's order. A GPU model runs only with a device.
     pub fn runnable<'a>(&'a self, gpu: Option<&GpuContext>) -> impl Iterator<Item = &'a ModelEntry> + use<'a> {
         let device = gpu.is_some();
-        self.entries
-            .iter()
-            .filter(move |entry| device || entry.gpu_needs().is_none())
+        self.entries.iter().filter(move |entry| runs_with(entry, device))
     }
 
     /// Returns an iterator over the entries, in the set's order.
@@ -118,6 +126,18 @@ impl ModelSet {
             .iter()
             .filter_map(ModelEntry::gpu_needs)
             .fold(GpuNeeds::default(), GpuNeeds::merge)
+    }
+
+    /// Returns `entry` with the set's build recorded on its source, unless the source records a build already or holds
+    /// runtime code.
+    fn stamped(&self, entry: ModelEntry) -> ModelEntry {
+        let source = entry.source();
+        if source.build().is_some() || source.origin() != CodeOrigin::Compiled {
+            entry
+        } else {
+            let source = source.clone().__with_build(self.build);
+            entry.with_source(source)
+        }
     }
 
     /// Returns an error when the set already holds an entry with the same id as `entry`.
@@ -162,23 +182,30 @@ impl ExactSizeIterator for ModelSetIter<'_> {}
 
 impl FusedIterator for ModelSetIter<'_> {}
 
+/// Returns whether a host can run `entry`, where `device` says whether the host holds a GPU device.
+fn runs_with(entry: &ModelEntry, device: bool) -> bool {
+    device || entry.gpu_needs().is_none()
+}
+
 /// Returns an error when `id` is outside the model id grammar.
 fn check_id(id: &str) -> Result<(), ModelSetError> {
-    let invalid = |reason| {
-        Err(ModelSetError::InvalidId {
-            id: id.to_owned(),
-            reason,
-        })
-    };
+    check_id_grammar(id).map_err(|reason| ModelSetError::InvalidId {
+        id: id.to_owned(),
+        reason,
+    })
+}
+
+/// Returns the clause saying how `id` breaks the model id grammar, such as "is empty", or `Ok` for an id inside it.
+pub(crate) fn check_id_grammar(id: &str) -> Result<(), &'static str> {
     let mut chars = id.chars();
     match chars.next() {
-        None => invalid("is empty"),
-        Some(first) if !first.is_ascii_lowercase() => invalid("does not start with a lowercase ASCII letter"),
+        None => Err("is empty"),
+        Some(first) if !first.is_ascii_lowercase() => Err("does not start with a lowercase ASCII letter"),
         Some(_)
             if !chars
                 .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_') =>
         {
-            invalid("holds a character other than a lowercase ASCII letter, a digit or an underscore")
+            Err("contains a character other than a lowercase ASCII letter, a digit or an underscore")
         }
         Some(_) => Ok(()),
     }
@@ -217,7 +244,8 @@ impl fmt::Display for ModelSetError {
             ),
             Self::InvalidId { id, reason } => write!(
                 f,
-                "model id '{id}' {reason} (an id is a lowercase ASCII letter, then lowercase letters, digits and underscores)"
+                "model id '{id}' {reason} (an id must start with a lowercase ASCII letter, followed by lowercase \
+                 letters, digits and underscores)"
             ),
         }
     }
@@ -247,7 +275,7 @@ impl fmt::Display for ModelLookupError {
             Self::NotInSet { id } => write!(f, "this build does not include model '{id}'"),
             Self::NeedsGpu { id } => write!(
                 f,
-                "model '{id}' needs a GPU with compute support, and this device has none"
+                "model '{id}' needs a GPU with compute support, unavailable on this device"
             ),
         }
     }
@@ -260,7 +288,7 @@ mod tests {
     use henad_core::authoring::model::grid_model::GridModel;
     use henad_core::grid::Grid2D;
     use henad_core::params::{ParamDescriptor, ParamValue};
-    use henad_core::provenance::BuildInfo;
+    use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode};
     use henad_core::topology::NeighborhoodKind;
     use henad_core::view::{StatDescriptor, StatValue};
 
@@ -310,6 +338,11 @@ mod tests {
 
     fn build(package: &'static str) -> BuildInfo {
         BuildInfo::__from_env(package, "1.0.0", None, None, None, None, false)
+    }
+
+    /// Returns the build of a crate whose sources hash to `0xAA`.
+    fn hashed_build(package: &'static str) -> BuildInfo {
+        BuildInfo::__from_env(package, "1.0.0", None, None, None, Some("00000000000000aa"), false)
     }
 
     fn ids(models: &ModelSet) -> Vec<&str> {
@@ -407,5 +440,87 @@ mod tests {
             models.lookup("calm_2", None),
             Err(ModelLookupError::NotInSet { .. })
         ));
+    }
+
+    #[test]
+    fn replace_keeps_the_position_and_returns_the_old_entry() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        models.insert(register_grid_model::<Calm>()).expect("a fresh id");
+        let replaced = models
+            .replace(register_grid_model::<StillAgain>())
+            .expect("a valid id")
+            .expect("the set held 'still'");
+        assert!(replaced.source().type_path().ends_with("::Still"));
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        let held = models.get("still").expect("'still' is in the set");
+        assert!(held.source().type_path().ends_with("::StillAgain"));
+        assert_eq!(
+            held.source().package(),
+            "host",
+            "the set records its build as insert does"
+        );
+
+        let mut library = ModelSet::new(build("library"));
+        library.insert(register_grid_model::<Calm>()).expect("a fresh id");
+        let entry = library.get("calm_2").expect("calm_2 is in the library").clone();
+        models.replace(entry).expect("a valid id");
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        assert_eq!(
+            models.get("calm_2").map(|entry| entry.source().package()),
+            Some("library"),
+            "an entry from another set keeps its source"
+        );
+    }
+
+    #[test]
+    fn replace_appends_a_new_id() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        let replaced = models.replace(register_grid_model::<Calm>()).expect("a valid id");
+        assert!(replaced.is_none());
+        assert_eq!(ids(&models), ["still", "calm_2"]);
+        assert_eq!(models.get("calm_2").map(|entry| entry.source().package()), Some("host"));
+    }
+
+    #[test]
+    fn replace_refuses_an_id_outside_the_grammar() {
+        let mut models = ModelSet::new(build("host"));
+        models.insert(register_grid_model::<Still>()).expect("a fresh id");
+        for entry in [register_grid_model::<Capital>(), register_grid_model::<Hyphen>()] {
+            let id = entry.id().to_owned();
+            let Err(error) = models.replace(entry) else {
+                panic!("'{id}' joined the set");
+            };
+            assert!(matches!(error, ModelSetError::InvalidId { .. }), "{error:?}");
+        }
+        assert_eq!(ids(&models), ["still"]);
+    }
+
+    #[test]
+    fn a_runtime_source_is_never_stamped_with_the_set_build() {
+        let code = ModelCode::new("test-rule/1", "rule");
+        let mut models = ModelSet::new(hashed_build("host"));
+        models
+            .insert(register_grid_model::<Still>().__with_code(code.clone()))
+            .expect("a fresh id");
+        let source = models.get("still").expect("'still' is in the set").source();
+        assert_eq!(source.origin(), CodeOrigin::Runtime);
+        assert_eq!(source.type_path(), "runtime:still");
+        assert_eq!(source.build(), None);
+        assert_eq!(
+            source.code_hash(),
+            Some(code.hash()),
+            "the code identifies the model, never the host"
+        );
+
+        let edited = ModelCode::new("test-rule/1", "edited rule");
+        let replaced = models
+            .replace(register_grid_model::<StillAgain>().__with_code(edited.clone()))
+            .expect("a valid id")
+            .expect("the set held 'still'");
+        assert_eq!(replaced.source().code(), Some(&code));
+        let source = models.get("still").expect("'still' is in the set").source();
+        assert_eq!((source.build(), source.code_hash()), (None, Some(edited.hash())));
     }
 }

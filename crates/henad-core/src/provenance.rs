@@ -1,11 +1,16 @@
-//! Identity of compiled crates and the source of each model.
+//! Identity of compiled crates and the code of each model.
 //!
 //! A [`BuildInfo`] identifies one compiled crate: its package, its version and, once a build script stamps it, its
 //! commit, a dirty flag and a hash of its sources. [`build_info!`](crate::build_info) returns the build of the crate it
-//! expands in. A [`ModelSource`] identifies the origin of a model's code: the type registered, and the build of the
-//! crate that registered it.
+//! expands in. A [`ModelSource`] identifies the origin of a model's code: the type registered and the build of the
+//! crate that registered it, or the [`ModelCode`] of a model composed at run time. Its [`CodeOrigin`] tells compiled
+//! and runtime code apart.
 
 use std::borrow::Cow;
+use std::fmt;
+use std::sync::Arc;
+
+use crate::fnv::Fnv1a64;
 
 /// Identity of one compiled crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,23 +149,154 @@ macro_rules! build_info {
     };
 }
 
+/// Way a model's code reached the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CodeOrigin {
+    /// Code compiled into the host from a crate it links.
+    Compiled,
+    /// Code composed at run time from text, such as a grid rule read from a model file.
+    Runtime,
+}
+
+impl CodeOrigin {
+    /// Returns the name a results folder records for the origin: `compiled` or `runtime`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compiled => "compiled",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+/// Domain tag written before a model's code, so its hash never equals another kind of hash of the same text.
+const CODE_DOMAIN: &str = "henad.model-code.1";
+
+/// Canonical text of a model composed at run time, and the hash that identifies its code.
+///
+/// `format` names the text's format and its version. Two codes hash alike only when both the format and the text are
+/// the same.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ModelCode {
+    format: Cow<'static, str>,
+    text: Arc<str>,
+    hash: u64,
+}
+
+impl ModelCode {
+    /// Returns the code of `text`, written in `format`.
+    ///
+    /// The hash is the FNV-1a hash of the tag `henad.model-code.1`, the format and the text, each written after its
+    /// byte length.
+    pub fn new(format: impl Into<Cow<'static, str>>, text: impl Into<Arc<str>>) -> Self {
+        let (format, text) = (format.into(), text.into());
+        let mut hasher = Fnv1a64::new();
+        hasher.write_str(CODE_DOMAIN);
+        hasher.write_str(&format);
+        hasher.write_str(&text);
+        Self {
+            format,
+            text,
+            hash: hasher.finish(),
+        }
+    }
+
+    /// Name and version of the text's format.
+    pub fn format(&self) -> &str {
+        &self.format
+    }
+
+    /// Canonical text of the model.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Hash of the format and the text.
+    pub fn hash(&self) -> u64 {
+        self.hash
+    }
+}
+
+/// Prints the format, the byte length of the text and the hash. The text can run to many kilobytes.
+impl fmt::Debug for ModelCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ModelCode")
+            .field("format", &self.format)
+            .field("text_bytes", &self.text.len())
+            .field("hash", &format_args!("{:016x}", self.hash))
+            .finish_non_exhaustive()
+    }
+}
+
 /// Origin of a model's code.
 ///
-/// Registration records the model's type path. The registering crate's build is recorded once the entry joins a
-/// model set, and the accessors that read it return empty text or `None` until then.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Registration records the model's type path, with a [`CodeOrigin::Compiled`] origin. The registering crate's build
+/// is recorded once the entry joins a model set, and the accessors that read it return empty text or `None` until
+/// then. A model composed at run time records its [`ModelCode`] instead, and never a build.
+///
+/// A runtime model built from an author document, such as a sheet, also records the document's text as its author
+/// text ([`Self::with_author`]). The author text stays outside [`Self::code_hash`] and outside equality, so two
+/// sources whose author texts differ in a note alone compare equal. [`Self::same_author`] compares the author texts.
+#[derive(Debug, Clone)]
 pub struct ModelSource {
     type_path: Cow<'static, str>,
     build: Option<BuildInfo>,
+    origin: CodeOrigin,
+    /// Code of a runtime model, `None` for compiled code.
+    code: Option<ModelCode>,
+    /// Text of the author document a runtime model was built from, `None` for a model built from its code alone.
+    author: Option<ModelCode>,
 }
 
+/// Compares the type path, the build, the origin and the code, and leaves the author text out.
+impl PartialEq for ModelSource {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            type_path,
+            build,
+            origin,
+            code,
+            author: _,
+        } = self;
+        *type_path == other.type_path && *build == other.build && *origin == other.origin && *code == other.code
+    }
+}
+
+impl Eq for ModelSource {}
+
 impl ModelSource {
-    /// Returns a source that records `type_path` and no build yet.
+    /// Returns a source that records `type_path`, compiled code and no build yet.
     #[doc(hidden)]
     pub fn __from_type_path(type_path: &'static str) -> Self {
         Self {
             type_path: Cow::Borrowed(type_path),
             build: None,
+            origin: CodeOrigin::Compiled,
+            code: None,
+            author: None,
+        }
+    }
+
+    /// Returns the source of a model composed at run time from `code`, under the type path `runtime:` and `label`.
+    ///
+    /// The source records no build, and a model set records none on it.
+    pub fn runtime(label: &str, code: ModelCode) -> Self {
+        Self {
+            type_path: Cow::Owned(format!("runtime:{label}")),
+            build: None,
+            origin: CodeOrigin::Runtime,
+            code: Some(code),
+            author: None,
+        }
+    }
+
+    /// Returns the source with `author` recorded as the text of the author document the model was built from.
+    ///
+    /// The author text enters neither [`Self::code_hash`] nor equality.
+    pub fn with_author(self, author: ModelCode) -> Self {
+        Self {
+            author: Some(author),
+            ..self
         }
     }
 
@@ -173,7 +309,40 @@ impl ModelSource {
         }
     }
 
-    /// Build of the registering crate, `None` until a set records it.
+    /// Way the model's code reached the process.
+    pub fn origin(&self) -> CodeOrigin {
+        self.origin
+    }
+
+    /// Code of a model composed at run time, `None` for compiled code.
+    pub fn code(&self) -> Option<&ModelCode> {
+        self.code.as_ref()
+    }
+
+    /// Text of the author document a runtime model was built from, `None` for a model built from its code alone.
+    pub fn author(&self) -> Option<&ModelCode> {
+        self.author.as_ref()
+    }
+
+    /// Returns whether `other` records the same author text, or none, as this source.
+    ///
+    /// Equality leaves the author text out. This is the comparison of the author texts alone.
+    pub fn same_author(&self, other: &Self) -> bool {
+        self.author == other.author
+    }
+
+    /// Hash that identifies the model's code: the [`ModelCode::hash`] of a runtime model, and the registering
+    /// crate's [source hash](Self::source_hash) for compiled code.
+    ///
+    /// `None` for compiled code whose build records no source hash.
+    pub fn code_hash(&self) -> Option<u64> {
+        match &self.code {
+            Some(code) => Some(code.hash()),
+            None => self.source_hash(),
+        }
+    }
+
+    /// Build of the registering crate, `None` until a set records it and always `None` for a runtime model.
     pub fn build(&self) -> Option<&BuildInfo> {
         self.build.as_ref()
     }
@@ -205,7 +374,7 @@ impl ModelSource {
         self.build.as_ref().and_then(BuildInfo::source_hash)
     }
 
-    /// Type path of the registered model, from `std::any::type_name`.
+    /// Type path of the registered model, from `std::any::type_name`, or `runtime:` and the label of a runtime model.
     ///
     /// Note that the format of a type path is not stable across compiler releases, so no check compares it.
     pub fn type_path(&self) -> &str {
@@ -215,7 +384,7 @@ impl ModelSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildInfo, ModelSource};
+    use super::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 
     #[test]
     fn an_unstamped_build_reads_as_unknown() {
@@ -263,5 +432,139 @@ mod tests {
             ("pkg", "1.0.0", "abc1234")
         );
         assert_eq!(source.build(), Some(&build));
+    }
+
+    #[test]
+    fn model_code_hash_is_pinned() {
+        // A results folder records this hash, and a later build has to compute the same one for the same text. The
+        // value is FNV-1a over the length-prefixed tag, format and text, computed outside Rust.
+        let code = ModelCode::new("henad-grid-rule/1", "fn step_cell(cell: u32) -> u32 { return cell; }\n");
+        assert_eq!(format!("{:016x}", code.hash()), "efc6226b54df65e4");
+    }
+
+    #[test]
+    fn model_code_hash_covers_format_and_text() {
+        let code = ModelCode::new("henad-grid-rule/1", "rule");
+        assert_eq!((code.format(), code.text()), ("henad-grid-rule/1", "rule"));
+        assert_eq!(code, ModelCode::new("henad-grid-rule/1", String::from("rule")));
+        assert_ne!(code.hash(), ModelCode::new("henad-grid-rule/2", "rule").hash());
+        assert_ne!(code.hash(), ModelCode::new("henad-grid-rule/1", "rule ").hash());
+        // The length before each field keeps a byte moved from the format to the text from hashing alike.
+        assert_ne!(ModelCode::new("ab", "c").hash(), ModelCode::new("a", "bc").hash());
+        let printed = format!("{code:?}");
+        assert!(
+            printed.contains("text_bytes: 4") && !printed.contains("\"rule\""),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn a_runtime_source_names_its_code_and_no_build() {
+        let code = ModelCode::new("henad-grid-rule/1", "rule");
+        let source = ModelSource::runtime("life", code.clone());
+        assert_eq!(source.origin(), CodeOrigin::Runtime);
+        assert_eq!(source.type_path(), "runtime:life");
+        assert_eq!(source.code(), Some(&code));
+        assert_eq!(source.code_hash(), Some(code.hash()));
+        assert_eq!(source.build(), None);
+        assert_ne!(
+            source,
+            ModelSource::runtime("life", ModelCode::new("henad-grid-rule/1", "other rule")),
+            "equality covers the code"
+        );
+
+        let build = BuildInfo::__from_env("pkg", "1.0.0", None, None, None, Some("00000000000000aa"), false);
+        let compiled = ModelSource::__from_type_path("crate::Model").__with_build(build);
+        assert_eq!(
+            compiled.code_hash(),
+            Some(0xAA),
+            "compiled code is identified by its sources"
+        );
+    }
+
+    #[test]
+    fn model_source_equality_ignores_the_author_text() {
+        let base = ModelSource::runtime("life", ModelCode::new("henad-graph/1", "graph"))
+            .with_author(ModelCode::new("henad-sheet/1", "sheet"));
+        let build = BuildInfo::__from_env("pkg", "1.0.0", Some("abc1234"), None, None, None, false);
+        // One source per field, each differing from `base` in that field alone. The destructuring and the literal below
+        // name every field, so a new field fails to compile here until it is placed. Its row in `differing` is added
+        // by hand.
+        let ModelSource {
+            type_path,
+            build: base_build,
+            origin,
+            code,
+            author,
+        } = base.clone();
+        let differing = [
+            (
+                "type_path",
+                ModelSource {
+                    type_path: "runtime:other".into(),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "build",
+                ModelSource {
+                    build: Some(build),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "origin",
+                ModelSource {
+                    origin: CodeOrigin::Compiled,
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "code",
+                ModelSource {
+                    code: Some(ModelCode::new("henad-graph/1", "other graph")),
+                    ..base.clone()
+                },
+                true,
+            ),
+            (
+                "author",
+                ModelSource {
+                    author: Some(ModelCode::new("henad-sheet/1", "sheet with a note")),
+                    ..base.clone()
+                },
+                false,
+            ),
+        ];
+        for (field, source, counts) in &differing {
+            assert_eq!(*source != base, *counts, "equality and the field {field}");
+        }
+        assert_eq!(
+            ModelSource {
+                type_path,
+                build: base_build,
+                origin,
+                code,
+                author,
+            },
+            base
+        );
+
+        let edited = &differing[4].1;
+        assert!(!edited.same_author(&base), "the author texts differ");
+        assert!(base.same_author(&base.clone()));
+        assert_eq!(
+            edited.code_hash(),
+            base.code_hash(),
+            "the author text stays outside the hash"
+        );
+        assert_eq!(base.author().map(ModelCode::text), Some("sheet"));
+        let without = ModelSource::runtime("life", ModelCode::new("henad-graph/1", "graph"));
+        assert_eq!(without.author(), None);
+        assert_eq!(without, base);
+        assert!(!without.same_author(&base));
     }
 }

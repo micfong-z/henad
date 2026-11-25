@@ -16,6 +16,7 @@ A project with its own models can [host the same command line](#hosting-the-comm
 !!! info "Henad 0.3"
 
     This page describes Henad 0.3.
+    `--model-file`, `--print-lowered`, values with a `%` sign, the `integer` and `hidden` marks and the `time` column arrive in Henad 0.4.
 
 ```text
 henad-cli [OPTIONS] [MODEL]
@@ -25,6 +26,8 @@ henad-cli [OPTIONS] [MODEL]
 On a machine without a compute adapter `--list` leaves the GPU models out, and naming one is rejected with the message that it needs a GPU.
 An id the build does not include is rejected as well.
 A sweep or search read from `--spec` takes the model from the spec file, and `MODEL` can be left out.
+With one [`--model-file`](#model-files) and no spec, the file's model is the model, and `MODEL` can be left out too.
+With two files or more and no spec, `MODEL` is required, and a command line without it exits with status 2.
 
 !!! warning "Release mode"
 
@@ -39,6 +42,8 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 | `--params` | | Print the model's parameters, with kinds, defaults and ranges, and exit. With `--json`, print them as [one JSON line](#parameters-as-json) |
 | `--info` | | Print host and GPU details. Without a model or a sweep, prints and exits. Otherwise, prints as a provenance header |
 | `--json` | | Emit one JSON object per line instead of the human report, for a driver to parse |
+| `--model-file <PATH>` | | Load a [model file](#model-files) and add its model to the build's models, replacing a model with the same id. Repeatable |
+| `--print-lowered` | | Print the canonical text of the graph that the single `--model-file` builds, and exit. For a sheet, print the [lowered graph](#sheets) |
 | `--threads <N>` | 0 | Worker threads for CPU models. 0 uses the rayon default, one per logical cpu |
 | `--set <ID=VALUE>` | | Override one parameter. Repeatable |
 | `--act <ID@TICK>` | | Run one of the model's actions at that tick. Repeatable. In a sweep, every run fires it |
@@ -48,7 +53,7 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 | `--global-warmup <N>` | 0 | Untimed steps once before the timed reps, to ramp GPU clocks and pay first-use compilation |
 | `--seed <SEED>` | model default | RNG seed. In a sweep, the root seed that every run's seed and design seed come from, 0 when left out |
 | `--export <PATH>` | | Write the final state after warmup and steps to this path, then exit |
-| `--export-stats <PATH>` | | Write the per-tick stat series to this path as CSV, then exit |
+| `--export-stats <PATH>` | | Write the per-tick stat series to this path as CSV, then exit. The columns are `tick`, a `time` column for a model with a [tick length](model-files.md#time-scale), then one per stat column |
 | `--stats-every <N>` | 1 | Sample stats every N ticks when using `--export-stats` or sweeping |
 | `-h`, `--help` | | Print help |
 | `-V`, `--version` | | Print version |
@@ -56,9 +61,13 @@ A sweep or search read from `--spec` takes the model from the spec file, and `MO
 The flags that run a sweep have [their own table](#sweep-flags).
 
 `--set` accepts a number for a `u32` or `f32` parameter, `true` or `false` for a `bool`, and an option's name or index for a `choice`, as in `--set network=Geometric`.
-A parameter that `--params` marks `format=percent` still accepts a fraction, and `--set virus_spread_chance=0.1` sets it to 10%.
+A parameter that `--params` marks `format=percent` accepts a value with a `%` sign or a fraction, so `--set virus_spread_chance=10%` and `--set virus_spread_chance=0.1` both set it to 10%.
+A `%` sign on any other parameter is rejected with the parameter's id.
+A parameter that `--params` marks `integer`, such as a sheet's whole number that can go below 0, is an `f32` that takes whole numbers alone, and `--set` rejects a value with a fractional part.
+A parameter that `--params` marks `hidden`, such as a model file's tick length, is reached by `--set`, `--vary` and a spec file as any other parameter is.
+The app leaves such a parameter off its Parameters tab, and its Sweep tab still varies it.
 
-Both export formats are shared with the app (see [:material-application-export: Export tab](../guide/app.md#export-tab) for details).
+Both export formats are shared with the app (see [:material-export: Export tab](../guide/app.md#export-tab) for details).
 
 ## Examples
 
@@ -100,8 +109,8 @@ With `--export-stats`, the row for a tick is sampled after that tick's actions.
 An id the model does not declare is rejected, and the error lists the ids that it declares.
 An action due after the tick the run stops on never fires, and the runner warns about it on stderr.
 
-Pin the worker count, which is how the cross-engine comparison separates its one-thread row from its all-cores row.
-It runs this twice, at `--threads 1` and `--threads 0`:
+Pin the worker count.
+The cross-engine comparison runs this command at `--threads 1` for its one-thread row and at `--threads 0` for its all-cores row:
 
 ```bash
 cargo run --release -p henad-cli -- boids --threads 1 --steps 100 --reps 5 --json
@@ -159,6 +168,77 @@ For a CPU model, `--export-stats` prepares the model's view before each sample, 
 A stat computed during that preparation, such as Team Assembly's component stats, is then current in every row.
 Each sample also pays for the preparation, and `--stats-every` spaces the samples out.
 
+## Model files
+
+`--model-file` loads a [model file](model-files.md), a GPU model written as one TOML file, and adds its model to the models the build offers.
+A file of kind `graph`, a graph model on a grid or of agents, is read, checked and compiled to WGSL, and its warnings and errors print at their lines.
+A file of kind `sheet` is read, checked and lowered to a graph model, which then builds as a graph does, as [Sheets](#sheets) describes.
+Every mode takes it but `--merge`: a benchmark, `--export-stats`, `--list`, `--params`, and a sweep or search from flags or from `--spec`, `--dry-run` and `--resume` included.
+Every model file builds a GPU model, and `--export` rejects it, as it rejects every GPU model.
+
+```bash
+cargo run --release -p henad-cli -- life_rule \
+  --model-file crates/henad-explore/specs/models/life_rule.toml --params
+```
+
+The flag is repeatable, and two files cannot declare the same id.
+A file whose id names a model of the build replaces that model for the rest of the command line, and in text mode a note on stderr says so.
+A file whose model the command does not run, such as a sheet `sheet_sir` loaded beside the model id `sir`, gets a note on stderr in text mode as well.
+An `--export` or `--export-stats` path that names one of the model files is rejected before anything runs, and the file is left as it was.
+`--list` then shows the file's model under that id, and `--params --json` adds the `origin` and `code_hash` of [its code](#parameters-as-json).
+
+The files and the spec are read before the GPU device is acquired, and the device is sized to the files' models as well as the build's.
+The step is checked while the file is read.
+A file that cannot be read, is no model file, or holds a model that does not compile stops the command line with exit status 1 before anything runs.
+Each problem prints at its place in the file, as `PATH:LINE:COLUMN: error: MESSAGE` with its notes below, where the column counts characters:
+
+```text
+Error: cannot load model file 'life_rule.toml'
+
+Caused by:
+    life_rule.toml:39:5: error: loops are not allowed in a grid rule. Step functions must be bounded
+```
+
+A sweep of a grid rule records the file's canonical text in the manifest as `model.code`, and a sweep of a graph or a sheet the graph's semantic text, and each session records the code's hash as the `code_hash` of its [`model_source`](#builds).
+A [resume](#resuming), a [search resume](#resuming-a-search) and a [merge](#shards-and-merging) then accept only that code.
+A resume passes the same `--model-file`, and a resume with an edited file is rejected before any run.
+Without the flag, the build has no model of that id, or holds a compiled model under it, and the resume is rejected as well.
+An edit that changes nothing but comments outside the step, the order of keys or the form of a number keeps the code, as [Code identity](model-files.md#code-identity) describes.
+
+### Sheets
+
+A sheet runs as any model file does, under the id its `[sheet]` table gives it:
+
+```bash
+cargo run --release -p henad-cli -- sheet_game_of_life \
+  --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
+```
+
+The id of that sheet is `sheet_game_of_life`, so it runs beside the example model `game_of_life` and replaces nothing.
+With one `--model-file` the id can be left out, as for any model file.
+Each warning and error of a sheet prints at the table of the sheet it is about, a line's at its `[card.line.<id>]` table.
+A copy of the example whose line `l2` becomes a state that Status does not hold stops at that line's table:
+
+```text
+Error: cannot load model file 'game_of_life.toml'
+
+Caused by:
+    game_of_life.toml:95:1: error: new_state 'zombie' is not a state of 'status'
+```
+
+A sheet with no property prints a warning at its `[world]` table and stops with the same words as an error there.
+A problem that the checks find in the lowered graph prints at the line table its node was lowered from, or at `[sheet]` when no line owns the node, with no note naming a node or pass of the graph.
+
+`--print-lowered` prints that graph in its canonical text on stdout and exits, with the file's warnings on stderr.
+It takes exactly one `--model-file`, builds nothing and acquires no device.
+The text reads back as a model file of kind `graph` with the sheet's code.
+A graph file prints its own canonical text, and a grid rule is rejected, since it builds as no graph.
+
+```bash
+cargo run --release -p henad-cli -- \
+  --model-file crates/henad-graph/sheets/game_of_life.toml --print-lowered
+```
+
 ## Sweeps
 
 `--out`, `--spec` or `--dry-run` turns a command line into a sweep.
@@ -181,7 +261,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 |---|---|---|
 | `--out <DIR>` | | Run the sweep and write its results to this directory. With `--merge`, write the merged shards to this directory |
 | `--spec <FILE>` | | Read the sweep from a TOML spec file, or run the [search](#searches) of one with a `[search]` table |
-| `--dry-run` | | Print the sweep's plan and write nothing. The first config that builds without a fault and the last config are built as a check |
+| `--dry-run` | | Print the sweep's plan and write nothing. The first config that builds without errors and the last config are built as a check |
 | `--vary <ID=LEVELS>` | | Vary one parameter over [its levels](#levels), or the tick of an action with `action.NAME=LEVELS`. Repeatable |
 | `--zip` | | Pair the levels of every `--vary` by position |
 | `--sample <lhs:N\|random:N>` | | Draw `N` configs from the `--vary` levels and ranges, spread as a Latin hypercube or drawn uniformly. See [designs](#designs) |
@@ -199,7 +279,7 @@ A spec file with a `[search]` table runs a [search](#searches) instead.
 | `--shard <I/N>` | `0/1` | Run only the runs whose `run_id` leaves remainder `I` when divided by `N` |
 | `--resume` | | Resume the sweep in the `--out` directory and run only the missing and timed-out runs. See [resuming](#resuming) |
 | `--retry-failed` | | With `--resume`, also rerun failed runs |
-| `--merge <DIR>...` | | Merge the directories of a sweep's shards into the `--out` directory. Takes no model |
+| `--merge <DIR>...` | | Merge a sweep's shard directories into the `--out` directory. Takes no model |
 
 `--out`, `--spec` and `--dry-run` each request a sweep, and every other flag in this table apart from `--merge` needs one of them.
 `--spec` needs `--out`, `--dry-run` or `--params`.
@@ -212,10 +292,11 @@ A dry run with `--out` checks the directory and still writes nothing.
 `--list`, `--export`, `--export-stats` and `--global-warmup` cannot be combined with a sweep, and `--params` cannot be combined with `--out` or `--dry-run`.
 `--merge` accepts `--out` and `--json`, and rejects every flag that plans or runs a sweep.
 
-`--spec` rejects every flag that changes a result, and the spec file is then the whole record of the sweep.
+`--spec` rejects every flag that changes a result, and the spec file, with any model file's code, is then the whole record of the sweep.
 The rejected flags are `--set`, `--act`, `--steps`, `--warmup`, `--reps`, `--seed`, `--stats-every`, `--vary`, `--zip`, `--sample`, `--design-seed`, `--design`, `--independent-seeds`, `--series-every`, `--stop`, `--reduce`, `--no-default-reducers` and `--timeout`.
 `--concurrent`, `--memory` and `--gpu-memory` override the keys `concurrent`, `memory` and `gpu_memory` of the spec's `[execution]` table.
 `--shard`, `--resume` and `--retry-failed` work with a spec as they do with flags.
+`--model-file` works with a spec, and the manifest records the file's code as `model.code` beside the spec.
 A `MODEL` given beside `--spec` has to match the spec's `model`.
 The guide describes [the spec file](../guide/sweeps.md#spec-files).
 
@@ -227,7 +308,7 @@ The guide describes [the spec file](../guide/sweeps.md#spec-files).
 |---|---|---|
 | `v1,v2,...` | `network=Random,Geometric` | Each value in the list, written as `--set` accepts it |
 | `min:max:step` | `infection_rate=0.1:0.5:0.1` | `min`, `min + step`, `min + 2 * step` and so on, up to and including `max` |
-| `min:max` | `infection_rate=0.05:0.95` | Under `--sample`, every value from `min` to `max`. Elsewhere, the integers from `min` to `max` for a `u32` parameter or an action tick, and rejected for an `f32` |
+| `min:max` | `infection_rate=0.05:0.95` | Under `--sample`, every value from `min` to `max`. Elsewhere, the integers from `min` to `max` for a `u32` parameter, an `f32` that takes whole numbers alone or an action tick, and rejected for any other `f32` |
 | `all` | `directed=all` | Every value of a `bool` or `choice` parameter |
 
 Spaces around the levels and around each listed value are ignored.
@@ -235,8 +316,10 @@ Value `i` of a range is `min + i * step`, computed from `i` alone.
 Rounding errors do not build up along the range, and `0:1:0.1` gives 11 values ending at exactly 1.
 A range stops at the last value not past `max`, and a last value within rounding error of `max` is `max` itself.
 A `u32` range can leave out its step and then steps by 1, as in `initial_outbreak_size=1:5`.
-An `f32` range needs a step, except under `--sample`.
+So can the range of an `f32` that takes whole numbers alone, whose ends and step are whole numbers.
+Any other `f32` range needs a step, except under `--sample`.
 A range over a `bool` or `choice` parameter is rejected, and so is `all` over a number.
+A percentage parameter's range carries a `%` sign on every part or on none, as in `initial_infected_pct=1%:5%:1%`, and a range with the sign on some parts alone is rejected.
 
 The levels of an action are whole ticks from 0.
 `action.NAME` refers to an action that `--act` adds.
@@ -265,6 +348,7 @@ An `f32` range with no step takes the value `min + (stratum + u) / N * (max - mi
 The value is computed in 64 bits, then rounded to `f32` and clamped to the range.
 A factor with `m` values takes the value at index `stratum * m / N`, rounded down and counted from 0, and each value then appears in `N / m` configs, rounded down or up.
 That covers a list, `all`, a stepped range and an integer range with no step.
+A range with no step over an `f32` that takes whole numbers alone is an integer range here, and in a random design and a search too.
 
 A random design draws every value of every config on its own.
 An `f32` range with no step takes `min + u * (max - min)`, and a factor with `m` values takes each of them with chance `1 / m`.
@@ -290,9 +374,10 @@ Each of these rejects it, with an error that states the cause:
 
 - a parameter id that the model does not have, with the valid ids listed in the error
 - a value outside the parameter's range, or a `choice` value that matches no option
+- a fraction for an `f32` that takes whole numbers alone, or a `%` sign on a parameter that is not a percentage
 - a parameter fixed with `--set` and varied too, or varied twice
 - `--zip` over levels of different lengths
-- an `f32` range with no step, outside `--sample`
+- an `f32` range with no step, outside `--sample`, unless the `f32` takes whole numbers alone
 - a sampled design with no samples or no factors, or a factor with an empty list of `values`
 - a design table with a column that matches no parameter or action, a column that appears twice, a row whose width differs from the header, a value that its column rejects, or no rows
 - an action the model does not declare, two actions that share a name, or `--vary action.NAME` for an action no `--act` adds
@@ -300,6 +385,9 @@ Each of these rejects it, with an error that states the cause:
 - a `--stats-every` of 0, or a `--series-every` that is not a multiple of `--stats-every`
 - a stop condition or reducer over a column the model does not report, or a reducer of an unknown kind
 - on a GPU model, a config that the device cannot hold, with the first few such configs and their limits listed in the error
+
+A search checks only its fixed values here.
+A candidate it draws that the device cannot hold is recorded as `refused`, with the limits in its note, and is never built.
 
 An action due after the last tick runs nothing, and the plan warns about it without rejecting the sweep.
 
@@ -384,7 +472,7 @@ An action due at a later tick fires after the step that reaches it, before that 
 Warm-up ticks count toward the tick, as in a benchmark.
 Actions due at one tick fire in the order they are listed, and each fires at most once per run.
 An action due past the run's last tick never fires, and the plan warns about it.
-A rejected action is noted in the `note` column as `model refused action 'ID' at tick TICK`, and the run keeps its status.
+A rejected action is noted in the `note` column as `model rejected action 'ID' at tick TICK`, and the run keeps its status.
 
 ### Timeouts
 
@@ -424,7 +512,7 @@ A model whose population is 1,048,576 or more gets one track.
 Either way the track count is capped by the number of runs.
 
 The GPU memory budget is `--gpu-memory`.
-Without it, the device's largest buffer acts as the budget, since wgpu reports no total for a device's memory.
+Without it, the budget is the device's largest buffer size, since wgpu reports no total for a device's memory.
 A run's demand is the bytes of the buffers and the display texture its model declares.
 A run is built once a track is free and its demand fits the budget beside the demand of the live runs.
 A run that fits beside no other run is built once no other run is live, and steps alone.
@@ -505,7 +593,7 @@ Once the last run is in, `summary.csv` is written from `runs.csv` and the manife
 | `non_finite` | The run reached its last tick or its stop condition, and some sample was NaN or infinite |
 | `panicked` | The model panicked while building or stepping |
 | `gpu_error` | The GPU reported an error |
-| `refused` | The host rejected the model build |
+| `refused` | The host rejected the model build, such as a search candidate that the device cannot hold |
 | `shape_error` | A sample no longer fit the sweep's stat columns, such as a histogram whose bucket count changed |
 | `timed_out` | The run passed its timeout |
 
@@ -515,6 +603,8 @@ A failed run keeps the series rows it sampled before it ended, and the sweep car
 #### `series.csv`
 
 The columns are `run_id`, `tick`, then one per stat column, headed as `--export-stats` heads them.
+A model with a [tick length](model-files.md#time-scale) writes a `time` column after `tick`, the tick times the run's tick length, as `--export-stats` does.
+A tick length of 0.1 puts tick 3 at time 0.3, the product of the decimal digits rounded once.
 A vector stat writes `.x`, `.y` and `.magnitude` columns, and a histogram one column per bucket plus `.total`.
 A run's rows are contiguous and in tick order.
 They hold every sample on the `--series-every` cadence, counted from the end of the warm-up, and the run's last sample.
@@ -549,8 +639,8 @@ The 95% confidence interval for the mean is `mean ± t * sd / sqrt(n)`, where `t
 | `mode` | `sweep`, or `search` for a [search](#search-tables) |
 | `status` | `running` until the sweep ends, then `complete`, `aborted` for a sweep stopped before its last run, `failed` for a sweep or merge that an error ended outside any run, or `incomplete` for a sweep that lost its GPU device or a merge that lacks some runs |
 | `engine` | The [build](#builds) of Henad that wrote the manifest last, under the name `henad` |
-| `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, and `replays_exactly`, whether two builds of the model on one seed step through identical states |
-| `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text` |
+| `model` | Id, name, backend, schema hash, the schema [`--params --json`](#parameters-as-json) prints, `replays_exactly`, whether two builds of the model on one seed step through identical states, for a model composed at run time `code`, its `format`, its hash as `fnv1a64` and its canonical `text`, and for a sheet `author`, [the sheet's text](model-files.md#the-sheet-in-a-results-folder) in the same form |
+| `spec` | The sweep in the form of a spec file, flags included, with a design table's text under `table_text`. A percentage's value or range written with a `%` sign is recorded as its fraction |
 | `spec_source` | Path and text of the spec file, and the path and hash of each design table it reads. `path` and `toml` are `null` for a sweep from flags, and `tables` lists its `--design` file |
 | `argv` | The command line |
 | `plan` | Plan hash, results fingerprint, the counts of configs, replicates and runs, and the design, config count and design seed of each block |
@@ -583,7 +673,9 @@ Each build has these fields.
 | `dirty` | Whether the crate's sources, manifest or lockfile differed from the commit. `null` when the build could not tell |
 | `source_hash` | Hash of the crate's files under `src`, its manifest and, outside a package, its lockfile, as 16 hexadecimal digits. The example models' hash leaves out the lockfile |
 | `debug_build` | Whether the build was a debug build |
-| `type_path` | Type path of the registered model, for `model_source` alone |
+| `type_path` | Type path of the registered model, or `runtime:` and the label of a model composed at run time, for `model_source` alone |
+| `origin` | `runtime` for a model composed at run time, for `model_source` alone. Left out for compiled code |
+| `code_hash` | Hash of a runtime model's text, as 16 hexadecimal digits. Left out for compiled code |
 | `crate_hashes` | Hash of the sources of henad-compute and henad-explore, without the lockfile, for the engine alone |
 | `crate_versions` | Version of henad-core, henad-build, henad-compute and henad-explore, for the engine alone |
 
@@ -597,6 +689,10 @@ Then two builds that each record a clean commit compare by commit alone.
 A commit is clean when `dirty` reads `false`, or when the build records neither `dirty` nor `source_hash`, as a 0.2 session does.
 Otherwise the source hashes decide, and two builds with neither a commit nor a source hash are never the same.
 
+When either of two model builds records an `origin`, the two are the same only when both are runtime models with the same known `code_hash`.
+A runtime model is never the same build as a compiled model.
+A runtime model records no package, version or commit.
+
 A manifest from Henad 0.2 records no builds in its sessions.
 Each of its sessions is treated as an engine build of its own commit and the version of the `engine` block, and records no model build.
 The first resume by a later Henad writes that build into the session.
@@ -607,9 +703,15 @@ The first resume by a later Henad writes that build into the session.
 A directory with no results starts a fresh sweep.
 
 The resume reads the manifest first.
-It rejects a directory that another process is [writing to](#output-directory), a directory of another model, and a directory whose plan hash, model schema hash or shard does not match the sweep.
+It rejects a directory that another process is [writing to](#output-directory), a directory of another model, and a directory whose plan hash, model schema hash, time scale or shard does not match the sweep.
+The time scale is the `time` that [`--params --json`](#parameters-as-json) prints, the unit of one tick and the tick-length parameter, and the schema hash leaves it out.
 The plan hash covers the model, the configs, the design seeds, the fixed values, the actions, the steps and warm-up, the sampling and series cadence, the stop condition, the reducers, and the seed root and scheme.
 It leaves out the replicate count and the timeout, and a resume can change both settings.
+A model composed at run time also has to run the code of every session that wrote runs, by the rule under [Builds](#builds).
+For a [model file](#model-files), the resume passes the same `--model-file`, unedited.
+The code is compared before the schema and plan hashes, and before the model is built.
+A resume of other code is rejected, as is a resume of such a model into a folder that a compiled model of other sources wrote, or the reverse.
+A session that records no model build, as in a 0.2 folder, counts as other code.
 The engine and the model are compared with every build recorded for them by a session that wrote runs, and each build that differs gets a warning.
 A session that ran no runs, because it found every run written, is left out.
 Two builds that record neither a commit nor a source hash cannot be told apart, and get one warning saying so.
@@ -640,7 +742,9 @@ With `--dry-run`, a resume prints how many runs it would skip and run, and chang
 Every shard plans the whole sweep, and needs the same command line or spec as the other shards.
 
 `--merge DIR... --out DIR` joins shard directories into a new directory.
-It rejects inputs that differ in plan hash, schema hash, replicate count, shard count or columns, and two inputs that hold the same shard.
+It takes no model, and no `--model-file`.
+It rejects inputs that differ in plan hash, schema hash, time scale, replicate count, shard count or columns, and two inputs that hold the same shard.
+It also rejects two shards whose sessions ran different model code, where either code is runtime code, by the rule under [Builds](#builds), and compares the code before the plan hash, as a resume does.
 It also rejects a row whose `run_id` is not `config_id * reps + rep` at the replicate count of its manifest.
 A resume that raises a shard's replicate count and ends before renumbering the shard's rows leaves such rows, and resuming that shard again renumbers them.
 It merges `runs.csv` and `series.csv` in run order, leaving out a partial last record and the series rows of runs with no row in `runs.csv`, and rebuilds `summary.csv`.
@@ -706,7 +810,7 @@ None of these kinds is a benchmark kind, and one reader can read both streams.
 | Status | Meaning |
 |---|---|
 | 0 | Every run is `ok`, a dry run planned the sweep, or a merge holds every run and each is `ok` |
-| 1 | An error stopped the sweep or the merge, such as a spec the model rejects, a parameter or action the model does not declare, a directory that already holds results, a resume of another plan, or a lost GPU device |
+| 1 | An error stopped the sweep or the merge, such as a spec the model rejects, a model file that does not load, a parameter or action the model does not declare, a directory that already holds results, a resume of another plan, or a lost GPU device |
 | 2 | The command line itself was rejected before anything ran: an unknown flag, a missing or conflicting flag, or a value of the wrong form, such as a `--vary` without `=` |
 | 3 | The sweep ran to its end and some run is not `ok`, or a merge lacks some run or holds one that is not `ok` |
 
@@ -748,7 +852,7 @@ The keys of `objective` are these:
 |---|---|---|
 | `column` | | A reducer column of `runs.csv`, as in `Infected:max` |
 | `goal` | | `maximize` or `minimize` |
-| `aggregate` | `median` | `median` or `mean`, the rule that folds a candidate's replicate values into one value |
+| `aggregate` | `median` | `median` or `mean`, the rule that combines a candidate's replicate values into one value |
 
 An algorithm's settings go in a table named after it, and a table for any other algorithm is rejected.
 `[search.hill_climb]` and `[search.genetic]` can be left out, and a key left out takes its default.
@@ -791,7 +895,7 @@ Each of these rejects it, along with the checks of a sweep's fixed values and ac
 A candidate's **genome** holds one gene from 0 to 1 per factor of `space`, in order.
 A range with no step is an ordered gene, and anything else is a categorical gene.
 Gene `u` of an `f32` range decodes to `min + u * (max - min)`, rounded to `f32` and clamped to the range.
-Gene `u` of an integer range decodes to `min + floor(u * (max - min + 1))`, and gene `u` of `m` listed levels to level `floor(u * m)`, each capped at the last value.
+Gene `u` of an integer range, the range of an `f32` that takes whole numbers alone included, decodes to `min + floor(u * (max - min + 1))`, and gene `u` of `m` listed levels to level `floor(u * m)`, each capped at the last value.
 Two genomes share a **config** when every gene decodes to the same value.
 
 A mutation changes each gene with some chance: `mutation_rate` for the genetic algorithm, and every gene for hill climbing and Pattern Space Exploration.
@@ -1009,7 +1113,8 @@ Every run held is read back as it ended, failed and timed-out runs included, and
 A run that came out differently would change every batch after it, and `--retry-failed` is rejected.
 A search runs whole, and `--shard` is rejected too.
 
-The resume rejects a directory of another model, a directory whose search hash, model schema hash or column layout differs, a sweep's directory, and a `runs.csv` with runs out of order or with a run whose key differs from the requested run.
+The resume rejects a directory of another model, a directory whose search hash, model schema hash, time scale or column layout differs, a sweep's directory, and a `runs.csv` with runs out of order or with a run whose key differs from the requested run.
+A model composed at run time also has to run the code that the folder's runs ran, as a [sweep's resume](#resuming) requires.
 Every run held is checked against its key before any table is written, and a rejected resume leaves the directory as it was.
 The search hash covers the plan hash of the fixed values and actions, the replicate count, the algorithm, the budget, the batch size, the objective, the space and the algorithm's settings.
 The timeout and the execution settings can change, and the budget and the replicate count cannot.
@@ -1053,8 +1158,12 @@ A sweep has its own JSON lines, listed under [its progress](#progress).
 | `stat_columns` | Columns a sweep writes for the stats, from a build at the defaults. Left out when that build fails |
 | `actions` | Index, id and label of each action |
 | `seed` | `{"type":"u64"}` |
+| `origin`, `code_hash` | For a model composed at run time, the origin and the hash that identifies its code, as under [Builds](#builds). Left out for a compiled model |
+| `time` | For a model with a [tick length](model-files.md#time-scale), the `unit` of one tick and the id of the `tick_length` parameter, as `{"unit":"day","tick_length":"tick_length"}`. Left out for a model that runs in ticks alone |
 
 A parameter object holds its `index`, `id`, `label`, `kind` (`f32`, `u32`, `bool` or `choice`), `apply` (`live` or `reload`), `format` (`plain` or `percent`) and `default`.
+A hidden parameter adds `"hidden": true`, and a shown one writes no `hidden` field.
+An `f32` that takes whole numbers alone adds `"integer": true`, and no other parameter writes the field.
 A number adds `min` and `max`, and an `f32` adds `step` when it declares a step.
 A `choice` adds its `options`, writes its `default` as an option name, and adds `default_index`.
 Without `--json`, `--params` prints the text it always has.
@@ -1076,7 +1185,7 @@ The official binary is three lines over the same function, which its own crate e
 ```
 
 `run` takes a `CliOptions` and the command line, program name first, and returns the [exit status](#exit-status) as a `u8`.
-`std::process::ExitCode::from` turns it into a binary's exit code, and a host without its own `main`, such as a Python console script, passes the number on.
+`std::process::ExitCode::from` converts it to a binary's exit code, and a host without its own `main`, such as a Python console script, passes the number on.
 An error prints to stderr as `Error:` with its causes, and returns 1.
 
 `CliOptions::new(models, host)` takes the `ModelSet` that the command line offers and the host's `build_info!()`.

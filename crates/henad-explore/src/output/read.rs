@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use henad_core::explore::outcome::RunStatus;
 use henad_core::export::csv::{CsvError, parse_records};
 
+use crate::output::manifest::parse_hex;
 use crate::output::runs_csv::ID_COLUMNS;
 
 /// One complete record of a `runs.csv`.
@@ -71,42 +72,109 @@ impl RunsCsv {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(source) => return Err(io_error(source)),
         };
-        let ends = record_ends(&bytes);
+        let file_bytes = bytes.len() as u64;
+        let Some(complete) = CompleteRecords::read(&bytes, path)? else {
+            return Ok(Self {
+                header: None,
+                records: Vec::new(),
+                complete_bytes: 0,
+                file_bytes,
+            });
+        };
+        let header = &complete.header;
+        let layout = RecordLayout::find(header, path)?;
+        let records = complete
+            .records()
+            .map(|record| {
+                let (record_number, fields, record_text) = record?;
+                layout.record(header, &fields, record_text, path, record_number)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            header: Some(complete.header.clone()),
+            records,
+            complete_bytes: complete.complete_bytes() as u64,
+            file_bytes,
+        })
+    }
+}
+
+/// Complete records of a CSV table, with its header split from the records after it.
+pub(crate) struct CompleteRecords<'t> {
+    text: &'t str,
+    path: &'t Path,
+    /// Column names of the header, before CSV escaping.
+    pub(crate) header: Vec<String>,
+    /// End of the header, just past its line feed.
+    header_end: usize,
+    /// End of each record after the header, just past its line feed.
+    ends: Vec<usize>,
+}
+
+impl<'t> CompleteRecords<'t> {
+    /// Reads the complete records of `bytes`, a table read from `path`, and parses its header.
+    ///
+    /// Returns `None` for a table without a complete header.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadError::Io`] when the complete records are not UTF-8, and [`ReadError::Csv`] when the header is
+    /// not a CSV record.
+    pub(crate) fn read(bytes: &'t [u8], path: &'t Path) -> Result<Option<Self>, ReadError> {
+        let mut ends = record_ends(bytes);
         let complete_bytes = ends.last().copied().unwrap_or(0);
         // A cut can split a character, so only the complete records need to be text.
-        let text = std::str::from_utf8(&bytes[..complete_bytes])
-            .map_err(|error| io_error(io::Error::new(io::ErrorKind::InvalidData, error)))?;
-        let mut table = Self {
-            header: None,
-            records: Vec::with_capacity(ends.len().saturating_sub(1)),
-            complete_bytes: complete_bytes as u64,
-            file_bytes: bytes.len() as u64,
-        };
-        let Some((&header_end, record_ends)) = ends.split_first() else {
-            return Ok(table);
-        };
+        let text = std::str::from_utf8(&bytes[..complete_bytes]).map_err(|error| ReadError::Io {
+            path: path.to_owned(),
+            source: io::Error::new(io::ErrorKind::InvalidData, error),
+        })?;
+        if ends.is_empty() {
+            return Ok(None);
+        }
+        let header_end = ends.remove(0);
         let header = parse_one(text, 0..header_end, path, 1)?;
-        let layout = RecordLayout::find(&header, path)?;
-        let mut start = header_end;
-        for (index, &end) in record_ends.iter().enumerate() {
+        Ok(Some(Self {
+            text,
+            path,
+            header,
+            header_end,
+            ends,
+        }))
+    }
+
+    /// Number of records after the header.
+    pub(crate) fn record_count(&self) -> usize {
+        self.ends.len()
+    }
+
+    /// Number of bytes up to the end of the last complete record.
+    pub(crate) fn complete_bytes(&self) -> usize {
+        self.ends.last().copied().unwrap_or(self.header_end)
+    }
+
+    /// Returns each record after the header as its record number, its fields and its text, in file order.
+    ///
+    /// The header is record 1.
+    ///
+    /// # Errors
+    ///
+    /// An item is [`ReadError::Csv`] for a record that is not a CSV record, and [`ReadError::FieldCount`] for one
+    /// whose field count differs from the header's.
+    pub(crate) fn records(&self) -> impl Iterator<Item = Result<(usize, Vec<String>, &'t str), ReadError>> + '_ {
+        let starts = std::iter::once(self.header_end).chain(self.ends.iter().copied());
+        starts.zip(&self.ends).enumerate().map(|(index, (start, &end))| {
             let record_number = index + 2;
-            let record_text = &text[start..end];
-            let fields = parse_one(text, start..end, path, record_number)?;
-            if fields.len() != header.len() {
+            let fields = parse_one(self.text, start..end, self.path, record_number)?;
+            if fields.len() != self.header.len() {
                 return Err(ReadError::FieldCount {
-                    path: path.to_owned(),
+                    path: self.path.to_owned(),
                     record_number,
                     found: fields.len(),
-                    expected: header.len(),
+                    expected: self.header.len(),
                 });
             }
-            table
-                .records
-                .push(layout.record(&header, &fields, record_text, path, record_number)?);
-            start = end;
-        }
-        table.header = Some(header);
-        Ok(table)
+            Ok((record_number, fields, &self.text[start..end]))
+        })
     }
 }
 
@@ -167,9 +235,7 @@ impl RecordLayout {
             run_id: number(self.run_id)?,
             config_id: number(self.config_id)?,
             rep: number(self.rep)?,
-            run_key: u64::from_str_radix(&fields[self.run_key], 16)
-                .ok()
-                .ok_or_else(|| bad_field(self.run_key))?,
+            run_key: parse_hex(&fields[self.run_key]).ok_or_else(|| bad_field(self.run_key))?,
             status: fields[self.status].parse().ok().ok_or_else(|| bad_field(self.status))?,
             text: text.to_owned(),
         })
@@ -340,6 +406,19 @@ impl SeriesScan {
         }
         scan.complete_bytes = offset;
         Ok(scan)
+    }
+
+    /// Returns the segments of the scan, read from the series file at `path` of input `input_index`.
+    pub(crate) fn segments_at<'s>(
+        &'s self,
+        path: &'s Path,
+        input_index: usize,
+    ) -> impl Iterator<Item = SeriesSegment> + 's {
+        self.segments.iter().map(move |range| SeriesSegment {
+            path: path.to_owned(),
+            range: range.clone(),
+            input_index,
+        })
     }
 }
 

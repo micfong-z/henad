@@ -1,0 +1,538 @@
+//! Tests of [`crate::model_file`]: reading, writing, the canonical text and the places of diagnostics.
+
+use std::path::Path;
+
+use henad_compute::gpu::runtime_grid::{GridRule, LIFE_STEP, RuleState};
+use henad_core::authoring::primitives::space::Boundary;
+use henad_core::helpers::{bool_param, choice_param, u32_param};
+use henad_core::provenance::CodeOrigin;
+
+use crate::model_file::{ModelFile, ModelFileError};
+use crate::tests::support::{line_at, line_of};
+
+/// Returns the Life starter with a parameter of every kind, a third state, a bounded grid and a step that holds
+/// non-ASCII text.
+fn rich_rule() -> GridRule {
+    let mut rule = GridRule::life();
+    rule.description = "Life with \"quotes\", a back\\slash and é".to_owned();
+    rule.params.push(u32_param("radius", "Radius", 2, 1, 5));
+    rule.params.push(bool_param("wrap", "Wrap", true));
+    rule.params.push(choice_param("mode", "Mode", &["calm", "wild"], 1));
+    rule.params[0] = rule.params[0].clone().percent();
+    rule.states.push(RuleState::new("Ghost", [90, 90, 255, 128]));
+    rule.boundary = Boundary::Bounded;
+    rule.width = 64;
+    rule.height = 48;
+    rule.step = format!("// État « vivant »\n{LIFE_STEP}");
+    rule
+}
+
+/// Returns the problems in `error` as `line:column: message` lines.
+fn lines_of(error: &ModelFileError) -> Vec<String> {
+    error.diagnostics().iter().map(ToString::to_string).collect()
+}
+
+#[test]
+fn a_model_file_round_trips_through_to_toml() {
+    let file = ModelFile::from_rule(rich_rule()).unwrap_or_else(|error| panic!("{error}"));
+    let text = file.to_toml();
+    let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    assert_eq!(read.to_toml(), text);
+    assert_eq!(read.code(), file.code());
+    let rule = read.rule().expect("a grid rule");
+    assert_eq!(rule.step, rich_rule().step);
+    assert_eq!(rule.description, rich_rule().description);
+    assert_eq!(rule.states, rich_rule().states);
+    assert_eq!(format!("{:?}", rule.params), format!("{:?}", rich_rule().params));
+    assert_eq!((rule.boundary, rule.width, rule.height), (Boundary::Bounded, 64, 48));
+
+    // A step a literal string cannot hold is refused.
+    let mut rule = GridRule::life();
+    rule.step.push_str("// '''\n");
+    assert!(matches!(ModelFile::from_rule(rule), Err(ModelFileError::Format(_))));
+
+    // So is a step in a basic string that holds `'''`, which the canonical text could not write back, at its line.
+    let basic = text
+        .replace("wgsl = '''\n", "wgsl = \"\"\"\n")
+        .replace("}\n'''\n", "}\n// '''\n\"\"\"\n");
+    assert_ne!(basic, text);
+    let error = ModelFile::parse(&basic)
+        .err()
+        .unwrap_or_else(|| panic!("a step holding `'''` was read:\n{basic}"));
+    let line = line_of(&basic, "// '''");
+    assert!(
+        matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.line == Some(line)),
+        "{error:?}"
+    );
+
+    // A choice whose options text could not select apart is refused at its table.
+    let repeated = text.replace("options = [\"calm\", \"wild\"]", "options = [\"calm\", \"calm\"]");
+    assert_ne!(repeated, text);
+    let error = ModelFile::parse(&repeated)
+        .err()
+        .unwrap_or_else(|| panic!("a repeated option was read"));
+    assert!(error.to_string().contains("option 'calm' appears twice"), "{error}");
+
+    // So is an option that the level text of a sweep could not list.
+    let every = text.replace("options = [\"calm\", \"wild\"]", "options = [\"all\", \"some\"]");
+    assert_ne!(every, text);
+    let error = ModelFile::parse(&every)
+        .err()
+        .unwrap_or_else(|| panic!("an option named 'all' was read"));
+    assert!(
+        error
+            .to_string()
+            .contains("option 'all' cannot be listed in a sweep's levels"),
+        "{error}"
+    );
+}
+
+/// A step holds every character a TOML literal string holds, the C1 control characters included, and no ASCII control
+/// character other than a tab and a line end.
+#[test]
+fn a_step_holds_what_a_literal_string_holds() {
+    // Mis-decoded Windows-1252 text often holds U+0085.
+    let step = format!("// note\u{85}\n{LIFE_STEP}");
+    let text = ModelFile::from_rule(life_with(&step))
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read.rule().expect("a grid rule").step, step);
+    // WGSL ends a line at U+0085, and the compiler refuses it. Another C1 character compiles.
+    assert!(matches!(read.entry(), Err(ModelFileError::Rule(_))));
+    let step = format!("// note\u{90}\tend\n{LIFE_STEP}");
+    let file = ModelFile::from_rule(life_with(&step)).unwrap_or_else(|error| panic!("{error}"));
+    file.entry().unwrap_or_else(|error| panic!("{error}"));
+
+    let error = ModelFile::from_rule(life_with(&format!("// note\u{1}\n{LIFE_STEP}")))
+        .err()
+        .unwrap_or_else(|| panic!("a step holding U+0001 was read"));
+    assert!(
+        matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.message.contains("U+0001")),
+        "{error:?}"
+    );
+    // A file that holds U+0001 in its step is refused at its line.
+    let ascii = text.replace('\u{85}', "\u{1}");
+    let line = line_of(&ascii, "\u{1}");
+    let error = ModelFile::parse(&ascii)
+        .err()
+        .unwrap_or_else(|| panic!("a file holding U+0001 was read"));
+    assert_eq!(error.diagnostics()[0].line, Some(line), "{error:?}");
+}
+
+/// A grid rule reads its `[[param]]` tables through the graph file's reader, and refuses the two keys a graph's tick
+/// length sets.
+#[test]
+fn a_grid_rule_refuses_the_time_scale_keys() {
+    let text = ModelFile::from_rule(GridRule::life())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    for key in ["hidden = true\n", "tick_unit = \"day\"\n"] {
+        let at = text.find("[[param]]\n").unwrap_or_default() + "[[param]]\n".len();
+        let edited = format!("{}{key}{}", &text[..at], &text[at..]);
+        let error = ModelFile::parse(&edited)
+            .err()
+            .unwrap_or_else(|| panic!("`{key}` was accepted"));
+        let name = key.split(' ').next().unwrap_or_default();
+        let message = &error.diagnostics()[0].message;
+        assert!(
+            message.contains(&format!("cannot set `{name}` outside a graph file")),
+            "{message}"
+        );
+        assert_eq!(
+            error.diagnostics()[0].line,
+            Some(line_of(&text, "[[param]]\n")),
+            "the problem sits at the `[[param]]` table"
+        );
+    }
+}
+
+#[test]
+fn unknown_keys_are_refused() {
+    let text = ModelFile::from_rule(GridRule::life())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    for (after, key) in [
+        ("description = ", "colour = 3\n"),
+        ("[grid]\n", "depth = 3\n"),
+        ("[[state]]\n", "shade = 1\n"),
+        ("[[param]]\n", "apply = \"reload\"\n"),
+        ("[step]\n", "file = \"life.wgsl\"\n"),
+    ] {
+        let at = text.find(after).unwrap_or_default();
+        let line_start = if after.ends_with('\n') { at + after.len() } else { at };
+        let edited = format!("{}{key}{}", &text[..line_start], &text[line_start..]);
+        let expected_line = line_at(&edited, line_start);
+        let error = ModelFile::parse(&edited)
+            .err()
+            .unwrap_or_else(|| panic!("`{key}` was accepted"));
+        let ModelFileError::Toml(diagnostic) = &error else {
+            panic!("`{key}` gave {error:?}");
+        };
+        let name = key.split(' ').next().unwrap_or_default();
+        assert!(diagnostic.message.contains(name), "{diagnostic}");
+        assert_eq!(diagnostic.line, Some(expected_line), "{diagnostic}");
+    }
+
+    let other = text.replace("format_version = 1", "format_version = 2");
+    let error = ModelFile::parse(&other)
+        .err()
+        .unwrap_or_else(|| panic!("version 2 was accepted"));
+    assert!(
+        matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.line == Some(2)),
+        "{error:?}"
+    );
+    let other = text.replace("kind = \"gpu_grid\"", "kind = \"gpu_agents\"");
+    assert!(matches!(ModelFile::parse(&other), Err(ModelFileError::Format(_))));
+
+    // A later version with keys this build does not know is refused for its version. The unknown keys go unreported.
+    let later = format!(
+        "{}[future]\nkey = 1\n",
+        text.replace("format_version = 1", "format_version = 2")
+    );
+    let error = ModelFile::parse(&later)
+        .err()
+        .unwrap_or_else(|| panic!("version 2 was accepted"));
+    assert!(
+        matches!(&error, ModelFileError::Format(diagnostic) if diagnostic.line == Some(2)
+            && diagnostic.message.contains("version 2")),
+        "{error:?}"
+    );
+}
+
+/// A problem in a declaration, which the rule's checks find, is placed at the declaration's table or key in the file.
+#[test]
+fn a_declaration_error_points_at_its_table() {
+    let mut rule = GridRule::life();
+    rule.states.push(RuleState::new("dead!", [0, 0, 0, 255]));
+    rule.params.push(u32_param("radius", "Radius", 2, 1, 5));
+    let text = ModelFile::from_rule(rule)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml()
+        .replace("id = \"radius\"", "id = \"seed\"")
+        .replace("id = \"life_rule\"", "id = \"Life\"")
+        .replace("width = 256", "width = 0");
+    let error = ModelFile::parse(&text)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the declarations passed"));
+    let third_state = text.match_indices("[[state]]").nth(2).map_or(0, |(at, _)| at);
+    let second_param = text.match_indices("[[param]]").nth(1).map_or(0, |(at, _)| at);
+    let mut placed: Vec<(u32, &str)> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.line.unwrap_or_default(), diagnostic.message.as_str()))
+        .collect();
+    placed.sort_unstable();
+    let expected = [
+        (line_of(&text, "id = \"Life\""), "rule id 'Life'"),
+        (
+            line_of(&text, "[grid]"),
+            "the grid width must be between 1 and 16384, got 0",
+        ),
+        (line_at(&text, third_state), "both produce the constant `DEAD`"),
+        (line_at(&text, second_param), "parameter id 'seed' is reserved"),
+    ];
+    assert_eq!(placed.len(), expected.len(), "{}", lines_of(&error).join("\n"));
+    for ((line, message), (expected_line, text_part)) in placed.iter().zip(expected) {
+        assert_eq!(*line, expected_line, "{message}");
+        assert!(message.contains(text_part), "{message}");
+    }
+}
+
+/// A name, a label or an option that holds a control character is refused, and a diagnostic prints each control
+/// character escaped.
+#[test]
+fn control_characters_in_the_declarations_are_refused() {
+    let text = ModelFile::from_rule(rich_rule())
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    // OSC 52 sets the clipboard of a terminal that prints it.
+    let sequence = "\\u001B]52;c;eA==\\u0007";
+    let edited = text
+        .replace("name = \"Life rule\"", &format!("name = \"Life{sequence}\""))
+        .replace("label = \"Ghost\"", &format!("label = \"Ghost{sequence}\""))
+        .replace("\"wild\"", &format!("\"wild{sequence}\""));
+    let error = ModelFile::parse(&edited)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the declarations passed"));
+    let third_state = edited.match_indices("[[state]]").nth(2).map_or(0, |(at, _)| at);
+    let choice = edited.match_indices("[[param]]").nth(3).map_or(0, |(at, _)| at);
+    let mut placed: Vec<(Option<u32>, &str)> = error
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| (diagnostic.line, diagnostic.message.as_str()))
+        .collect();
+    placed.sort_unstable();
+    assert_eq!(
+        placed,
+        [
+            (None, "the rule's name contains the control character U+001B"),
+            (
+                Some(line_at(&edited, third_state)),
+                "the label of state 2 contains the control character U+001B"
+            ),
+            (
+                Some(line_at(&edited, choice)),
+                "an option of parameter 'mode' contains the control character U+001B"
+            ),
+        ],
+        "{}",
+        lines_of(&error).join("\n")
+    );
+
+    // A refused id and an unknown key are quoted in their messages, and print escaped.
+    for edited in [
+        text.replace("id = \"life_rule\"", &format!("id = \"life{sequence}\"")),
+        text.replace("[grid]\n", &format!("[grid]\n\"{sequence}\" = 1\n")),
+    ] {
+        let error = ModelFile::parse(&edited)
+            .and_then(|file| file.entry())
+            .err()
+            .unwrap_or_else(|| panic!("a control character was read:\n{edited}"));
+        let printed = error.to_string();
+        assert!(printed.contains("\\u{1b}"), "{printed}");
+        assert!(!printed.contains(['\u{1b}', '\u{7}']), "{printed:?}");
+    }
+}
+
+/// The code of a file depends on what the file declares and on its step, and on nothing else: comments outside the
+/// step, key order, blank lines, a colour without its alpha and the form of a number all leave it alone.
+#[test]
+fn the_canonical_code_ignores_formatting() {
+    let canonical = ModelFile::from_rule(GridRule::life()).unwrap_or_else(|error| panic!("{error}"));
+    let written = format!(
+        "# A hand-written Life rule.\r\nkind = \"gpu_grid\"\r\nformat_version = 1\r\nformat = \"henad-model\"\r\n\
+         name = 'Life rule'\r\nid = \"life_rule\"\r\ndescription = \"Conway's Game of Life, written as a grid \
+         rule\"\r\n\r\n\r\n[[param]]\r\nstep = 1e-2\r\ndefault = 0.30\r\nmax = 1\r\nmin = 0\r\nkind = \"f32\"\r\n\
+         label = \"Initial Density\"\r\nid = \"density\"\r\n\r\n[grid]\r\nheight = 256\r\nwidth = 256\r\n\r\n\
+         [step]\r\nwgsl = '''\n{LIFE_STEP}'''\r\n\r\n[[state]]\r\nlabel = \"Dead\" # no share\r\n\
+         color = [97, 97, 97]\r\n\r\n[[state]]\r\ninitial = \"density\"\r\nlabel = \"Alive\"\r\n\
+         color = [0, 230, 118, 255]\r\n"
+    );
+    let read = ModelFile::parse(&written).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(read.to_toml(), canonical.to_toml());
+    assert_eq!(read.code().hash(), canonical.code().hash());
+
+    // A comment inside the step is the rule's text, and changes the code.
+    let mut rule = GridRule::life();
+    rule.step.push_str("// note\n");
+    let commented = ModelFile::from_rule(rule).unwrap_or_else(|error| panic!("{error}"));
+    assert_ne!(commented.code().hash(), canonical.code().hash());
+    // So does a declaration.
+    let mut rule = GridRule::life();
+    rule.width = 255;
+    let narrower = ModelFile::from_rule(rule).unwrap_or_else(|error| panic!("{error}"));
+    assert_ne!(narrower.code().hash(), canonical.code().hash());
+}
+
+/// A problem in the step is reported at its line and character column in the file, wherever the string starts.
+#[test]
+fn a_wgsl_error_points_at_its_file_line() {
+    let step = "fn step_cell(cell: u32, rng: ptr<function, u32>) -> u32 {\n    let é = 1u; return cell +;\n}\n";
+    let file = ModelFile::from_rule(life_with(step))
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    let error = ModelFile::parse(&file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the step compiled"));
+    let semicolon = file.find("cell +;").unwrap_or_default() + "cell +".len();
+    let line = line_at(&file, semicolon);
+    let ModelFileError::Rule(problems) = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(problems[0].line, Some(line), "{}", lines_of(&error).join("\n"));
+    assert_eq!(
+        problems[0].column,
+        Some("    let é = 1u; return cell +".chars().count() as u32 + 1)
+    );
+    assert_eq!(problems[0].span.as_ref().map(|span| span.start), Some(semicolon));
+
+    // The step can start on the line of its opening `'''`. Its first line's columns then follow `wgsl = '''`.
+    let inline = file.replace("wgsl = '''\n", "wgsl = '''");
+    let error = ModelFile::parse(&inline)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the step compiled"));
+    let semicolon = inline.find("cell +;").unwrap_or_default() + "cell +".len();
+    assert_eq!(
+        error.diagnostics()[0].span.as_ref().map(|span| span.start),
+        Some(semicolon)
+    );
+    assert_eq!(error.diagnostics()[0].line, Some(line - 1));
+
+    // A file with CRLF line ends gets spans into its text as written, one byte further per line before.
+    let crlf = file.replace('\n', "\r\n");
+    let error = ModelFile::parse(&crlf)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .entry()
+        .err()
+        .unwrap_or_else(|| panic!("the step compiled"));
+    let semicolon = crlf.find("cell +;").unwrap_or_default() + "cell +".len();
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.span.as_ref().map(|span| span.start), Some(semicolon));
+    assert_eq!(diagnostic.line, Some(line));
+    assert_eq!(&crlf[semicolon..semicolon + 1], ";");
+}
+
+/// Every model file under `specs/models` reads and builds an entry of runtime code, and `life_rule.toml` holds the
+/// rule `GridRule::life` returns.
+#[test]
+fn every_example_model_file_loads() {
+    let models = Path::new(env!("CARGO_MANIFEST_DIR")).join("specs").join("models");
+    let mut ids = Vec::new();
+    for file in std::fs::read_dir(&models).unwrap_or_else(|error| panic!("{}: {error}", models.display())) {
+        let path = file.unwrap_or_else(|error| panic!("{error}")).path();
+        if path.extension().is_none_or(|extension| extension != "toml") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let file = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let entry = file
+            .entry()
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        assert_eq!(entry.source().origin(), CodeOrigin::Runtime);
+        assert_eq!(entry.source().code_hash(), Some(file.code().hash()));
+        if path.file_name().is_some_and(|name| name == "life_rule.toml") {
+            assert_eq!(
+                file.rule().expect("a grid rule").step,
+                LIFE_STEP,
+                "the Life file's step is the Life starter's"
+            );
+            let starter = ModelFile::from_rule(GridRule::life()).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(file.to_toml(), starter.to_toml());
+        }
+        ids.push(entry.id().to_owned());
+    }
+    assert!(ids.iter().any(|id| id == "life_rule"), "{ids:?}");
+}
+
+/// Returns the Life starter with `step` as its text.
+fn life_with(step: &str) -> GridRule {
+    let mut rule = GridRule::life();
+    rule.step = step.to_owned();
+    rule
+}
+
+/// A file of kind `graph` reads as a graph and keeps the graph's canonical text and code. A graph on a grid builds an
+/// entry under its target's id, which records the graph's code.
+#[test]
+fn every_graph_starter_reads_checks_and_builds_an_entry() {
+    let starters = henad_graph::starters::starters()
+        .iter()
+        .chain(henad_graph::starters::agent_starters());
+    for starter in starters {
+        let name = starter.file_name;
+        let file = ModelFile::parse(starter.text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let graph = file.graph().unwrap_or_else(|| panic!("{name} reads as a graph"));
+        assert!(file.rule().is_none());
+        assert_eq!(file.id(), graph.document().target.id);
+        assert_eq!(file.to_toml(), graph.to_toml());
+        assert_eq!(file.code(), graph.code());
+        assert_eq!(file.code().format(), henad_graph::CODE_FORMAT);
+        assert!(file.warnings().is_empty(), "{name}: {:?}", file.warnings());
+        let entry = file.entry().unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(entry.id(), file.id());
+        assert_eq!(entry.source(), &graph.source(), "{name}");
+    }
+}
+
+/// A graph of agents of one position lane and no pass builds an entry under its target's id.
+#[test]
+fn a_graph_of_agents_builds_an_entry() {
+    let text = "format = \"henad-model\"\nformat_version = 1\nkind = \"graph\"\nid = \"node_flock\"\n\n[graph]\ntopology = \"agents\"\nlibrary = 1\n\n[[target]]\nbackend = \"gpu\"\n\n[agents]\ncount = 50\nwidth = 200\n\n[[lane]]\nid = \"position\"\ndomain = \"agents\"\ntype = \"vec2f\"\nrole = \"position\"\n";
+    let file = ModelFile::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    let entry = file.entry().unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(entry.id(), "node_flock");
+    assert_eq!(entry.param_descriptors()[0].id(), "num_agents");
+}
+
+/// A graph that does not check returns the checker's errors, placed in the file with their pass and node.
+#[test]
+fn a_graph_with_an_error_returns_the_checker_errors_with_places() {
+    let starter = henad_graph::starters::starter("game_of_life.toml").expect("the Life starter");
+    let broken = starter
+        .text
+        .replace("op = \"grid.life_like\"", "op = \"grid.lifelike\"");
+    let file = ModelFile::parse(&broken).unwrap_or_else(|error| panic!("{error}"));
+    let error = file.entry().expect_err("a broken graph built");
+    let ModelFileError::Graph(diagnostics) = &error else {
+        panic!("{error:?}");
+    };
+    let line = broken
+        .lines()
+        .position(|line| line.contains("grid.lifelike"))
+        .expect("the edit is in the file");
+    let unknown = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.message.contains("grid.lifelike"))
+        .unwrap_or_else(|| panic!("{diagnostics:?}"));
+    assert_eq!(
+        unknown.line,
+        Some(u32::try_from(line + 1).expect("a short file")),
+        "{unknown}"
+    );
+    assert_eq!(unknown.pass.as_deref(), Some("step"), "{unknown:?}");
+    assert_eq!(unknown.node.as_deref(), Some("n12"), "{unknown:?}");
+}
+
+/// The header picks the kind, and a kind this build does not read names the three kinds it does.
+#[test]
+fn the_header_dispatches_on_the_kind() {
+    let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
+    let other = starter.text.replace("kind = \"graph\"", "kind = \"gpu_agents\"");
+    let error = ModelFile::parse(&other).expect_err("an unknown kind read");
+    let ModelFileError::Format(diagnostic) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        diagnostic.message.contains("'gpu_grid', 'graph' or 'sheet'"),
+        "{diagnostic}"
+    );
+    assert_eq!(diagnostic.line, Some(5), "{diagnostic}");
+
+    // A sheet reads as a sheet, and the same text marked as a graph is read by the graph's reader.
+    let sheet = henad_graph::sheet::starters()[0].text;
+    let read = ModelFile::parse(sheet).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::Sheet(_)));
+    assert_eq!(read.id(), "sheet_game_of_life");
+    let marked = sheet.replace("kind = \"sheet\"", "kind = \"graph\"");
+    assert!(matches!(ModelFile::parse(&marked), Err(ModelFileError::Toml(_))));
+
+    // A graph's own reader reports a key it does not know, at its line.
+    let unknown = starter.text.replace("[graph]\n", "[graph]\napply = \"reload\"\n");
+    let error = ModelFile::parse(&unknown).expect_err("an unknown key read");
+    assert!(
+        matches!(&error, ModelFileError::Toml(diagnostic) if diagnostic.line.is_some()),
+        "{error:?}"
+    );
+
+    // A grid rule's text still reads as a rule.
+    let rule = ModelFile::from_rule(GridRule::life()).unwrap_or_else(|error| panic!("{error}"));
+    let read = ModelFile::parse(&rule.to_toml()).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::GpuGrid(_)));
+    assert_eq!(read.id(), "life_rule");
+}
+
+#[test]
+fn only_a_graph_is_held_to_the_graph_size_limit() {
+    let limit = henad_graph::limits::MAX_FILE_BYTES;
+    let rule = life_with(&format!("// {}\n{LIFE_STEP}", "x".repeat(limit)));
+    let text = ModelFile::from_rule(rule)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .to_toml();
+    assert!(text.len() > limit);
+    let read = ModelFile::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(read, ModelFile::GpuGrid(_)));
+
+    let starter = henad_graph::starters::starter("vote.toml").expect("the Vote starter");
+    let padded = format!("{}\n# {}\n", starter.text, "x".repeat(limit));
+    let error = ModelFile::parse(&padded).expect_err("a graph past the limit read");
+    assert!(error.to_string().contains("bytes, expected at most"), "{error}");
+}

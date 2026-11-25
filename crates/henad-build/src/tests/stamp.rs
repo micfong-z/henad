@@ -509,7 +509,13 @@ fn the_engine_stamp_covers_its_siblings_only_in_henads_tree() {
     }
     let scratch = Scratch::new("engine");
     let root = scratch.path();
-    for package in ["henad-core", "henad-build", "henad-compute", "henad-explore"] {
+    for package in [
+        "henad-core",
+        "henad-build",
+        "henad-compute",
+        "henad-graph",
+        "henad-explore",
+    ] {
         write_crate(&root.join("crates").join(package), package);
     }
     write(root, "Cargo.lock", "version = 4\n");
@@ -535,6 +541,13 @@ fn the_engine_stamp_covers_its_siblings_only_in_henads_tree() {
     assert_eq!(edited.dirty, Some(true), "an edit to henad-core marks the engine dirty");
     assert_ne!(edited.source_hash, clean.source_hash);
     assert_eq!(edited.crate_hash, clean.crate_hash);
+
+    git(root, &["checkout", "--quiet", "--", "crates/henad-core"]);
+    write(root, "crates/henad-graph/src/lib.rs", "pub fn step() { let _ = 3; }\n");
+    let graph = Stamp::of(&explore, StampScope::Engine);
+    assert_eq!(graph.dirty, Some(true), "an edit to henad-graph marks the engine dirty");
+    assert_ne!(graph.source_hash, clean.source_hash);
+    assert_eq!(graph.crate_hash, clean.crate_hash);
 
     let copied = root.join("vendor/henad-explore");
     write_crate(&copied, "henad-explore");
@@ -622,6 +635,8 @@ fn the_engine_stamp_reads_cargo_vcs_info() {
             "henad-build",
             "-p",
             "henad-compute",
+            "-p",
+            "henad-graph",
             "-p",
             "henad-explore",
             "-p",

@@ -103,13 +103,13 @@ fn an_id_the_command_line_cannot_name_fails_its_check() {
     );
     let messages: Vec<&str> = report.failures().iter().map(|failure| failure.message()).collect();
     for refused in [
-        "'rate=high' holds '='",
-        "'spread rate' holds whitespace",
+        "'rate=high' contains '='",
+        "'spread rate' contains whitespace",
         "'action.delay' starts with",
     ] {
         assert!(messages[0].contains(refused), "{report}");
     }
-    assert!(messages[1].contains("'clear=all' holds '='"), "{report}");
+    assert!(messages[1].contains("'clear=all' contains '='"), "{report}");
     assert!(
         !report.to_string().contains("'count'") && !report.to_string().contains("'spawn@centre'"),
         "{report}"
@@ -129,8 +129,8 @@ fn a_parameter_repeating_an_engine_id_fails_the_param_ids_check() {
     assert_eq!(failed(&report), names(&[ModelCheck::ParamIds]), "{report}");
     assert_eq!(
         report.failures()[0].message(),
-        "Parameter ids 'num_agents', 'grid_width' are declared more than once. The engine prepends 'num_agents', and \
-         a model does not declare it itself."
+        "Parameter ids 'num_agents', 'grid_width' are declared more than once. The engine prepends 'num_agents', so \
+         the model cannot declare it."
     );
 }
 
@@ -154,7 +154,7 @@ fn a_default_outside_its_bounds_fails_every_check_through_a_run_setup() {
         assert!(
             failure
                 .message()
-                .contains("parameter 'initial_infected': 500 is outside 1..=100"),
+                .contains("parameter 'initial_infected': 500 is outside the range 1 to 100"),
             "{failure}"
         );
     }
@@ -314,8 +314,8 @@ fn a_seed_that_moves_the_state_alone_passes_the_seed_sensitivity_check() {
 /// Checks the shared accumulator up to [`SHARED_ACCUMULATOR_ATTEMPTS`] times, until `ThreadCount` reports it.
 ///
 /// Note that the model's result depends on the order in which its chunks take a lock, and a pool of seven workers can
-/// take the lock in the single thread's order by chance, under a loaded machine most of all. Any one check can then
-/// pass. [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
+/// still take the lock in the single thread's order by chance, despite the model's pause at each chunk. Any one check
+/// can then pass. [`a_build_that_reads_the_pool_width_fails_the_thread_count_check`] pins `ThreadCount` deterministically.
 #[test]
 fn a_shared_accumulator_fails_the_thread_count_check() {
     let model = register_agent_model::<SharedAccumulator>();
@@ -522,7 +522,7 @@ fn a_set_report_names_the_models_the_settings_name_and_the_set_lacks() {
     assert!(
         report
             .to_string()
-            .starts_with("1 model checked, and none failed. The settings name 2 models the set lacks.\n"),
+            .starts_with("1 model checked, and none failed. The settings name 2 models missing from the set.\n"),
         "{report}"
     );
 }

@@ -1,5 +1,6 @@
 //! One-off steps a model offers the user, run between ticks.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::num::ParseIntError;
 
@@ -9,18 +10,40 @@ use crate::model::SimState;
 /// An action a model declares.
 ///
 /// The Parameters panel draws a button per entry, and `henad-cli` schedules an action with `--act`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A compiled model borrows its strings for `'static` through the `const fn` [`Self::new`]. Strings built at run
+/// time are owned through [`Self::owned`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionDescriptor {
-    /// Stable name that `--act` matches on.
-    pub id: &'static str,
-    /// Button label.
-    pub label: &'static str,
+    id: Cow<'static, str>,
+    label: Cow<'static, str>,
 }
 
 impl ActionDescriptor {
     /// Creates a descriptor from its id and its button label.
     pub const fn new(id: &'static str, label: &'static str) -> Self {
-        Self { id, label }
+        Self {
+            id: Cow::Borrowed(id),
+            label: Cow::Borrowed(label),
+        }
+    }
+
+    /// Creates a descriptor that owns its id and its button label.
+    pub fn owned(id: String, label: String) -> Self {
+        Self {
+            id: Cow::Owned(id),
+            label: Cow::Owned(label),
+        }
+    }
+
+    /// Stable name that `--act` matches on.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Button label.
+    pub fn label(&self) -> &str {
+        &self.label
     }
 }
 
@@ -111,18 +134,22 @@ pub enum ScheduleError {
         /// Id of the model.
         model: String,
         /// Action ids the model declares.
-        known: Vec<&'static str>,
+        known: Vec<String>,
     },
 }
 
 impl fmt::Display for ScheduleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BadEntry { raw } => write!(f, "bad --act '{raw}', expected ID@TICK"),
-            Self::BadTick { raw, .. } => write!(f, "bad tick in --act '{raw}'"),
+            Self::BadEntry { raw } => write!(f, "invalid --act '{raw}', expected ID@TICK"),
+            Self::BadTick { raw, .. } => write!(f, "invalid tick in --act '{raw}'"),
             Self::NoActions { model } => write!(f, "'{model}' declares no actions"),
             Self::UnknownAction { id, model, known } => {
-                write!(f, "unknown action '{id}' for '{model}' (has {})", known.join(", "))
+                write!(
+                    f,
+                    "unknown action '{id}' for '{model}', expected one of {}",
+                    known.join(", ")
+                )
             }
         }
     }
@@ -135,6 +162,35 @@ impl std::error::Error for ScheduleError {
             _ => None,
         }
     }
+}
+
+/// Splits one `ID@TICK` entry into its action id and its tick.
+///
+/// The entry splits at its last `@`, so an id can contain `@`. The id is not checked against any model.
+///
+/// # Errors
+///
+/// Returns [`ScheduleError::BadEntry`] for an entry with no `@`, and [`ScheduleError::BadTick`] for a tick that is
+/// not a `u64`.
+///
+/// # Examples
+///
+/// ```
+/// use henad_core::action::parse_entry;
+///
+/// assert_eq!(parse_entry("spawn@centre@100"), Ok(("spawn@centre", 100)));
+/// assert!(parse_entry("clear").is_err());
+/// assert!(parse_entry("clear@soon").is_err());
+/// ```
+pub fn parse_entry(raw: &str) -> Result<(&str, u64), ScheduleError> {
+    let (id, tick) = raw
+        .rsplit_once('@')
+        .ok_or_else(|| ScheduleError::BadEntry { raw: raw.to_owned() })?;
+    let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
+        raw: raw.to_owned(),
+        source,
+    })?;
+    Ok((id, tick))
 }
 
 /// Actions to run at set ticks, in the order given.
@@ -157,15 +213,9 @@ impl Schedule {
     pub fn parse(raw: &[String], model_id: &str, actions: &[ActionDescriptor]) -> Result<Self, ScheduleError> {
         let mut entries = Vec::with_capacity(raw.len());
         for spec in raw {
-            let (id, tick) = spec
-                .rsplit_once('@')
-                .ok_or_else(|| ScheduleError::BadEntry { raw: spec.clone() })?;
-            let tick = tick.parse::<u64>().map_err(|source| ScheduleError::BadTick {
-                raw: spec.clone(),
-                source,
-            })?;
-            let Some(index) = actions.iter().position(|action| action.id == id) else {
-                let known: Vec<&'static str> = actions.iter().map(|action| action.id).collect();
+            let (id, tick) = parse_entry(spec)?;
+            let Some(index) = actions.iter().position(|action| action.id() == id) else {
+                let known: Vec<String> = actions.iter().map(|action| action.id().to_owned()).collect();
                 if known.is_empty() {
                     return Err(ScheduleError::NoActions {
                         model: model_id.to_owned(),
@@ -276,7 +326,7 @@ mod tests {
         }
         assert_eq!((RANDOMISE, CLEAR), (0, 1), "indices follow declaration order");
         assert_eq!(ACTION_SPECS.len(), 2);
-        assert_eq!(ACTION_SPECS[CLEAR].label, "Clear");
+        assert_eq!(ACTION_SPECS[CLEAR].label(), "Clear");
     }
 
     /// Two states built from one seed must agree, and two states built from different seeds must not.
@@ -361,8 +411,8 @@ mod tests {
                 .expect_err("refused")
                 .to_string()
         };
-        assert_eq!(refuse("clear", &actions), "bad --act 'clear', expected ID@TICK");
-        assert_eq!(refuse("clear@soon", &actions), "bad tick in --act 'clear@soon'");
+        assert_eq!(refuse("clear", &actions), "invalid --act 'clear', expected ID@TICK");
+        assert_eq!(refuse("clear@soon", &actions), "invalid tick in --act 'clear@soon'");
         let bad_tick = Schedule::parse(&["clear@soon".to_owned()], "life", &actions).expect_err("refused");
         let source = std::error::Error::source(&bad_tick).map(ToString::to_string);
         assert_eq!(
@@ -373,7 +423,7 @@ mod tests {
         assert_eq!(refuse("clear@5", &[]), "'life' declares no actions");
         assert_eq!(
             refuse("reset@5", &actions),
-            "unknown action 'reset' for 'life' (has randomise, clear)"
+            "unknown action 'reset' for 'life', expected one of randomise, clear"
         );
     }
 

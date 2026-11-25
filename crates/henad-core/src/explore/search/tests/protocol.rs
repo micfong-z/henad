@@ -6,16 +6,8 @@ use crate::explore::design::MAX_CONFIGS;
 use crate::explore::search::genetic::{GeneticSettings, MAX_POPULATION, MAX_TOURNAMENT_SIZE};
 use crate::explore::search::hill_climb::HillClimbSettings;
 use crate::explore::search::pse::{PatternAxis, PatternSpaceSettings};
-use crate::explore::search::tests::support::{drive, noise, unit_space};
-use crate::explore::search::{Aggregate, Candidate, Goal, Objective, SearchAlgorithm, SearchSpec, SearchSpecError};
-
-fn objective() -> Objective {
-    Objective {
-        column: "Infected:max".to_owned(),
-        goal: Goal::Minimize,
-        aggregate: Aggregate::Median,
-    }
-}
+use crate::explore::search::tests::support::{drive, noise, objective, unit_space};
+use crate::explore::search::{Aggregate, Candidate, Goal, SearchAlgorithm, SearchSpec, SearchSpecError};
 
 fn pattern_settings() -> PatternSpaceSettings {
     let axis = |column: &str| PatternAxis::bounded(column, 0.0, 2.0, 10);
@@ -46,7 +38,9 @@ fn genetic_settings() -> GeneticSettings {
 fn spec(algorithm: SearchAlgorithm, max_evaluations: u64) -> SearchSpec {
     let objective = match algorithm {
         SearchAlgorithm::PatternSpaceExploration(_) => None,
-        SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => Some(objective()),
+        SearchAlgorithm::Random | SearchAlgorithm::HillClimb(_) | SearchAlgorithm::Genetic(_) => {
+            Some(objective(Goal::Minimize, Aggregate::Median))
+        }
     };
     SearchSpec {
         algorithm,
@@ -196,7 +190,7 @@ fn a_search_spec_checks_its_objective_and_settings() {
 
     let mut pattern = spec(SearchAlgorithm::PatternSpaceExploration(pattern_settings()), 10);
     assert_eq!(pattern.watched_columns(), ["Infected:max", "Infected:argmax"]);
-    pattern.objective = Some(objective());
+    pattern.objective = Some(objective(Goal::Minimize, Aggregate::Median));
     assert_eq!(pattern.check(), Err(SearchSpecError::UnusedObjective));
 
     let empty = spec(SearchAlgorithm::Random, 0);

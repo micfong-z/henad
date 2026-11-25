@@ -10,8 +10,11 @@
 pub use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet, ModelSetError, ModelSetIter, ModelState};
 pub use henad_compute::fault::{Fault, FaultKind, install_panic_hook};
 pub use henad_compute::simulation::{ExportError, RunSetup, SetupError, Simulation, SimulationViews, StatSample};
-pub use henad_core::metadata::{Backend, LaneSpec, ModelMetadata, Structure};
-pub use henad_core::provenance::{BuildInfo, ModelSource};
+pub use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
+pub use henad_core::metadata::{
+    Backend, GpuBufferInfo, GpuPassInfo, LaneSpec, ModelMetadata, Structure, TimeScale, TimeUnit,
+};
+pub use henad_core::provenance::{BuildInfo, CodeOrigin, ModelCode, ModelSource};
 pub use henad_core::send_sync::{WasmNotSend, WasmNotSync};
 pub use henad_core::topology::TopologyHint;
 pub use henad_explore::ENGINE_BUILD;
@@ -35,7 +38,7 @@ pub use henad_core::{actions, buffers, build_info};
 /// }
 ///
 /// assert_eq!(DENSITY, 0);
-/// assert_eq!(descriptors()[DENSITY].id, "density");
+/// assert_eq!(descriptors()[DENSITY].id(), "density");
 /// ```
 #[macro_export]
 macro_rules! params {
@@ -53,7 +56,7 @@ pub mod __macro_support {
 /// Parameter descriptors and values, and the text form that `--set` accepts.
 pub mod params {
     pub use henad_core::explore::value::{ValueError, ValueKind, format_value};
-    pub use henad_core::params::{ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
+    pub use henad_core::params::{ChoiceOptions, ParamApply, ParamDescriptor, ParamFormat, ParamKind, ParamValue};
 }
 
 /// Statistic descriptors and values, and the CSV writer for stat series.
@@ -74,7 +77,9 @@ pub mod action {
 
 /// The GPU device a model builds on, its sizing, and the headless device a program acquires.
 pub mod gpu {
-    pub use henad_compute::gpu::capacity::{Alloc, PassBindings};
+    pub use henad_compute::gpu::capacity::{
+        Alloc, HOST_WORK_BUDGET, HostWork, PassBindings, PassKind, SUBMISSION_WORK_BUDGET,
+    };
     pub use henad_compute::gpu::limits::raise as raise_limits;
     pub use henad_compute::gpu::{Demand, GpuContext, GpuNeeds, wgpu};
     pub use henad_compute::runtime_info::{HostInfo, RuntimeInfo};
@@ -91,8 +96,9 @@ pub mod runner {
     pub use henad_compute::gpu::{
         GpuAgents, GpuDisplay, GpuSimState, GpuSimThread, GpuStats, MAX_STEPS_PER_SUBMISSION, StatsPoll,
     };
+    pub use henad_compute::runner::{DEFAULT_STOP_TIMEOUT, DetachedRunner, RunnerShutdown};
     pub use henad_compute::snapshot::{
-        CpuLayers, EdgeSnapshot, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
+        CpuLayers, EdgeSnapshot, FireCounts, GpuSnapshot, GridSnapshot, PointSnapshot, Snapshot, SnapshotView,
     };
     pub use henad_core::model::SimState;
 }
@@ -122,16 +128,18 @@ pub mod explore {
     pub use henad_explore::output::OutputError;
     pub use henad_explore::output::manifest::{
         BuildRole, Manifest, ManifestAxisRanges, ManifestBlock, ManifestColumns, ManifestDesignTable, ManifestError,
-        ManifestExecution, ManifestLimits, ManifestMode, ManifestModel, ManifestPlan, ManifestRuntime, ManifestSearch,
-        ManifestSeeds, ManifestSession, ManifestShard, ManifestSpecSource, ManifestStatus, ManifestTimestamps,
-        RecordedBuild, ResultCounts,
+        ManifestExecution, ManifestLimits, ManifestMode, ManifestModel, ManifestModelCode, ManifestPlan,
+        ManifestRuntime, ManifestSearch, ManifestSeeds, ManifestSession, ManifestShard, ManifestSpecSource,
+        ManifestStatus, ManifestTimestamps, RecordedBuild, ResultCounts,
     };
     pub use henad_explore::output::memory::SweepFiles;
     pub use henad_explore::output::read::ReadError;
     pub use henad_explore::output::resume::ResumeError;
     pub use henad_explore::output::search_tables::{BatchStanding, SearchHistory};
     pub use henad_explore::output::summary_csv::SummaryError;
-    pub use henad_explore::probe::{CapacityError, ConfigFault, ProbeError, ProbeReport, RefusedConfig};
+    pub use henad_explore::probe::{
+        CapacityError, ConfigFault, ProbeError, ProbeReport, RefusedConfig, ShortfallWords,
+    };
     pub use henad_explore::progress::{NoProgress, Progress, ProgressEvent, ProgressUpdate};
     pub use henad_explore::result_set::{ResultReplayError, ResultSet, ResultSetError, RunRow};
     pub use henad_explore::schema::schema_json;
@@ -171,8 +179,8 @@ pub mod authoring {
     pub use henad_core::authoring::model::network_model::*;
     pub use henad_core::grid::Grid2D;
     pub use henad_core::helpers::{
-        bool_param, choice_param, extract_bool, extract_choice, extract_f32, extract_u32, f32_param, stat,
-        stat_histogram, stat_vec2, u32_param,
+        bool_param, check_choice_options, choice_param, extract_bool, extract_choice, extract_f32, extract_u32,
+        f32_param, stat, stat_histogram, stat_vec2, u32_param,
     };
     pub use henad_core::network::Network;
     pub use henad_core::spatial_hash::{HashGrid, SpatialHash};
@@ -251,6 +259,50 @@ pub mod models {
     pub use henad_models::{
         ants, boids, example_models, game_of_life, gpu_ants, gpu_boids, gpu_game_of_life, gpu_sir, sir, team_assembly,
         virus_network,
+    };
+}
+
+/// Grid rules: GPU grid models declared as data, with a step written in WGSL and composed while the program runs.
+///
+/// A [`GridRule`](rules::GridRule) compiles into a [`CompiledGridRule`](rules::CompiledGridRule), whose entry joins a
+/// model set like any other. A [`ModelFile`](rules::ModelFile) holds a rule, a [graph] or a
+/// [sheet](graph::sheet) as one TOML file, and its code is the model's code identity in a results folder: a rule's
+/// canonical text, or the semantic text of a graph or of the graph a sheet lowers to.
+/// [`compose_wgsl`](rules::compose_wgsl) composes any shader against the shared modules, as henad-build does at build
+/// time.
+#[cfg(feature = "model-files")]
+#[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
+pub mod rules {
+    pub use henad_compute::gpu::compose::{ComposedWgsl, WgslFile, compose_wgsl};
+    pub use henad_compute::gpu::runtime_grid::{
+        CompiledGridRule, GridRule, LIFE_STEP, MAX_GRID_SIDE, MAX_PARAMS, MAX_STATES, MAX_STEP_BYTES, RuleDeclaration,
+        RuleState,
+    };
+    pub use henad_explore::model_file::{GridRuleFile, ModelFile, ModelFileError};
+}
+
+/// Graph models: the node graph a model file of kind `graph` holds, its checker, its host evaluator, its WGSL
+/// compiler and its edit commands.
+///
+/// A [`GraphFile`](graph::GraphFile) reads a graph and writes its canonical text, and
+/// [`GraphFile::check`](graph::GraphFile::check) reports every problem at once. [`starters`](graph::starters::starters)
+/// and [`agent_starters`](graph::starters::agent_starters) return the graph files a new graph model begins from.
+/// [`GridProgram`](graph::wgsl::GridProgram) compiles a graph on a grid to WGSL and builds its entry, and
+/// [`AgentProgram`](graph::wgsl::AgentProgram) does the same for a graph of agents. A [`ModelFile`](rules::ModelFile)
+/// of kind `graph` holds a [`GraphFile`](graph::GraphFile). [`ParsedSheet`](graph::sheet::ParsedSheet) reads a model
+/// file of kind `sheet`, the author document a researcher builds without nodes, and
+/// [`SheetBuilder`](graph::sheet::edit::SheetBuilder) runs its edit commands. Both builders mint draw keys from a
+/// [`KeyStream`](graph::keys::KeyStream). [`SheetFile`](graph::sheet::SheetFile) reads, checks and lowers a sheet to
+/// the graph it builds as. A [`ModelFile`](rules::ModelFile) of kind `sheet` holds a
+/// [`SheetFile`](graph::sheet::SheetFile).
+#[cfg(feature = "model-files")]
+#[cfg_attr(docsrs, doc(cfg(feature = "model-files")))]
+pub mod graph {
+    pub use henad_graph::sheet::KIND_SHEET;
+    pub use henad_graph::{
+        CODE_FORMAT, FORMAT, FORMAT_VERSION, GraphFile, GraphFileError, KIND_GRAPH, LIBRARY, catalogue, check,
+        document, draw, edit, editor, file, host, ids, keys, limits, model_text, node, normal, sheet, starters, types,
+        value, wgsl,
     };
 }
 

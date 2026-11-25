@@ -215,15 +215,8 @@ mod tests {
     use crate::explore::design_rng::DesignRng;
     use crate::explore::factor::{Factor, FactorDomain, FactorSlot};
     use crate::explore::search::genome::SearchSpace;
+    use crate::explore::search::tests::support::objective;
     use crate::explore::search::{Aggregate, Candidate, CandidateOrigin, Evaluation, Goal, Objective};
-
-    fn objective(goal: Goal, aggregate: Aggregate) -> Objective {
-        Objective {
-            column: "Infected:max".to_owned(),
-            goal,
-            aggregate,
-        }
-    }
 
     fn candidate(id: u64, replicate_offset: u64, origin: CandidateOrigin) -> Candidate {
         let space = SearchSpace::new(vec![Factor {

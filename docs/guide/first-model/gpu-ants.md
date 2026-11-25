@@ -77,7 +77,7 @@ A buffer marked `double_buffered` is, well... double-buffered, and is used for a
 The shipped GPU boids marks all three of its buffers `double_buffered`, because a boid reads its neighbours' current positions while writing its own next position.
 
 Ants marks nothing double buffered, because no ant ever reads another ant's slots, and deposits land in `accum` rather than in the field the step is reading.
-The engine builds a second side only for buffers marked `double_buffered`, so this model pays nothing for the ping-pong machinery the grid model needed.
+The engine builds a second side only for buffers marked `double_buffered`, so this model has none of the ping-pong machinery the grid model needed.
 
 ### Packing an ant
 
@@ -103,10 +103,9 @@ fn pack_state(lanes: &AntLanes, i: usize) -> u32 {
 ```
 
 1. The direction code fits a byte, so it takes the low eight bits, with `NO_STEP` at 255 still clear of every real encoding.
-2. `reward` was an `f32` on the CPU and survives here as a single bit. That works because of a property of the CPU model: its reward lane only ever holds `0.0` or the reward parameter, nothing in between, so "has a reward" plus the parameter reconstructs the value exactly.
+2. `reward` was an `f32` on the CPU and survives here as a single bit. The CPU model's reward lane only ever holds `0.0` or the reward parameter, so "has a reward" plus the parameter reconstructs the value exactly.
 
-Why pack at all?
-Count the step pass's bindings [below](#pass-1-stepping): 7 buffers plus the engine's counters is 8 storage bindings, which is precisely the WebGPU baseline limit per shader stage.
+Count the step pass's bindings [below](#pass-1-stepping): 7 buffers plus the engine's counters is 8 storage bindings, exactly the WebGPU baseline limit per shader stage.
 Packing allows our model to stay under that limit, and hence run on nearly all WebGPU devices!
 
 The WGSL side of the packing lives in a small file that both the step and the reduce shaders import:
@@ -186,7 +185,7 @@ fn main(
 1. An agent pass folds its linear invocation domain onto a 2D grid of workgroups, because a large domain overflows one row of them. `linear_index` from `henad::dispatch` does the fold, and needs the fold width `groups_x` from the uniform.
 2. A uniform block is a struct we design, and `build.rs` generates its Rust twin, which we fill in under [Uniforms](#uniforms).
 3. The step shader writes `accum` through atomics, and here it is bound as a plain `u32` array. Only one invocation touches each entry in this pass, so it can reset the slot for the next tick with an ordinary store.
-4. Every agent pass declares 256, and every display pass declares a square, exactly as the grid model's shaders all declared 16 by 16.
+4. Every agent pass declares 256, and every display pass declares a square, as the grid model's shaders all declared 16 by 16.
 5. Deposits are stored as the bit pattern of an `f32`, for a reason the step shader makes clear.
 
 The order matches the CPU too, decay after the merge, so a fresh deposit is already one step old when the next tick reads it.
@@ -317,7 +316,7 @@ error[E0046]: not all trait items implemented, missing: `NAME`, `ID`, `DESCRIPTI
 Six more items have defaults and so are missing from the list: `INDEX`, `COUNTERS`, `DISPLAY`, `ACTIONS`, `REPLAYS_EXACTLY` and `index_cell_size`.
 Ants needs two of them, `COUNTERS` and `DISPLAY`.
 
-### Identity and Metadata
+### Identity and metadata
 
 ``` { .rust .annotate title="src/gpu_foraging/mod.rs" }
 impl GpuAgentModel for GpuForagingModel {
@@ -339,7 +338,7 @@ impl GpuAgentModel for GpuForagingModel {
 2. Reused wholesale from the CPU model, so both backends chart the same three series in the same colours.
 3. The list `buffers!` emitted.
 4. The two drawable buffers that the renderer reads, as positions and colours.
-5. Persistent `u32` counters a kernel accumulates into, and nothing ever clears. One counter, for deliveries. A reduction is recomputed from current state each time, while deliveries are events that already happened, so they accumulate here instead, exactly as the `Tally` did on the CPU.
+5. Persistent `u32` counters a kernel accumulates into, and nothing ever clears. One counter, for deliveries. A reduction is recomputed from current state each time, while deliveries are events that already happened, so they accumulate here instead, as the `Tally` did on the CPU.
 
 `INDEX` keeps its default of `false`.
 Our ants read the field and never each other, so the engine builds no neighbour index, just as `NoIndex` told it on the CPU.
@@ -381,7 +380,7 @@ parameters for gpu_foraging (Ant Foraging (GPU)):
 
 Both backends therefore take the same parameter vector, and a slider in the app means the same thing on either backend.
 Every entry says `apply=reload`, including the four parameters that the CPU model applies live.
-A GPU state rejects a live edit, and the engine marks the whole list accordingly.
+The entry of a `GpuAgentModel` marks the whole list that way, and its GPU state rejects a live edit.
 
 ### Sizes
 
@@ -467,7 +466,7 @@ How the colony _starts_ comes, as always, from the CPU model:
 5. The RNG buffer gets a seed deliberately separated from the ant-position stream, so the two streams do not start correlated.
 6. Through the CPU field spec, so the two backends cannot place the nest, the food or the obstacles differently.
 7. Raw bytes rather than `u32`, because agent buffers hold mixed types. `bytemuck::cast_slice` reinterprets a slice of floats or words as bytes without copying.
-8. An empty vector leaves a buffer cleared, which is exactly right for a field that starts with no pheromone and an accumulator the merge resets anyway.
+8. An empty vector leaves a buffer cleared. That is right for a field that starts with no pheromone and an accumulator the merge resets anyway.
 
 The helpers this leans on are small:
 
@@ -499,7 +498,7 @@ fn packed_cell_palette() -> [[u32; 4]; 4] {
 }
 ```
 
-1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `henad::rng`, and the prelude's `pcg_hash` is the same hash in Rust, so the buffer can be seeded to a known first state.
+1. WGSL has no 64-bit integers, so the GPU cannot run `xorshift64`. Its generator is `pcg_hash` over `u32`, from `henad::rng`. The prelude's `pcg_hash` is the same hash in Rust, so the buffer can be seeded to a known first state.
 2. Both palettes are packed from the CPU model's constants rather than retyped, one for the step uniform and one for the display uniform.
 
 ``` rust title="src/gpu_foraging/mod.rs"
@@ -609,7 +608,7 @@ struct Params {
 
 1. The same four draws we used on the CPU, as their WGSL twins. A parity test pins each WGSL draw to its Rust twin.
 2. The hot parameters, the same ones `from_params` derived on the CPU, `diagonal` included. The two ant colours ride along in the uniform to keep a storage binding free.
-3. For an agent model the engine resolves each binding _by name_. `pos` binds the buffer labelled "pos", and the slot indices come from the shader itself at build time, so Rust and WGSL cannot disagree about the layout. `field` and `sites` are read-only here, and that is the whole guarantee the fused pass rests on.
+3. For an agent model the engine resolves each binding _by name_. `pos` binds the buffer labelled "pos", and the slot indices come from the shader itself at build time, so Rust and WGSL cannot disagree about the layout. `field` and `sites` are read-only here, and the fused pass rests on that guarantee alone.
 4. `accum` is declared atomic, since many ants write it.
 5. `counters` is one of the engine's reserved names, holding the persistent counters that `COUNTERS` requests. Eight storage bindings in all, the baseline limit.
 
@@ -643,7 +642,7 @@ fn passable(x: i32, y: i32) -> bool { // (2)!
 ```
 
 1. The index of our one counter.
-2. Every candidate cell funnels through here, including both fallback paths below, exactly as on the CPU. Forgetting the bounds check in one of the fallbacks is still the easiest bug this page can produce.
+2. Every candidate cell funnels through here, including both fallback paths below, as on the CPU. Forgetting the bounds check in one of the fallbacks is still the easiest bug this page can produce.
 
 Rule 2, how much pheromone to lay, is `deposit_value` ported line for line:
 
@@ -718,7 +717,7 @@ Then the ant deposits, which on the CPU was the whole first pass:
     atomicMax(&accum[lay_base + cell_of(x, y)], bitcast<u32>(value)); // (1)!
 ```
 
-1. This line is the GPU's answer to `ScatterGrid`, and it is doing something slightly sneaky. WGSL has no atomic max for floats, but a non-negative `f32` compares in the same order as its bit pattern does as an integer, so `bitcast<u32>` turns a float max into an integer max. Many ants writing one cell are resolved by hardware atomics, and it is only correct because the model combines deposits with `max`, which no ordering can change.
+1. This line does the job `ScatterGrid` did on the CPU, and it is doing something slightly sneaky. WGSL has no atomic max for floats, but a non-negative `f32` compares in the same order as its bit pattern does as an integer, so `bitcast<u32>` turns a float max into an integer max. Many ants writing one cell are resolved by hardware atomics. That is only correct because the model combines deposits with `max`. No order of the writes changes a maximum.
 
 Choosing where to move is the same three-way logic as the CPU kernel, trail first, then momentum, then a random kick:
 
@@ -824,7 +823,7 @@ Arrival closes the tick for this ant:
 1. Rule 4. Reaching a site flips what the ant carries and grants a fresh reward.
 2. A delivery bumps the persistent counter. `atomicAdd` because any number of ants can arrive home in the same tick.
 3. `encode_step` inline, then the two flags.
-4. The last four lines write the ant's own slots back, including the colour the renderer draws it in next frame. Nothing here touches another ant's slot, and that is what lets every buffer stay single-sided.
+4. The last four lines write the ant's own slots back, including the colour the renderer draws it in next frame. Nothing here touches another ant's slot, so every buffer can stay single-sided.
 
 #### Pass 2: merging
 
@@ -906,7 +905,6 @@ use crate::shader_bindings::gpu_foraging::step::Params as StepParams;
 ```
 
 Add a field to a WGSL `Params` without touching this function and the crate stops compiling, since the generated struct gained a field this initialiser does not name.
-That is the whole point of generating the twin.
 
 ### Statistics
 
@@ -968,7 +966,7 @@ fn main(
 }
 ```
 
-1. `block_sum` is the workgroup fold, summing a value across the 256 invocations in a fixed pairwise order so the result replays. Every invocation has to reach it, since it barriers, and that is why the bounds checks below guard the value rather than returning early.
+1. `block_sum` is the workgroup fold, summing a value across the 256 invocations in a fixed pairwise order so the result replays. Every invocation has to reach it, since it barriers. The bounds checks below guard the value rather than returning early.
 2. `partials` is another reserved name, the leaf's output. One value per lane per workgroup, and the engine's tree folds those down to one value per lane.
 3. Lane 0 counts carrying ants and lane 1 sums both pheromone layers, the same two figures `stats` computed on the CPU. Deliveries come from the counter instead.
 4. Invocation 0 gets the total and writes it. The other invocations still had to take part in the fold.
@@ -986,7 +984,7 @@ fn main(
 ```
 
 1. The reduced lanes, in lane order. Both arrive through an asynchronous readback, so a reported stat is a few milliseconds stale, and reads zero until the first readback completes.
-2. The persistent counter, cumulative across every tick since the model was built, exactly as the tally was.
+2. The persistent counter, cumulative across every tick since the model was built, as the tally was.
 
 ## Running it
 
@@ -1028,6 +1026,10 @@ The [Game of Life page](game-of-life.md#running-it) shows the template's `src/li
       --global-warmup 500 --steps 2000
     ```
 
+    A run this size measures speed alone.
+    The trails reach about 300 cells at the defaults, and no ant brings food home across a world of 4,472.
+    [Larger worlds](../../reference/models.md#larger-worlds) lists the settings that make a large world forage.
+
 === "Browser"
 
     ``` bash
@@ -1039,19 +1041,19 @@ The [Game of Life page](game-of-life.md#running-it) shows the template's `src/li
 
 ## Testing
 
-The determinism story needs more care than it did for the grid model, and it is worth being precise about what holds.
+Determinism needs more care than it did for the grid model.
 
-**Tick 0 is bit identical** to the CPU model, by the seeding above.
-
-**The backends then diverge**, because the generators differ.
+Tick 0 is bit identical to the CPU model, by the seeding above.
+The backends then diverge, because the generators differ.
 The CPU draws from `xorshift64` over `u64`, and because WGSL has no 64-bit integers, the GPU draws from `pcg_hash` over `u32`.
-The two generators are counterparts in role and produce different streams, so from tick 1 the colonies make different random choices, and a cell-by-cell comparison against the CPU model is off the table.
+The two generators are counterparts in role and produce different streams, so from tick 1 the colonies make different random choices, and a cell-by-cell comparison against the CPU model is no longer possible.
 
-**A GPU run still replays bit identically.**
-Deposits combine with `max`, which no scheduling order can change, and no ant reads another ant's slots, so however the GPU schedules the invocations, the same seed gives the same run.
+A GPU run still replays bit identically.
+Deposits combine with `max`, which no scheduling order can change, and no ant reads another ant's slots.
+The same seed therefore gives the same run, however the GPU schedules the invocations.
 This is the property the shipped GPU boids cannot have, since its neighbour sums add floats in whatever order its index happens to produce.
 
-That last property is the one to test, and the test is a plain replay:
+The test checks that last property with a plain replay:
 
 ``` { .rust .annotate title="src/gpu_foraging/mod.rs" }
 #[cfg(test)]
@@ -1069,7 +1071,7 @@ mod tests {
 
         let mut params: Vec<ParamValue> = GpuForagingModel::param_descriptors() // (1)!
             .iter()
-            .map(|d| d.kind.default_value())
+            .map(|d| d.kind().default_value())
             .collect();
         params[NUM_AGENTS] = ParamValue::U32(4_000);
 
@@ -1093,7 +1095,7 @@ mod tests {
 ```
 
 1. Every parameter at its default, then the population raised so the run spans many workgroups.
-2. `run_batched` steps in submission-sized batches, exactly as the real runner does.
+2. `run_batched` steps in submission-sized batches, as the real runner does.
 3. `read_buffer` copies a buffer back to the CPU as raw words, so the comparison is on bits rather than on floats.
 
 With equality against the CPU gone, the rest of the port is checked the way the [determinism page](../../authoring/determinism.md) recommends, by invariants.
@@ -1158,6 +1160,6 @@ On top of everything the grid page listed, batching, capacity, error handling an
 That is every tutorial done, with the grid and agent models on both backends.
 From here:
 
-- [Choosing a trait](../../authoring/index.md) is the map of the five traits you have now seen all of.
+- [Choosing a trait](../../authoring/index.md) covers all five traits, and you have now seen each of them.
 - [Porting a model to the GPU](../../authoring/porting.md) condenses this page and the GPU grid page into a checklist for your own port.
-- `gpu_boids/` is the other shipped `GpuAgentModel`: one pass, three double buffered lanes and a neighbour index, the structural opposite of ants.
+- `gpu_boids/` is the other shipped `GpuAgentModel`, with one pass, three double buffered buffers and a neighbour index.

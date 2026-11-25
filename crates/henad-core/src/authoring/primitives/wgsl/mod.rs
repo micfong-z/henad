@@ -1,14 +1,15 @@
 //! The shared WGSL modules that a model shader imports with `#import henad::<module>`, as text.
 //!
-//! Three modules pair with Rust: `henad::dispatch` with the engine's linear dispatch, and `henad::rng` and
-//! `henad::space` with most of [`super::rng`] and [`super::space`]. `henad::dims` and `henad::reduce_tree` are shared
-//! modules without a Rust twin. `henad::dims` holds the uniform that the grid engine writes for a display or reduce
-//! shader, and `henad::reduce_tree` holds the workgroup sum that a reduce shader repeats.
+//! Four modules pair with Rust: `henad::dispatch` with the engine's linear dispatch, `henad::rng` and `henad::space`
+//! with most of [`super::rng`] and [`super::space`], and `henad::hash` with the walk of
+//! [`crate::spatial_hash::SpatialHash::for_each_within`]. `henad::dims` and `henad::reduce_tree` are shared modules
+//! without a Rust twin. `henad::dims` holds the uniform that the grid engine writes for a display or reduce shader,
+//! and `henad::reduce_tree` holds the workgroup sum that a reduce shader repeats.
 //!
 //! henad-build writes these modules beside a crate's shaders before it composes them. This text is the single source
 //! that every build and every host reads.
 
-use crate::explore::fingerprint::Fnv1a64;
+use crate::fnv::Fnv1a64;
 
 /// A WGSL module a model shader can `#import`, as text.
 #[derive(Clone, Copy)]
@@ -29,7 +30,7 @@ impl std::fmt::Debug for SharedModule {
     }
 }
 
-/// `henad::dispatch`, `henad::dims`, `henad::rng`, `henad::space` and `henad::reduce_tree`.
+/// `henad::dispatch`, `henad::dims`, `henad::rng`, `henad::space`, `henad::reduce_tree` and `henad::hash`.
 pub const SHARED_WGSL_MODULES: &[SharedModule] = &[
     SharedModule {
         import_path: "henad::dispatch",
@@ -51,6 +52,10 @@ pub const SHARED_WGSL_MODULES: &[SharedModule] = &[
         import_path: "henad::reduce_tree",
         source: include_str!("reduce_tree.wgsl"),
     },
+    SharedModule {
+        import_path: "henad::hash",
+        source: include_str!("hash.wgsl"),
+    },
 ];
 
 /// FNV-1a hash of every module's import path and source, in [`SHARED_WGSL_MODULES`] order.
@@ -68,7 +73,7 @@ pub const SHARED_WGSL_FNV1A64: u64 = {
 #[cfg(test)]
 mod tests {
     use super::{SHARED_WGSL_FNV1A64, SHARED_WGSL_MODULES};
-    use crate::explore::fingerprint::Fnv1a64;
+    use crate::fnv::Fnv1a64;
 
     #[test]
     fn each_module_declares_its_import_path() {

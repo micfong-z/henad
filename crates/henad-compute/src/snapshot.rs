@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use henad_core::view::StatEntry;
+use henad_core::view::{StatEntry, StatValue};
 
 use crate::gpu::view::agents::GpuAgents;
 use crate::gpu::view::display::GpuDisplay;
@@ -31,6 +31,77 @@ pub struct Snapshot {
     pub view: SnapshotView,
     /// Current stat values, one per stat series.
     pub stats: Vec<StatEntry>,
+    /// Counts of the elements each probe of the model fired for on the latest counted step, empty for a model that
+    /// counts nothing and on the CPU path.
+    pub fire_counts: FireCounts,
+    /// Stats sampled on the way to this snapshot's tick during a run to a tick, oldest first, and empty otherwise.
+    ///
+    /// A run to a tick can pass hundreds of ticks between two publishes, and these samples keep its course. A publish
+    /// the host never took passes its samples on to the next publish.
+    pub run_to_samples: Vec<StatSample>,
+}
+
+/// One sample of a model's stats.
+#[derive(Debug, Clone)]
+pub struct StatSample {
+    tick: u64,
+    entries: Vec<StatEntry>,
+}
+
+impl StatSample {
+    /// Creates the sample of stats `entries` read at `tick`.
+    pub(crate) fn new(tick: u64, entries: Vec<StatEntry>) -> Self {
+        Self { tick, entries }
+    }
+
+    /// Tick the sample was taken at.
+    pub fn tick(&self) -> u64 {
+        self.tick
+    }
+
+    /// Every stat the model reports, in the order it reports them.
+    pub fn entries(&self) -> &[StatEntry] {
+        &self.entries
+    }
+
+    /// Returns the value of stat `label`, `None` for a label the model does not report.
+    pub fn get(&self, label: &str) -> Option<&StatValue> {
+        self.entries
+            .iter()
+            .find(|entry| entry.label() == label)
+            .map(StatEntry::value)
+    }
+
+    /// Returns [`StatValue::scalar`] of stat `label`: a scalar's value, a vector's magnitude, a histogram's total
+    /// count. `None` for a label the model does not report.
+    pub fn scalar(&self, label: &str) -> Option<f64> {
+        self.get(label).map(StatValue::scalar)
+    }
+}
+
+/// Counts of the elements each probe of a GPU model fired for on one step, with the tick that step reached.
+///
+/// A GPU engine counts on the last step of each batch of steps it records, and reads the counts back with the stats.
+/// The counts of a model with no probes are empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FireCounts {
+    /// Tick the counted step reached, 0 before the first counted step.
+    pub tick: u64,
+    /// Number of elements each probe fired for on the counted step, in the order of the probes.
+    pub counts: Vec<u32>,
+}
+
+impl FireCounts {
+    /// Creates the counts `counts` of the step that reached `tick`.
+    pub fn new(tick: u64, counts: Vec<u32>) -> Self {
+        Self { tick, counts }
+    }
+
+    /// Returns whether the counts hold no probe.
+    pub fn is_empty(&self) -> bool {
+        self.counts.is_empty()
+    }
 }
 
 /// View layers of a snapshot, copied from a CPU model or held on the GPU.
@@ -94,7 +165,7 @@ pub struct GridSnapshot {
     /// Palette index of each cell, row by row.
     pub cells: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
 }
 
 /// Prints the grid's size, not its cells.
@@ -120,7 +191,7 @@ pub struct EdgeSnapshot {
     /// One palette index per edge, or empty if every edge has the same colour.
     pub color: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
     /// Whether the edges are directed.
     pub directed: bool,
 }
@@ -152,7 +223,7 @@ pub struct PointSnapshot {
     /// so the buffer recycles like the rest.
     pub color: Vec<u8>,
     /// RGBA colour of each palette index.
-    pub palette: &'static [[u8; 4]],
+    pub palette: Vec<[u8; 4]>,
 }
 
 /// Prints the point count and the world, not the positions.

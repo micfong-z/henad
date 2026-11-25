@@ -7,15 +7,25 @@ use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
 
-use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
+use crate::icons::material_design_icons::{
+    MDI_CHECK, MDI_CLOSE, MDI_CODE_BRACES, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE,
+};
 use crate::state::{AppState, OpeningRefusal};
+use crate::ui::editor;
+use crate::ui::sweep::layout::add_button;
 use crate::ui::{KvGridRows, kv_grid};
 
 /// Text the Model panel shows when no model of the set runs on this machine.
 const NO_MODEL_RUNS: &str = "No model in this build runs on this device. GPU models need a GPU with compute support.";
 
 /// Text the Model panel shows for a set without models.
-const NO_MODELS: &str = "This build includes no models.";
+const NO_MODELS: &str = "This build has no models.";
+
+/// Hover text of the Exact replay row for a model that replays exactly.
+const REPLAYS_EXACTLY: &str = "Two runs with the same seed match.";
+
+/// Hover text of the Exact replay row for a model that does not replay exactly.
+const DOES_NOT_REPLAY: &str = "Two runs with the same seed can differ.";
 
 /// Draws the opening that the app rejected and the reason, then `next_step`.
 fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
@@ -24,11 +34,46 @@ fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str)
     ui.label(next_step);
 }
 
-pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
-    let offered: Vec<(String, String)> = app
-        .offered_models()
+/// Returns the label of each model in the model list, for `offered` as `(id, name)` pairs, as [`label_among`] words
+/// it.
+fn list_labels(offered: &[(String, String)]) -> Vec<String> {
+    offered
+        .iter()
+        .map(|(id, name)| label_among(offered, id, name))
+        .collect()
+}
+
+/// Returns the label of model `id` named `name` beside `offered`, the offered models as `(id, name)` pairs: the name,
+/// followed by the id in parentheses when another offered model has the same name, letter case aside.
+fn label_among(offered: &[(String, String)], id: &str, name: &str) -> String {
+    let lower = name.to_lowercase();
+    if offered
+        .iter()
+        .any(|(other_id, other)| other_id != id && other.to_lowercase() == lower)
+    {
+        format!("{name} ({id})")
+    } else {
+        name.to_owned()
+    }
+}
+
+/// Returns the id and name of each model of the set that runs on this machine.
+fn offered_names(app: &AppState) -> Vec<(String, String)> {
+    app.offered_models()
         .map(|entry| (entry.id().to_owned(), entry.name().to_owned()))
-        .collect();
+        .collect()
+}
+
+/// Returns the label of model `id` named `name` as the model list shows it: the name, with the id in parentheses when
+/// another model the app offers has the same name, letter case aside.
+///
+/// The Sweep tab and the Results tab name a model by this label, a model the set lacks included.
+pub fn model_label(app: &AppState, id: &str, name: &str) -> String {
+    label_among(&offered_names(app), id, name)
+}
+
+pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
+    let offered = offered_names(app);
     if offered.is_empty() {
         // The refusal of a hidden GPU model already mentions the GPU, and an empty set has no GPU to blame.
         match &app.opening_refusal {
@@ -42,17 +87,25 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
         return;
     }
-    let selected_name = app.selected_entry().map_or("None", ModelEntry::name).to_owned();
+    let labels = list_labels(&offered);
+    let selected_name = offered
+        .iter()
+        .zip(&labels)
+        .find(|((id, _), _)| app.selected_model.as_deref() == Some(id.as_str()))
+        .map_or_else(
+            || app.selected_entry().map_or("None", ModelEntry::name).to_owned(),
+            |(_, label)| label.clone(),
+        );
     let mut picked = None;
 
-    egui::ComboBox::from_label("Select Model")
+    egui::ComboBox::from_label("Select model")
         .selected_text(selected_name)
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
-            for (id, name) in &offered {
+            for ((id, _), label) in offered.iter().zip(&labels) {
                 let selected = app.selected_model.as_deref() == Some(id.as_str());
-                if ui.selectable_label(selected, name).clicked() && !selected {
+                if ui.selectable_label(selected, label).clicked() && !selected {
                     picked = Some(id.clone());
                 }
             }
@@ -62,6 +115,7 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     if let Some(id) = picked {
         app.select_model(&id);
     }
+    editor_buttons(ui, app);
 
     let Some(entry) = app.selected_entry() else {
         if let Some(refusal) = &app.opening_refusal {
@@ -89,9 +143,13 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     scroll.show(ui, |ui| {
         section(ui, "Identity");
         kv_grid(ui, "model_identity_grid").show(ui, |ui, rows| {
-            row(ui, rows, "Id", entry.id());
-            row(ui, rows, "Backend", entry.metadata().backend.label());
-            row(ui, rows, "Topology", topology_label(entry.topology_hint()));
+            rows.row(ui, "Id", entry.id());
+            rows.row(ui, "Backend", entry.metadata().backend.label());
+            rows.row(ui, "Topology", topology_label(entry.topology_hint()));
+            let (value, hover) = replay_cells(entry.metadata().replays_exactly);
+            ui.label("Exact replay").on_hover_text(hover);
+            ui.label(value).on_hover_text(hover);
+            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
@@ -113,15 +171,49 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     });
 }
 
+/// Draws New model, New grid rule, and Edit model for a selected model whose code the Editor can show. New model opens
+/// its dialog, and the other two open the Editor.
+fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
+    let editable = app.selected_entry().is_some_and(editor::can_edit);
+    ui.horizontal_wrapped(|ui| {
+        let model = add_button(
+            ui,
+            true,
+            egui::Button::new(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE} {}", editor::NEW_MODEL_BUTTON)),
+            editor::NEW_MODEL_BUTTON,
+        )
+        .on_hover_text("Start new model in Editor");
+        if model.clicked() {
+            editor::replace_model(app, editor::Replacement::NewModel);
+        }
+        let new = add_button(
+            ui,
+            true,
+            egui::Button::new(format!("{MDI_FILE_PLUS_OUTLINE} New grid rule")),
+            "New grid rule",
+        )
+        .on_hover_text("Open Game of Life rule in Editor");
+        if new.clicked() {
+            editor::replace_model(app, editor::Replacement::NewGridRule);
+        }
+        if editable {
+            let edit = add_button(
+                ui,
+                true,
+                egui::Button::new(format!("{MDI_CODE_BRACES} Edit model")),
+                "Edit model",
+            )
+            .on_hover_text("Open model file in Editor");
+            if edit.clicked() {
+                editor::edit_model(app);
+            }
+        }
+    });
+}
+
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.strong(title);
     ui.add_space(2.0);
-}
-
-fn row(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: impl Into<egui::WidgetText>) {
-    ui.label(label);
-    ui.label(value);
-    rows.end_row(ui);
 }
 
 /// Adds a row with the count `value`, whose two cells both list `names` on hover.
@@ -136,8 +228,8 @@ fn row_listing(ui: &mut egui::Ui, rows: &mut KvGridRows, label: &str, value: Str
 fn topology_label(hint: TopologyHint) -> &'static str {
     match (hint.grid, hint.agents, hint.edges) {
         (false, true, true) => "Network",
-        (true, true, true) => "Network and Grid",
-        (true, true, false) => "Agents and Grid",
+        (true, true, true) => "Network and grid",
+        (true, true, false) => "Agents and grid",
         (true, false, false) => "Grid",
         (false, true, false) => "Agents",
         _ => "None",
@@ -155,13 +247,23 @@ fn yes_no(present: bool) -> &'static str {
     if present { MDI_CHECK } else { MDI_CLOSE }
 }
 
-/// Returns the count `n`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
-/// "7 (2 reload)".
-fn count_of(n: usize, flagged: usize, flag: &str) -> String {
-    if flagged == 0 {
-        n.to_string()
+/// Returns the value and the hover text of the Exact replay row, for a model that replays exactly when
+/// `replays_exactly` holds.
+fn replay_cells(replays_exactly: bool) -> (&'static str, &'static str) {
+    if replays_exactly {
+        (MDI_CHECK, REPLAYS_EXACTLY)
     } else {
-        format!("{n} ({flagged} {flag})")
+        (MDI_CLOSE, DOES_NOT_REPLAY)
+    }
+}
+
+/// Returns the count `count`, followed by the count `flagged` labelled `flag` unless `flagged` is zero, as in
+/// "7 (2 reload)".
+fn count_of(count: usize, flagged: usize, flag: &str) -> String {
+    if flagged == 0 {
+        count.to_string()
+    } else {
+        format!("{count} ({flagged} {flag})")
     }
 }
 
@@ -171,7 +273,7 @@ fn lane_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, lanes: &[LaneSpec]) {
     let names: Vec<String> = lanes
         .iter()
         .map(|lane| {
-            let mark = if lane.double_buffered { " (dual)" } else { "" };
+            let mark = if lane.double_buffered { " (double-buffered)" } else { "" };
             format!("{}: {}{mark}", lane.name, lane.ty)
         })
         .collect();
@@ -187,7 +289,7 @@ fn lane_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, lanes: &[LaneSpec]) {
 fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structure) {
     match structure {
         Structure::Grid { neighborhood } => {
-            row(ui, rows, "Neighbourhood", neighborhood_label(*neighborhood));
+            rows.row(ui, "Neighbourhood", neighborhood_label(*neighborhood));
         }
         Structure::Agents {
             chunk,
@@ -196,17 +298,17 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
             field,
         } => {
             lane_rows(ui, rows, lanes);
-            row(ui, rows, "Chunk size", format!("{chunk} agents"));
-            row(ui, rows, "Neighbour index", *index);
-            row(ui, rows, "Field layer", *field);
+            rows.row(ui, "Chunk size", format!("{chunk} agents"));
+            rows.row(ui, "Neighbour index", *index);
+            rows.row(ui, "Field layer", *field);
         }
         Structure::Network { chunk, lanes, .. } => {
             lane_rows(ui, rows, lanes);
-            row(ui, rows, "Chunk size", format!("{chunk} nodes"));
+            rows.row(ui, "Chunk size", format!("{chunk} nodes"));
         }
         Structure::GpuGrid { buffers, workgroup } => {
             row_listing(ui, rows, "Buffers", buffers.len().to_string(), &buffers.join("\n"));
-            row(ui, rows, "Workgroup", format!("{workgroup} × {workgroup}"));
+            rows.row(ui, "Workgroup", format!("{workgroup} × {workgroup}"));
         }
         Structure::GpuAgents {
             buffers,
@@ -216,8 +318,8 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
             counters,
         } => {
             let doubled = buffers.iter().filter(|spec| spec.double_buffered).count();
-            let buffer_names: Vec<&str> = buffers.iter().map(|spec| spec.label).collect();
-            let pass_names: Vec<&str> = passes.iter().map(|pass| pass.label).collect();
+            let buffer_names: Vec<&str> = buffers.iter().map(|spec| spec.label.as_ref()).collect();
+            let pass_names: Vec<&str> = passes.iter().map(|pass| pass.label.as_ref()).collect();
             row_listing(
                 ui,
                 rows,
@@ -232,34 +334,38 @@ fn structure_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, structure: &Structur
                 passes.len().to_string(),
                 &pass_names.join("\n"),
             );
-            row(
-                ui,
-                rows,
-                "Neighbour index",
-                if *index { "Spatial hash" } else { "None" },
-            );
-            row(ui, rows, "Display pass", yes_no(*display));
+            rows.row(ui, "Neighbour index", if *index { "Spatial hash" } else { "None" });
+            rows.row(ui, "Display pass", yes_no(*display));
             if *counters > 0 {
-                row(ui, rows, "Counters", counters.to_string());
+                rows.row(ui, "Counters", counters.to_string());
             }
         }
+        // A structure this build does not know has no rows to show.
+        _ => {}
     }
 }
 
+/// Adds the rows of the model's parameters, statistics and palettes.
+///
+/// The Parameters row counts the parameters the Parameters tab shows, a hidden tick length left out.
 fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) {
-    let descs: &[ParamDescriptor] = entry.param_descriptors();
-    let reload = descs.iter().filter(|desc| !desc.is_live()).count();
-    row(ui, rows, "Parameters", count_of(descs.len(), reload, "reload"));
+    let shown: Vec<&ParamDescriptor> = entry
+        .param_descriptors()
+        .iter()
+        .filter(|descriptor| !descriptor.is_hidden())
+        .collect();
+    let reload = shown.iter().filter(|descriptor| !descriptor.is_live()).count();
+    rows.row(ui, "Parameters", count_of(shown.len(), reload, "reload"));
 
     ui.label("Statistics");
     ui.horizontal(|ui| {
         ui.label(entry.stat_descriptors().len().to_string());
-        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color));
+        swatches(ui, entry.stat_descriptors().iter().map(|stat| stat.color()));
     });
     rows.end_row(ui);
 
     ui.label("Palette");
-    match entry.metadata().palette {
+    match &entry.metadata().palette {
         Some(palette) => {
             ui.horizontal(|ui| {
                 ui.label(palette.len().to_string());
@@ -268,9 +374,8 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
         }
         // A GPU agent model's shaders write RGBA directly and declare no palette.
         None => {
-            ui.label("In shader").on_hover_text(
-                "Palette colours are declared directly in the shaders and are not retrievable directly.",
-            );
+            ui.label("In shader")
+                .on_hover_text("Palette colours are declared in the shaders and cannot be retrieved.");
         }
     }
     rows.end_row(ui);
@@ -287,9 +392,9 @@ fn interface_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, entry: &ModelEntry) 
 
 /// Adds the rows of the model's expected footprint on the GPU.
 fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &Demand, storage_limit: u32) {
-    row(ui, rows, "Expected memory", fmt_bytes(demand.bytes()));
+    rows.row(ui, "Expected memory", fmt_bytes(demand.bytes()));
 
-    if let Some(largest) = demand.buffers.iter().max_by_key(|alloc| alloc.bytes) {
+    if let Some(largest) = demand.buffers.iter().max_by_key(|buffer| buffer.bytes) {
         row_listing(
             ui,
             rows,
@@ -299,12 +404,12 @@ fn footprint_rows(ui: &mut egui::Ui, rows: &mut KvGridRows, id: &str, demand: &D
         );
     }
 
-    if let Some((w, h)) = demand.texture {
-        row(ui, rows, "Display texture", format!("{w} × {h}"));
+    if let Some((width, height)) = demand.texture {
+        rows.row(ui, "Display texture", format!("{width} × {height}"));
     }
 
     if let Some(widest) = demand.passes.iter().max_by_key(|pass| pass.storage) {
-        let hint = format!("Widest pass is '{}'", widest.label);
+        let hint = format!("Pass with the most storage bindings: '{}'", widest.label);
         ui.label("Storage bindings").on_hover_text(&hint);
         ui.horizontal(|ui| {
             ui.style_mut().spacing.item_spacing.x = 0.0;
@@ -341,14 +446,61 @@ fn swatches(ui: &mut egui::Ui, colors: impl Iterator<Item = [u8; 4]>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{count_of, strip_id, topology_label};
+    use super::{
+        DOES_NOT_REPLAY, REPLAYS_EXACTLY, count_of, label_among, list_labels, replay_cells, strip_id, topology_label,
+    };
+    use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE};
     use henad_core::topology::TopologyHint;
+
+    /// An applied sheet of Game of Life sits beside the example of that name, and the list tells the two apart.
+    #[test]
+    fn the_model_list_names_the_ids_of_models_that_share_a_name() {
+        let offered: Vec<(String, String)> = [
+            ("sir", "SIR Epidemic"),
+            ("boids", "Boids"),
+            ("game_of_life", "Game of Life"),
+            ("sheet_game_of_life", "Game of Life"),
+            ("sheet_sir", "SIR epidemic"),
+        ]
+        .map(|(id, name)| (id.to_owned(), name.to_owned()))
+        .into();
+        assert_eq!(
+            list_labels(&offered),
+            [
+                "SIR Epidemic (sir)",
+                "Boids",
+                "Game of Life (game_of_life)",
+                "Game of Life (sheet_game_of_life)",
+                "SIR epidemic (sheet_sir)"
+            ],
+            "names that differ in case alone"
+        );
+        assert_eq!(
+            label_among(&offered, "folder_sir", "SIR EPIDEMIC"),
+            "SIR EPIDEMIC (folder_sir)",
+            "a model the set lacks, as a results folder names it"
+        );
+        assert_eq!(label_among(&offered, "boids", "Boids"), "Boids");
+    }
+
+    /// The Exact replay row marks GPU Boids, whose agents add up floats over their neighbours, and no CPU model.
+    #[test]
+    fn the_replay_row_marks_a_model_that_does_not_replay_exactly() {
+        let models = henad_models::example_models();
+        let cells = |id: &str| {
+            let entry = models.get(id).expect("an example model");
+            replay_cells(entry.metadata().replays_exactly)
+        };
+        assert_eq!(cells("gpu_boids"), (MDI_CLOSE, DOES_NOT_REPLAY));
+        assert_eq!(cells("boids"), (MDI_CHECK, REPLAYS_EXACTLY));
+        assert_eq!(cells("gpu_game_of_life"), (MDI_CHECK, REPLAYS_EXACTLY));
+    }
 
     #[test]
     fn topology_names_every_layer_combination() {
         assert_eq!(topology_label(TopologyHint::GRID), "Grid");
         assert_eq!(topology_label(TopologyHint::AGENTS), "Agents");
-        assert_eq!(topology_label(TopologyHint::COMPOSITE), "Agents and Grid");
+        assert_eq!(topology_label(TopologyHint::COMPOSITE), "Agents and grid");
         assert_eq!(topology_label(TopologyHint::NETWORK), "Network");
         assert_eq!(topology_label(TopologyHint::NONE), "None");
     }

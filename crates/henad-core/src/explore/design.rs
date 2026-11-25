@@ -111,7 +111,7 @@ impl fmt::Display for DesignError {
                     lengths.join(", ")
                 )
             }
-            Self::TooManyConfigs => write!(f, "design takes the plan past {MAX_CONFIGS} configs"),
+            Self::TooManyConfigs => write!(f, "design produces more than {MAX_CONFIGS} configs"),
             Self::NoSamples => write!(f, "a random or Latin hypercube design needs at least 1 sample"),
             Self::NoFactors => write!(f, "a random or Latin hypercube design needs at least 1 factor"),
             Self::UnlistedLevels { factor_index } => {
@@ -263,6 +263,9 @@ fn random(factors: &[Factor], base: &Config, samples: usize, rng: &mut DesignRng
                     &FactorDomain::WholeNumbers { min, max } => {
                         whole_number_level(factor.slot, rng.whole_number(min, max))
                     }
+                    &FactorDomain::IntegerF32 { min, max } => {
+                        FactorDomain::integer_f32_level(min, rng.whole_number(0, FactorDomain::integer_span(min, max)))
+                    }
                 };
                 factor.apply(&level, &mut config);
             }
@@ -291,6 +294,10 @@ fn latin_hypercube(factors: &[Factor], base: &Config, samples: usize, rng: &mut 
                 &FactorDomain::WholeNumbers { min, max } => {
                     let count = u128::from(max - min) + 1;
                     whole_number_level(factor.slot, min + balanced_level(stratum, samples, count) as u64)
+                }
+                &FactorDomain::IntegerF32 { min, max } => {
+                    let count = u128::from(FactorDomain::integer_span(min, max)) + 1;
+                    FactorDomain::integer_f32_level(min, balanced_level(stratum, samples, count) as u64)
                 }
             };
             factor.apply(&level, config);
@@ -629,5 +636,34 @@ mod tests {
         for design_seed in [3, 42] {
             assert_eq!(counts(&lhs(40, levels(), design_seed), 1), expected);
         }
+    }
+
+    /// A random or Latin hypercube design over the whole numbers of an `F32` parameter draws whole numbers between
+    /// the ends, negative ones included, and a Latin hypercube with one sample per number takes each once.
+    #[test]
+    fn integer_draws_are_whole_numbers_between_the_ends() {
+        let integers = || Factor {
+            slot: FactorSlot::Param(0),
+            domain: FactorDomain::IntegerF32 { min: -3, max: 4 },
+        };
+        let random =
+            generate(&block(DesignKind::Random { samples: 500 }, vec![integers()]), &base()).expect("a valid design");
+        let drawn = column(&random, 0);
+        assert!(
+            drawn
+                .iter()
+                .all(|&value| value.fract() == 0.0 && (-3.0..=4.0).contains(&value)),
+            "{drawn:?}"
+        );
+        assert!(drawn.contains(&-3.0) && drawn.contains(&4.0), "both ends are drawn");
+        let mut sampled = column(&lhs(8, vec![integers()], 5), 0);
+        sampled.sort_by(f64::total_cmp);
+        assert_eq!(sampled, [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert!(
+            random
+                .iter()
+                .all(|config| matches!(config.params[0], ParamValue::F32(_))),
+            "the parameter keeps its kind"
+        );
     }
 }

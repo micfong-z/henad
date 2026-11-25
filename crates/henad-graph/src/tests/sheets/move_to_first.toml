@@ -1,0 +1,89 @@
+format = "henad-model"
+format_version = 1
+kind = "sheet"
+
+[sheet]
+version = 1
+id = "move_to_first"
+name = "Move to first"
+next_line = 5
+
+[world]
+made_of = "agents"
+width = 20
+height = 20
+edges = "walls"
+
+[[agents]]
+id = "ant"
+name = "Ant"
+count = 100
+max_count = 100
+
+[[agents.property]]
+id = "position"
+name = "Position"
+type = "position"
+
+[agents.property.starts_as]
+rule = "on_ground"
+property = "ground"
+state = "nest"
+
+[[agents.property]]
+id = "heading"
+name = "Heading"
+type = "heading"
+
+[[ground.property]]
+id = "ground"
+name = "Ground"
+type = "states"
+states = [
+  { id = "open", name = "Open", color = "#0E0E12" },
+  { id = "nest", name = "Nest", color = "#F2E45C" },
+]
+
+[ground.property.starts_as]
+rule = "painted"
+base = "open"
+
+[[ground.property.starts_as.shape]]
+shape = "cell"
+state = "nest"
+center = [0.01, 0.01]
+
+[[card]]
+id = "ant_tick"
+every = "ant"
+runs = "each_tick"
+lines = ["l1", "l2", "l3", "l4"]
+
+[card.line.l1]
+kind = "look_at_cell"
+name = "Ahead"
+which = "ahead"
+
+[card.line.l2]
+kind = "pick_cell"
+name = "Somewhere"
+key = 401
+around = "cells_8"
+open_only = true
+pick = "random"
+
+[card.line.l3]
+kind = "move"
+mode = "to"
+value = { result = "l1" }
+
+[card.line.l3.condition]
+kind = "always"
+
+[card.line.l4]
+kind = "move"
+mode = "to"
+value = { result = "l2" }
+
+[card.line.l4.condition]
+kind = "always"

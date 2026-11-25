@@ -1,46 +1,12 @@
 //! Checks that a sweep's manifest records the builds of the `henad-cli` binary that ran it, and that a resume under the
 //! same binary prints no `build_changed` warning.
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+mod support;
+
+use std::path::Path;
 
 use serde_json::Value;
-
-/// Directory under the system's temporary directory, removed with its contents on drop.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("henad-cli-{name}-{}", std::process::id()));
-        drop(std::fs::remove_dir_all(&path));
-        Self(path)
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        drop(std::fs::remove_dir_all(&self.0));
-    }
-}
-
-/// Runs `henad-cli` with `arguments` and returns its output.
-///
-/// # Panics
-///
-/// Panics when the command does not run or exits with a failure.
-fn run(arguments: &[&str]) -> Output {
-    let output = Command::new(env!("CARGO_BIN_EXE_henad-cli"))
-        .args(arguments)
-        .output()
-        .expect("henad-cli runs");
-    assert!(
-        output.status.success(),
-        "henad-cli {} failed: {}",
-        arguments.join(" "),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    output
-}
+use support::{Scratch, manifest, run_ok, stdout};
 
 /// Returns the arguments of a two-step Game of Life sweep of `replicates` replicates into `dir`.
 fn sweep_arguments<'a>(dir: &'a Path, replicates: &'a str) -> Vec<&'a str> {
@@ -62,9 +28,9 @@ fn sweep_arguments<'a>(dir: &'a Path, replicates: &'a str) -> Vec<&'a str> {
 #[test]
 fn a_manifest_from_the_cli_entry_records_its_host() {
     let scratch = Scratch::new("manifest-host");
-    run(&sweep_arguments(&scratch.0, "1"));
-    let text = std::fs::read_to_string(scratch.0.join("manifest.json")).expect("the manifest is written");
-    let manifest: Value = serde_json::from_str(&text).expect("the manifest is JSON");
+    let out = scratch.path("sweep");
+    run_ok(&sweep_arguments(&out, "1"));
+    let manifest = manifest(&out);
     let session = &manifest["sessions"][0];
     let host = &session["host"];
     assert_eq!(host["name"], "henad-cli");
@@ -81,8 +47,8 @@ fn a_manifest_from_the_cli_entry_records_its_host() {
     );
     assert_eq!(manifest["model"]["replays_exactly"], true);
 
-    let resumed = run(&[sweep_arguments(&scratch.0, "2"), vec!["--resume", "--json"]].concat());
-    let warnings: Vec<Value> = String::from_utf8_lossy(&resumed.stdout)
+    let resumed = run_ok(&[sweep_arguments(&out, "2"), vec!["--resume", "--json"]].concat());
+    let warnings: Vec<Value> = stdout(&resumed)
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .filter(|line| line["kind"] == "explore_warning")

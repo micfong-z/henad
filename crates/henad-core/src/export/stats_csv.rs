@@ -8,6 +8,7 @@ use std::fmt;
 use std::io::{self, Write};
 
 use crate::export::csv::{escape_field, fmt_f64};
+use crate::metadata::TimeScale;
 use crate::view::{StatEntry, StatValue};
 
 /// A stat series could not be written.
@@ -54,7 +55,7 @@ struct Column {
     /// Header text, already escaped for CSV.
     header: String,
     /// Label of the series feeding the column.
-    label: &'static str,
+    label: String,
     /// Index into the `Vec<StatEntry>` returned by `stats()`.
     series: usize,
     part: Part,
@@ -71,10 +72,11 @@ impl Column {
                 stats.len()
             )));
         };
-        part_value(&entry.value, self.part).ok_or_else(|| {
+        part_value(entry.value(), self.part).ok_or_else(|| {
             StatsWriteError::Shape(format!(
                 "stat series '{}' changed shape mid-run at tick {tick}: column '{}' no longer applies",
-                entry.label, self.header
+                entry.label(),
+                self.header
             ))
         })
     }
@@ -94,6 +96,12 @@ enum Part {
     BucketTotal,
 }
 
+/// Names of the columns that `--export-stats` or `series.csv` write before the stat columns of every model.
+const LEADING_COLUMNS: [&str; 2] = ["run_id", "tick"];
+
+/// Name of the column that a model with a time scale writes after `tick`.
+const TIME_COLUMN: &str = "time";
+
 /// Column layout of a stat series, planned from one sample.
 ///
 /// A scalar series is one column, a vector is three (`.x`, `.y` and `.magnitude`), and a histogram
@@ -105,24 +113,29 @@ pub struct StatColumns {
 
 impl StatColumns {
     /// Derives the column layout from the sample `stats`.
+    ///
+    /// # Panics
+    ///
+    /// Panics in a debug build when a column is named `run_id` or `tick`, the names of columns written before the
+    /// stats. A model file with such a stat is refused by its checker first.
     pub fn plan(stats: &[StatEntry]) -> Self {
         let mut columns = Vec::new();
         for (series, entry) in stats.iter().enumerate() {
             let mut push = |suffix: Option<&str>, part: Part| {
                 let name = match suffix {
-                    Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label),
-                    None => entry.label.to_owned(),
+                    Some(suffix) => format!("{}{SUFFIX_SEP}{suffix}", entry.label()),
+                    None => entry.label().to_owned(),
                 };
                 let header = escape_field(&name);
                 columns.push(Column {
                     name,
                     header,
-                    label: entry.label,
+                    label: entry.label().to_owned(),
                     series,
                     part,
                 });
             };
-            match &entry.value {
+            match entry.value() {
                 StatValue::Scalar(_) => push(None, Part::Scalar),
                 StatValue::Vector2D { .. } => {
                     push(Some("x"), Part::VecX);
@@ -144,6 +157,16 @@ impl StatColumns {
                 }
             }
         }
+        if let Some(column) = columns
+            .iter()
+            .find(|column| LEADING_COLUMNS.contains(&column.name.as_str()))
+        {
+            debug_assert!(
+                false,
+                "stat '{}' writes the column '{}', a name reserved for a column before the stats",
+                column.label, column.name
+            );
+        }
         Self { columns }
     }
 
@@ -164,6 +187,11 @@ impl StatColumns {
     /// Panics when `i` is not below [`Self::len`].
     pub fn name(&self, i: usize) -> &str {
         &self.columns[i].name
+    }
+
+    /// Returns an iterator over the column names, in column order, before CSV escaping.
+    pub(crate) fn names(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().map(|column| column.name.as_str())
     }
 
     /// Returns the header of column `i`, escaped for CSV.
@@ -215,11 +243,16 @@ impl StatColumns {
 /// Call [`push`](Self::push) once per sampled tick, then [`finish`](Self::finish). The first `push`
 /// writes the header, with the columns of its sample. A [`StatDescriptor`](crate::view::StatDescriptor)
 /// does not say whether its value is a scalar, a vector or a histogram.
+///
+/// The first column is `tick`. A writer given a tick length through [`Self::tick_length`] adds a `time` column after
+/// it, for a model with a [`TimeScale`].
 #[derive(Debug)]
 pub struct StatsWriter<W: Write> {
     out: W,
     /// Column layout, `None` until the first `push` fixes it.
     columns: Option<StatColumns>,
+    /// Length of one tick in the model's time unit, `None` for a writer with no `time` column.
+    tick_length: Option<f32>,
     rows: u64,
 }
 
@@ -229,31 +262,59 @@ impl<W: Write> StatsWriter<W> {
         Self {
             out,
             columns: None,
+            tick_length: None,
             rows: 0,
         }
+    }
+
+    /// Adds a `time` column after `tick`, holding each sample's tick times `tick_length`, as
+    /// [`TimeScale::time_at`] computes it.
+    ///
+    /// Call it before the first [`push`](Self::push), which writes the header.
+    pub fn tick_length(mut self, tick_length: f32) -> Self {
+        self.tick_length = Some(tick_length);
+        self
     }
 
     /// Writes the row of the sample `stats`, taken at `tick`.
     ///
     /// The first call fixes the column layout and writes the header.
     ///
+    /// # Panics
+    ///
+    /// Panics in a debug build when a writer with a `time` column plans a stat column named `time`, and as
+    /// [`StatColumns::plan`] does.
+    ///
     /// # Errors
     ///
     /// Returns [`StatsWriteError::Io`] when a write fails, and [`StatsWriteError::Shape`] when `stats` does not fit
     /// the layout the first sample fixed.
     pub fn push(&mut self, tick: u64, stats: &[StatEntry]) -> Result<(), StatsWriteError> {
-        if self.columns.is_none() {
-            let columns = StatColumns::plan(stats);
+        let planned = if let Some(planned) = self.columns.take() {
+            planned
+        } else {
+            let planned = StatColumns::plan(stats);
             write!(self.out, "tick")?;
-            for column in &columns.columns {
+            if self.tick_length.is_some() {
+                debug_assert!(
+                    planned.columns.iter().all(|column| column.name != TIME_COLUMN),
+                    "stat '{TIME_COLUMN}' writes the column '{TIME_COLUMN}', a name reserved for a column before \
+                     the stats"
+                );
+                write!(self.out, ",{TIME_COLUMN}")?;
+            }
+            for column in &planned.columns {
                 write!(self.out, ",{}", column.header)?;
             }
             writeln!(self.out)?;
-            self.columns = Some(columns);
-        }
-        let columns = self.columns.as_ref().map_or(&[][..], |planned| &planned.columns[..]);
+            planned
+        };
+        let columns = &self.columns.insert(planned).columns;
 
         write!(self.out, "{tick}")?;
+        if let Some(tick_length) = self.tick_length {
+            write!(self.out, ",{}", fmt_f64(TimeScale::time_at(tick, tick_length)))?;
+        }
         for column in columns {
             let value = column.value(tick, stats)?;
             write!(self.out, ",{}", fmt_f64(value))?;
@@ -312,27 +373,15 @@ mod tests {
     const C: [u8; 4] = [0, 0, 0, 255];
 
     fn scalar(label: &'static str, v: f64) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Scalar(v),
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Scalar(v), C)
     }
 
     fn vec2(label: &'static str, x: f64, y: f64) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Vector2D { x, y },
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Vector2D { x, y }, C)
     }
 
     fn hist(label: &'static str, edges: Vec<f64>, counts: Vec<u64>) -> StatEntry {
-        StatEntry {
-            label,
-            value: StatValue::Histogram { edges, counts },
-            color: C,
-        }
+        StatEntry::new(label, StatValue::Histogram { edges, counts }, C)
     }
 
     /// Runs samples through a writer and returns the CSV text.
@@ -353,6 +402,68 @@ mod tests {
             (1, vec![scalar("Alive", 12.0), scalar("Dead", 3.0)]),
         ]);
         assert_eq!(csv, "tick,Alive,Dead\n0,10,5\n1,12,3\n");
+    }
+
+    #[test]
+    fn a_tick_length_adds_the_time_after_the_tick() {
+        let mut buf = Vec::new();
+        let mut writer = StatsWriter::new(&mut buf).tick_length(0.1);
+        for tick in [0, 3, 10] {
+            writer.push(tick, &[scalar("Alive", 1.0)]).expect("push should succeed");
+        }
+        writer.finish().expect("finish should succeed");
+        let csv = String::from_utf8(buf).expect("output should be utf8");
+        assert_eq!(csv, "tick,time,Alive\n0,0,1\n3,0.3,1\n10,1,1\n");
+    }
+
+    /// A stat named `time` repeats the header of the `time` column, and a debug build stops at the writer's header,
+    /// naming the stat.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'time' writes the column 'time'")]
+    fn a_stat_named_time_stops_a_debug_build_with_a_time_column() {
+        let mut writer = StatsWriter::new(Vec::new()).tick_length(0.5);
+        writer
+            .push(0, &[scalar("Alive", 1.0), scalar("time", 2.0)])
+            .expect("the header panics before the push returns");
+    }
+
+    /// A model without a time scale writes no `time` column, so a stat named `time` writes its column as any other.
+    #[test]
+    fn a_stat_named_time_plans_without_a_time_column() {
+        let csv = render(&[(0, vec![scalar("time", 2.0)])]);
+        assert_eq!(csv, "tick,time\n0,2\n");
+    }
+
+    /// A stat named `tick` repeats the first column, and a debug build stops at the plan.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'tick' writes the column 'tick'")]
+    fn a_stat_named_tick_stops_a_debug_build() {
+        render(&[(0, vec![scalar("tick", 1.0)])]);
+    }
+
+    /// A stat named `run_id` repeats the first column of `series.csv`, and a debug build stops at the plan.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "stat 'run_id' writes the column 'run_id'")]
+    fn a_stat_named_run_id_stops_a_debug_build() {
+        StatColumns::plan(&[scalar("run_id", 1.0)]);
+    }
+
+    /// Only a whole column name clashes: a vector named `tick` writes `tick.x`, `tick.y` and `tick.magnitude`, and a
+    /// stat whose name differs in case writes its own column.
+    #[test]
+    fn a_column_that_only_starts_with_a_reserved_name_plans() {
+        let mut writer = StatsWriter::new(Vec::new()).tick_length(1.0);
+        let stats = [
+            vec2("tick", 1.0, 0.0),
+            vec2("time", 1.0, 0.0),
+            scalar("Time", 1.0),
+            scalar("ticks", 1.0),
+        ];
+        writer.push(0, &stats).expect("push should succeed");
+        assert_eq!(StatColumns::plan(&stats).len(), 8);
     }
 
     #[test]
@@ -489,7 +600,7 @@ mod tests {
         assert_eq!(csv.lines().next(), Some(format!("tick,{}", headers.join(",")).as_str()));
 
         let records = crate::export::csv::parse_records(&csv).expect("the writer writes valid CSV");
-        let names: Vec<&str> = (0..columns.len()).map(|i| columns.name(i)).collect();
+        let names: Vec<&str> = columns.names().collect();
         assert_eq!(records[0][1..], names[..], "names are the headers unescaped");
         let row: Vec<String> = values.iter().map(|&value| fmt_f64(value)).collect();
         assert_eq!(records[1][1..], row[..]);
@@ -515,8 +626,8 @@ mod tests {
             .extract(0, &stats, &mut values)
             .expect("a sample fits its own plan");
         for entry in &stats {
-            let i = columns.resolve(entry.label).expect("every label resolves");
-            assert_eq!(values[i], entry.value.scalar(), "{}", entry.label);
+            let i = columns.resolve(entry.label()).expect("every label resolves");
+            assert_eq!(values[i], entry.value().scalar(), "{}", entry.label());
         }
         assert_eq!(columns.resolve("V"), columns.resolve("V.magnitude"));
         assert_eq!(columns.resolve("H"), columns.resolve("H.total"));
@@ -534,7 +645,7 @@ mod tests {
     /// [`crate::view::StatsHistory`] otherwise. Both claim the column layout the headless runner
     /// writes, and only one of them holds structured values.
     mod parity {
-        use super::super::StatsWriter;
+        use super::render;
         use crate::view::{StatDescriptor, StatEntry, StatValue, StatsHistory};
 
         const C: [u8; 4] = [9, 9, 9, 255];
@@ -542,71 +653,53 @@ mod tests {
         /// A scalar beside a vector, so the replay has to reach both stores.
         fn sample(i: u64) -> Vec<StatEntry> {
             vec![
-                StatEntry {
-                    label: "Alive",
-                    value: StatValue::Scalar(i as f64 * 1.5),
-                    color: C,
-                },
-                StatEntry {
-                    label: "Average Velocity",
-                    value: StatValue::Vector2D {
+                StatEntry::new("Alive", StatValue::Scalar(i as f64 * 1.5), C),
+                StatEntry::new(
+                    "Average Velocity",
+                    StatValue::Vector2D {
                         x: i as f64,
                         y: -(i as f64) * 0.25,
                     },
-                    color: C,
-                },
+                    C,
+                ),
             ]
         }
 
-        fn render(samples: &[(u64, Vec<StatEntry>)]) -> String {
-            let mut writer = StatsWriter::new(Vec::new());
-            for (tick, stats) in samples {
-                writer.push(*tick, stats).expect("push should succeed");
-            }
-            let (csv, _) = writer.into_inner().expect("finish should succeed");
-            String::from_utf8(csv).expect("output should be utf8")
-        }
+        /// Samples with the tick each was taken at.
+        type Samples = Vec<(u64, Vec<StatEntry>)>;
 
-        #[test]
-        fn a_replayed_history_writes_what_a_recording_writes() {
+        /// Returns twenty samples as recorded, and as replayed from a history of `capacity` samples.
+        fn recorded_and_replayed(capacity: usize) -> (Samples, Samples) {
             let descriptors = vec![
                 StatDescriptor::new("Alive", C),
                 StatDescriptor::new("Average Velocity", C),
             ];
-            let mut history = StatsHistory::new(descriptors, Some(64));
+            let mut history = StatsHistory::new(descriptors, Some(capacity));
             let mut recorded = Vec::new();
             for tick in 0..20 {
                 let stats = sample(tick);
                 history.push_entries(&stats, tick);
                 recorded.push((tick, stats));
             }
-
-            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
-                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
+            let replayed = (0..history.len())
+                .map(|position| {
+                    let tick = history.tick(position).expect("tick");
+                    (tick, history.entries(position).expect("entries"))
+                })
                 .collect();
+            (recorded, replayed)
+        }
 
+        #[test]
+        fn a_replayed_history_writes_what_a_recording_writes() {
+            let (recorded, replayed) = recorded_and_replayed(64);
             assert_eq!(render(&replayed), render(&recorded));
         }
 
         /// A history that has wrapped writes the tail of what a recording holds, column for column.
         #[test]
         fn a_wrapped_history_writes_the_tail_of_the_recording() {
-            let descriptors = vec![
-                StatDescriptor::new("Alive", C),
-                StatDescriptor::new("Average Velocity", C),
-            ];
-            let mut history = StatsHistory::new(descriptors, Some(5));
-            let mut recorded = Vec::new();
-            for tick in 0..20 {
-                let stats = sample(tick);
-                history.push_entries(&stats, tick);
-                recorded.push((tick, stats));
-            }
-
-            let replayed: Vec<(u64, Vec<StatEntry>)> = (0..history.len())
-                .map(|j| (history.tick(j).expect("tick"), history.entries(j).expect("entries")))
-                .collect();
-
+            let (recorded, replayed) = recorded_and_replayed(5);
             let full = render(&recorded);
             let tail = render(&replayed);
             let header = full.lines().next().expect("a header");

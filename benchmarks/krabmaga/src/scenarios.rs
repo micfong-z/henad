@@ -5,7 +5,7 @@
 //! independently.
 //!
 //! Taken from `crates/henad-models/tests/fixtures/docs/`, and identical to the tables in
-//! `consistency_boids.rs` and `consistency_ants.rs`.
+//! `tests/gates/boids.rs` and `tests/gates/ants.rs`.
 
 /// `(x, y, vx, vy)`, world 100, one tick.
 pub const BOIDS_8: [(f32, f32, f32, f32); 8] = [

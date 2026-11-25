@@ -23,7 +23,16 @@
 //! Both CPU and GPU models run. For a set that holds a GPU model, [`run`] acquires a device through
 //! [`acquire_headless`], sized to the set's needs, and builds GPU models on the resulting [`GpuContext`]. Without a
 //! device `--list` leaves the GPU models out, and a GPU model id on the command line is rejected. The benchmark is
-//! [`henad_explore::benchmark::run_benchmark`], and the two exports step a [`Simulation`].
+//! [`henad_explore::benchmark::run_benchmark`], and the two exports step a
+//! [`Simulation`](henad_compute::simulation::Simulation).
+//!
+//! `--model-file` reads a model file and adds its model to the set, in place of a model with the same id. A model file
+//! holds a grid rule (`kind = "gpu_grid"`), a graph model (`kind = "graph"`) or a sheet (`kind = "sheet"`). The files
+//! and `--spec` are read before the device is acquired. The device is then sized to the files' models as well. A graph
+//! reads, checks and compiles to WGSL, on a grid or of agents, and its warnings and errors print at their lines. A
+//! sheet reads, checks and lowers to a graph, which then builds as a graph does, and each of its warnings and errors
+//! prints at the line of the sheet it is about, with no pass and no node. `--print-lowered` prints the graph that one
+//! model file builds as, a sheet's lowered graph included, in its canonical text.
 //!
 //! ```text
 //! henad-cli --list
@@ -35,6 +44,9 @@
 //! henad-cli gpu_game_of_life --set grid_width=4096 --set grid_height=4096 --steps 10000
 //! henad-cli sir --vary infection_rate=0.1:0.5:0.1 --reps 5 --steps 500 --out sir-sweep
 //! henad-cli --spec crates/henad-explore/specs/sir_sweep.toml --out sir-sweep
+//! henad-cli --model-file crates/henad-explore/specs/models/life_rule.toml --vary density=0.1:0.5:0.1 --out life-sweep
+//! henad-cli sheet_game_of_life --model-file crates/henad-graph/sheets/game_of_life.toml --steps 100
+//! henad-cli --model-file crates/henad-graph/sheets/game_of_life.toml --print-lowered
 //! henad-cli --merge shard-0 shard-1 --out sir-sweep
 //! ```
 //!
@@ -54,36 +66,31 @@
 )]
 
 use std::ffi::OsString;
-use std::fs::File;
-use std::io::{BufWriter, Write as _};
-use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use clap::error::ErrorKind;
 use clap::{ArgGroup, CommandFactory as _, FromArgMatches as _, Parser};
 
 use henad_compute::entry::{ModelEntry, ModelLookupError, ModelSet};
 use henad_compute::fault::install_panic_hook;
 use henad_compute::gpu::GpuContext;
 use henad_compute::runtime_info::{GpuVerdict, HostInfo, RuntimeInfo, classify_adapter};
-use henad_compute::simulation::{RunSetup, Simulation};
-use henad_core::action::Schedule;
-use henad_core::explore::value::{ValueError, parse_overrides, resolve_params};
-use henad_core::export::StatsWriter;
-use henad_core::metadata::Backend;
 use henad_core::params::{ParamFormat, ParamKind};
 use henad_core::provenance::BuildInfo;
-use henad_explore::benchmark::{BenchmarkEvent, BenchmarkSettings, run_benchmark};
 use henad_explore::device::acquire_headless;
+use henad_explore::model_file::ModelFile;
 use henad_explore::spec_file::{LoadedSpec, SpecFileError};
 use henad_explore::sweep::Provenance;
 
 use crate::explore::ExploreArgs;
-use numfmt::{Formatter, Scales};
+use crate::model_file::{check_output_path, print_lowered, with_model_files};
+use crate::single::{SingleRun, run_single};
 
 mod explore;
 mod json_report;
+mod model_file;
+mod single;
 
 /// Options for the command line that a host runs: the models, the host's build, the command name and the help text's
 /// opening line.
@@ -169,7 +176,8 @@ pub fn run(options: CliOptions, arguments: impl IntoIterator<Item = OsString>) -
 ///
 /// # Errors
 ///
-/// Returns clap's error for a command line that does not parse, and for `--help` and `--version`.
+/// Returns clap's error for a command line that does not parse, for `--help` and `--version`, and for two model files
+/// or more with neither a model id nor a spec in a mode that needs a model.
 fn parse_args(
     name: String,
     version: &'static str,
@@ -182,7 +190,25 @@ fn parse_args(
         command = command.about(about);
     }
     let mut matches = command.try_get_matches_from_mut(arguments)?;
-    Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))
+    let args = Args::from_arg_matches_mut(&mut matches).map_err(|error| error.format(&mut command))?;
+    if args.print_lowered && args.model_file.len() != 1 {
+        return Err(command.error(
+            ErrorKind::WrongNumberOfValues,
+            "--print-lowered requires exactly one --model-file",
+        ));
+    }
+    // Clap accepts any number of model files in place of the model id. Only one of them can stand in for it.
+    let needs_model = !matches!(
+        Mode::of(&args),
+        Mode::List | Mode::Merge | Mode::InfoOnly | Mode::PrintLowered
+    );
+    if needs_model && args.model.is_none() && args.explore.spec.is_none() && args.model_file.len() > 1 {
+        return Err(command.error(
+            ErrorKind::MissingRequiredArgument,
+            "a model id is required with more than one --model-file",
+        ));
+    }
+    Ok(args)
 }
 
 /// Headless benchmark runner for Henad models.
@@ -197,9 +223,25 @@ fn parse_args(
 // A spec file needs one of these flags. Each flag puts the spec to a use.
 #[command(group(ArgGroup::new("spec_use").args(["out", "dry_run", "params"]).multiple(true)))]
 struct Args {
-    /// Model id to run (see `--list`). Optional with `--spec`.
-    #[arg(required_unless_present_any = ["list", "info", "spec", "merge"])]
+    /// Model id to run (see `--list`). Optional with `--spec`, and with one `--model-file`.
+    #[arg(required_unless_present_any = ["list", "info", "spec", "merge", "model_file"])]
     model: Option<String>,
+
+    /// Load a model file and add its model to this build's models, replacing a model with the same id. Repeatable.
+    #[arg(long = "model-file", value_name = "PATH")]
+    model_file: Vec<PathBuf>,
+
+    /// Print the canonical text of the graph that the single `--model-file` builds, and exit. For a sheet, print the
+    /// lowered graph.
+    #[arg(
+        long = "print-lowered",
+        requires = "model_file",
+        conflicts_with_all = [
+            "model", "list", "params", "info", "json", "export", "export_stats", "stats_every", "merge", "explore",
+            "steps", "warmup", "global_warmup", "seed", "reps", "set", "act", "threads",
+        ]
+    )]
+    print_lowered: bool,
 
     /// Steps to run (and time) per rep, or per run of a sweep.
     #[arg(long, default_value_t = 1000)]
@@ -209,8 +251,8 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     warmup: u64,
 
-    /// Untimed steps for a one-time hardware warm-up before the timed reps. Ramps GPU clocks and
-    /// pays first-use compilation, so rep 1 isn't cold. Its cost scales with the workload.
+    /// Untimed steps for a one-time hardware warm-up before the timed reps. The warm-up ramps up GPU clocks and
+    /// triggers first-use compilation, so rep 1 is not cold. Its cost scales with the workload.
     #[arg(long = "global-warmup", default_value_t = 0)]
     global_warmup: u64,
 
@@ -224,13 +266,13 @@ struct Args {
     reps: u64,
 
     /// Override a model parameter, e.g. `--set grid_width=512`. Repeatable.
-    #[arg(long = "set", value_name = "ID=VALUE", value_parser = check_set)]
-    set: Vec<String>,
+    #[arg(long = "set", value_name = "ID=VALUE", value_parser = parse_set)]
+    set: Vec<(String, String)>,
 
-    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is
-    /// refused, and the error lists the ids the model declares. Each rep and each run of a sweep replays the same
-    /// schedule. A sweep names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an
-    /// earlier `--act` has taken.
+    /// Run one of the model's actions at a tick, e.g. `--act clear@500`. Repeatable. An unknown id is rejected, and the
+    /// error lists the ids the model declares. Each rep and each run of a sweep replays the same schedule. A sweep
+    /// names the action by its id, or `ID_2` for the second `--act` of an id, skipping a name an earlier `--act` has
+    /// taken.
     #[arg(long = "act", value_name = "ID@TICK", value_parser = check_act)]
     act: Vec<String>,
 
@@ -238,12 +280,12 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     export: Option<PathBuf>,
 
-    /// Write the per-tick stat time series to this path as CSV, then exit. Runs one configuration
-    /// for `warmup + steps` steps, sampling every `--stats-every` ticks.
+    /// Write the per-tick stat time series to this path as CSV, then exit. One configuration runs for `warmup + steps`
+    /// steps, with stats sampled every `--stats-every` ticks.
     #[arg(long = "export-stats", value_name = "PATH")]
     export_stats: Option<PathBuf>,
 
-    /// Sample stats every N ticks when using `--export-stats` or sweeping. 1 records every tick.
+    /// Sample stats every N ticks when using `--export-stats` or sweeping. Set to 1 to record every tick.
     #[arg(long = "stats-every", default_value_t = 1, value_name = "N")]
     stats_every: u64,
 
@@ -256,8 +298,8 @@ struct Args {
     #[arg(long, conflicts_with_all = ["out", "dry_run"])]
     params: bool,
 
-    /// Print host and GPU information. With no model and no sweep it prints and exits. Otherwise it
-    /// prints as a provenance header before the benchmark or sweep.
+    /// Print host and GPU information. With no model and no sweep, print it and exit. Otherwise print it as a
+    /// provenance header before the benchmark or sweep.
     #[arg(long)]
     info: bool,
 
@@ -265,7 +307,7 @@ struct Args {
     #[arg(long)]
     json: bool,
 
-    /// Worker threads for CPU models. 0 leaves rayon's own choice, which is one per logical cpu.
+    /// Worker threads for CPU models. Set to 0 to use rayon's default of one thread per logical CPU.
     #[arg(long, default_value_t = 0, value_name = "N")]
     threads: usize,
 
@@ -275,38 +317,41 @@ struct Args {
 
 /// Work that one command line requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
+enum Mode<'a> {
+    /// `--print-lowered`. Prints the graph of one model file, with no model set and no device.
+    PrintLowered,
     List,
     /// `--merge`. Joins a sweep's shard directories, with no model and no device.
     Merge,
-    /// `--info` with no model and no sweep. Prints the runtime and exits.
+    /// `--info` with no model and no sweep. Prints the runtime and exits. A single `--model-file` names a model.
     InfoOnly,
     Params,
     Explore,
-    ExportStats,
-    ExportFinal,
-    Benchmark,
+    /// One configuration of a model, run outside a sweep.
+    Single(SingleRun<'a>),
 }
 
-impl Mode {
+impl<'a> Mode<'a> {
     /// Returns the mode of `args`, using the first variant that applies in declaration order.
-    fn of(args: &Args) -> Self {
-        if args.list {
+    fn of(args: &'a Args) -> Self {
+        if args.print_lowered {
+            Self::PrintLowered
+        } else if args.list {
             Self::List
         } else if !args.explore.merge.is_empty() {
             Self::Merge
-        } else if args.info && args.model.is_none() && !args.explore.is_sweep() {
+        } else if args.info && args.model.is_none() && args.model_file.len() != 1 && !args.explore.is_sweep() {
             Self::InfoOnly
         } else if args.params {
             Self::Params
         } else if args.explore.is_sweep() {
             Self::Explore
-        } else if args.export_stats.is_some() {
-            Self::ExportStats
-        } else if args.export.is_some() {
-            Self::ExportFinal
+        } else if let Some(path) = &args.export_stats {
+            Self::Single(SingleRun::ExportStats(path))
+        } else if let Some(path) = &args.export {
+            Self::Single(SingleRun::ExportFinal(path))
         } else {
-            Self::Benchmark
+            Self::Single(SingleRun::Benchmark)
         }
     }
 }
@@ -327,42 +372,36 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
             .build_global()
-            .context("cannot size the worker pool")?;
+            .context("cannot set the number of worker threads")?;
     }
     if mode == Mode::Merge {
         return explore::merge_shards(args);
     }
+    if let (Mode::PrintLowered, [path]) = (mode, args.model_file.as_slice()) {
+        return print_lowered(path);
+    }
+
+    match mode {
+        Mode::Single(SingleRun::ExportStats(path)) => check_output_path("--export-stats", path, &args.model_file)?,
+        Mode::Single(SingleRun::ExportFinal(path)) => check_output_path("--export", path, &args.model_file)?,
+        _ => {}
+    }
+
+    // The model files and the spec are read before the device is acquired, so the device is sized to every model the
+    // command line can name.
+    let (models, files) = with_model_files(models, &args.model_file, !args.json)?;
+    let models = &*models;
+    let spec = args.explore.spec.as_deref().map(load_spec).transpose()?;
 
     // A device lets the GPU models be listed and run. Without a device, as on CI with no GPU, only the CPU models are
     // listed and run. A set without GPU models requests a device only under `--info`, to report its adapter.
     let gpu_models = has_gpu_models(models);
     let gpu_ctx = if gpu_models || args.info {
-        match acquire_headless(models.gpu_needs()) {
-            Ok(ctx) => Some(ctx),
-            Err(err) => {
-                if gpu_models {
-                    eprintln!("note: no GPU available ({err}); GPU models disabled");
-                }
-                None
-            }
-        }
+        headless_device(models, gpu_models)
     } else {
         None
     };
     let runtime = gpu_ctx.as_ref().and_then(GpuContext::runtime_info);
-
-    // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
-    // returned when it is the only adapter present.
-    if let Some(runtime) = runtime
-        && gpu_models
-        && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
-    {
-        eprintln!(
-            "!!! warning: adapter '{}' is a software rasteriser, not a GPU; \
-                 GPU-model results from this machine are not GPU results !!!",
-            runtime.adapter.name
-        );
-    }
 
     if args.info {
         if args.json {
@@ -378,33 +417,96 @@ fn run_args(models: &ModelSet, host: &BuildInfo, args: &Args, arguments: &[OsStr
             return Ok(0);
         }
         Mode::InfoOnly => return Ok(0),
-        _ => {}
+        Mode::PrintLowered | Mode::Merge | Mode::Params | Mode::Explore | Mode::Single(_) => {}
     }
 
-    let spec = args.explore.spec.as_deref().map(load_spec).transpose()?;
-    let model_id = match (args.model.as_deref(), spec.as_ref()) {
-        (Some(id), Some(loaded)) if id != loaded.spec.model => {
-            bail!("model '{id}' does not match the spec's model '{}'", loaded.spec.model)
-        }
-        (Some(id), _) => id,
-        (None, Some(loaded)) => &loaded.spec.model,
-        (None, None) => bail!("a model id is required (try --list)"),
-    };
+    let model_id = model_id(args, spec.as_ref(), &files)?;
     let entry = models.lookup(model_id, gpu_ctx.as_ref()).map_err(|error| match error {
         ModelLookupError::NotInSet { .. } => anyhow!("{error} (try --list)"),
         _ => anyhow!(error),
     })?;
 
+    // Files are in the order of their paths, and the file that runs is the one declaring the entry's id.
+    let model_file = args
+        .model_file
+        .iter()
+        .zip(&files)
+        .find(|(_, file)| file.id() == entry.id())
+        .map(|(path, file)| (path.as_path(), file));
+    let file = model_file.map(|(_, file)| file);
+    // A file whose model does not run could be the one the user meant to run, under a familiar id such as `sir`.
+    if !args.json {
+        let paths = args.model_file.iter().zip(&files);
+        for (path, unused_file) in paths.filter(|(_, loaded)| loaded.id() != entry.id()) {
+            eprintln!(
+                "note: model file '{}' is unused. This command runs '{}', and the file holds '{}'",
+                path.display(),
+                entry.id(),
+                unused_file.id()
+            );
+        }
+    }
     match mode {
         Mode::Params if args.json => json_report::emit(&json_report::params(entry, gpu_ctx.as_ref())),
         Mode::Params => print!("{}", params_text(entry)),
         Mode::Explore => {
             let provenance = provenance(host, arguments);
-            return explore::run(args, entry, gpu_ctx.as_ref(), spec, provenance);
+            return explore::run(args, entry, model_file, gpu_ctx.as_ref(), spec, provenance);
         }
-        _ => return run_single(entry, args, mode, gpu_ctx.as_ref(), runtime).map(|()| 0),
+        Mode::Single(run) => return run_single(entry, file, args, run, gpu_ctx.as_ref(), runtime).map(|()| 0),
+        // Each of these returned above.
+        Mode::PrintLowered | Mode::List | Mode::Merge | Mode::InfoOnly => {}
     }
     Ok(0)
+}
+
+/// Returns a headless device sized to the needs of `models`, or `None` when this machine has no device.
+///
+/// `gpu_models` says whether `models` holds a GPU model. Only then does a missing device print a note on stderr, and
+/// a software rasteriser a warning.
+fn headless_device(models: &ModelSet, gpu_models: bool) -> Option<GpuContext> {
+    let ctx = match acquire_headless(models.gpu_needs()) {
+        Ok(ctx) => ctx,
+        Err(err) => {
+            if gpu_models {
+                eprintln!("note: no GPU available ({err}), so GPU models are disabled");
+            }
+            return None;
+        }
+    };
+    // `force_fallback_adapter: false` does not stop a software rasteriser (lavapipe, WARP) being
+    // returned when it is the only adapter present.
+    if let Some(runtime) = ctx.runtime_info()
+        && gpu_models
+        && classify_adapter(&runtime.adapter) == GpuVerdict::Absent
+    {
+        eprintln!(
+            "!!! warning: adapter '{}' is a software rasteriser, not a GPU. GPU-model results from this machine are \
+                 not GPU results !!!",
+            runtime.adapter.name
+        );
+    }
+    Some(ctx)
+}
+
+/// Returns the id of the model that the command line names: the model id, else the spec's model, else the id of the
+/// model file when `files` holds one.
+///
+/// # Errors
+///
+/// Returns an error when the model id differs from the spec's model, and when nothing names a model.
+fn model_id<'a>(args: &'a Args, spec: Option<&'a LoadedSpec>, files: &'a [ModelFile]) -> Result<&'a str> {
+    Ok(match (args.model.as_deref(), spec, files) {
+        (Some(id), Some(loaded), _) if id != loaded.spec.model => {
+            bail!("model '{id}' does not match the spec's model '{}'", loaded.spec.model)
+        }
+        (Some(id), _, _) => id,
+        (None, Some(loaded), _) => &loaded.spec.model,
+        (None, None, [file]) => file.id(),
+        (None, None, []) => bail!("a model id is required (try --list)"),
+        // `parse_args` refuses this command line first.
+        (None, None, _) => bail!("a model id is required with more than one --model-file"),
+    })
 }
 
 /// Returns whether `models` holds a GPU model.
@@ -430,57 +532,11 @@ fn load_spec(path: &Path) -> Result<LoadedSpec> {
     })
 }
 
-/// Runs one configuration of `entry` for `--export-stats`, `--export` or a benchmark, as `mode` says.
-fn run_single(
-    entry: &ModelEntry,
-    args: &Args,
-    mode: Mode,
-    gpu_ctx: Option<&GpuContext>,
-    runtime: Option<&RuntimeInfo>,
-) -> Result<()> {
-    let overrides = parse_overrides(&args.set)?;
-    let params = resolve_params(entry.param_descriptors(), &overrides).map_err(set_error)?;
-    let schedule = Schedule::parse(&args.act, entry.id(), entry.action_descriptors())?;
-    if let Some(last) = schedule.last_tick()
-        && last > args.warmup + args.steps
-    {
-        eprintln!(
-            "note: --act at tick {last} is past the {} this run reaches, so it never fires",
-            args.warmup + args.steps
-        );
-    }
-
-    // The limits are checked ahead of the factory. An oversized run is then rejected with an error that lists its
-    // shortfalls, instead of failing at whichever binding the device happened to reject first.
-    if let Some(ctx) = gpu_ctx {
-        let shortfalls = entry.shortfalls(&params, &ctx.device.limits());
-        if !shortfalls.is_empty() {
-            bail!("'{}' does not fit this device: {}", entry.id(), shortfalls.join("; "));
-        }
-    }
-    let setup = RunSetup::from_parts(entry, &params, args.seed, schedule)?;
-
-    match (mode, &args.export_stats, &args.export) {
-        (Mode::ExportStats, Some(path), _) => export_stats(&setup, args, path, gpu_ctx),
-        (Mode::ExportFinal, _, Some(path)) => export_final(&setup, args, path),
-        _ => {
-            let adapter = runtime.map(|r| r.adapter.name.as_str());
-            benchmark(setup, args, gpu_ctx, adapter)
-        }
-    }
-}
-
 /// Prints the host and adapter for `--info` to stdout, ahead of any results.
 ///
 /// `gpu_models` says whether the set holds a GPU model. A missing adapter disables every GPU model.
 fn print_runtime_info(runtime: Option<&RuntimeInfo>, gpu_models: bool) {
-    let collected;
-    let host = if let Some(runtime) = runtime {
-        &runtime.host
-    } else {
-        collected = HostInfo::collect();
-        &collected
-    };
+    let host = runtime.map_or_else(HostInfo::collect, |runtime| runtime.host.clone());
 
     let fmt_opt = |value: Option<usize>| value.map_or_else(|| "unknown".to_owned(), |n| n.to_string());
 
@@ -531,293 +587,37 @@ fn print_models<'a>(entries: impl Iterator<Item = &'a ModelEntry>) {
 /// Returns the text `--params` prints, one line per parameter with the id `--set` accepts, its kind, default and
 /// bounds.
 ///
-/// Each line holds `key=value` fields. `scripts/bench_matrix.py` parses them to find a model's axes and defaults.
+/// Each line holds `key=value` fields, and a hidden parameter the bare word `hidden` after them.
+/// `scripts/bench_matrix.py` parses the fields to find a model's axes and defaults.
 fn params_text(entry: &ModelEntry) -> String {
     let mut text = format!("parameters for {} ({}):\n", entry.id(), entry.name());
     for (index, desc) in entry.param_descriptors().iter().enumerate() {
-        let (id, label) = (desc.id, desc.label);
+        let (id, label) = (desc.id(), desc.label());
         let apply = if desc.is_live() { "live" } else { "reload" };
-        let kind = match &desc.kind {
+        let kind = match desc.kind() {
             ParamKind::F32 { min, max, default, .. } => format!("kind=f32 default={default} min={min} max={max}"),
             ParamKind::U32 { min, max, default } => format!("kind=u32 default={default} min={min} max={max}"),
             ParamKind::Bool { default } => format!("kind=bool default={default}"),
             ParamKind::Choice { options, default } => {
-                format!("kind=choice default={default} options={}", options.join("|"))
+                format!(
+                    "kind=choice default={default} options={}",
+                    options.iter().collect::<Vec<_>>().join("|")
+                )
             }
         };
         // Values are always fractions, whatever the panel shows, so `format` only describes how to read a value.
-        let format = match desc.format {
+        let format = match desc.format() {
             ParamFormat::Plain => "",
             ParamFormat::Percent => " format=percent",
         };
+        // A hidden parameter is kept off the Parameters panel, and `--set` and a sweep reach it as any other.
+        let hidden = if desc.is_hidden() { " hidden" } else { "" };
+        let integer = if desc.is_integer() { " integer" } else { "" };
         text.push_str(&format!(
-            "  index={index} id={id} {kind} apply={apply}{format} label=\"{label}\"\n"
+            "  index={index} id={id} {kind} apply={apply}{format}{hidden}{integer} label=\"{label}\"\n"
         ));
     }
     text
-}
-
-/// Runs the benchmark for `setup`, printing each repetition as it finishes and the result at the end.
-///
-/// With `--json` the lines follow `benchmarks/protocol.md`: the `info` line before any repetition, a `rep` line as
-/// each one finishes, then the `summary`. The human report goes to stdout and the progress log to stderr.
-fn benchmark(setup: RunSetup, args: &Args, gpu_ctx: Option<&GpuContext>, adapter: Option<&str>) -> Result<()> {
-    let entry = setup.entry().clone();
-    let mut settings = BenchmarkSettings::new(setup, args.steps);
-    settings.warmup = args.warmup;
-    settings.global_warmup = args.global_warmup;
-    settings.repetitions = args.reps;
-    let mut backend = Backend::Cpu;
-    // Whether stderr ends in a repetition's number with no time after it yet.
-    let mut number_open = false;
-    let finished = run_benchmark(&settings, gpu_ctx, &mut |event| {
-        number_open = matches!(
-            event,
-            BenchmarkEvent::GlobalWarmupStarted | BenchmarkEvent::RepetitionStarted(_)
-        );
-        match event {
-            BenchmarkEvent::Started {
-                backend: started,
-                parallel_jobs,
-            } => {
-                backend = started;
-                let (variant, adapter, tag) = match started {
-                    Backend::Gpu => ("gpu", adapter, " [GPU]"),
-                    Backend::Cpu => ("cpu", None, ""),
-                };
-                if args.json {
-                    json_report::info(
-                        entry.id(),
-                        variant,
-                        rayon::current_num_threads(),
-                        parallel_jobs,
-                        adapter,
-                    );
-                }
-                eprintln!(
-                    "benchmarking {} ({}){tag}: {} steps x {} reps, {} warmup, {} global-warmup",
-                    entry.name(),
-                    entry.id(),
-                    args.steps,
-                    args.reps,
-                    args.warmup,
-                    args.global_warmup
-                );
-                if cfg!(debug_assertions) {
-                    eprintln!("!!! warning: debug build; use --release for benchmarking !!!");
-                }
-            }
-            // The number shows while the state builds and steps, and the time follows on the same line.
-            BenchmarkEvent::GlobalWarmupStarted => eprint!("  #{: >4}: ", 0),
-            BenchmarkEvent::GlobalWarmupFinished(elapsed) => {
-                eprintln!("{elapsed:>8.3?}  ({} global warmup steps)", args.global_warmup);
-            }
-            BenchmarkEvent::RepetitionStarted(index) => eprint!("  #{: >4}: ", index + 1),
-            BenchmarkEvent::RepetitionFinished(repetition) => {
-                eprintln!("{:>8.3?}", repetition.elapsed);
-                let (population, after) = (repetition.population_after_warmup, repetition.population_after_steps);
-                // A population at steady state moves by about its square root. A move that small is not worth a note.
-                let noise = (3.0 * (population as f64).sqrt()) as u64;
-                if backend == Backend::Cpu && after.abs_diff(population) > (population / 10).max(noise) {
-                    eprintln!(
-                        "  note: the population went from {population} to {after} during the timed steps. \
-                     Updates per second are computed from the population after warmup. \
-                     A longer --warmup can reach a steady population first."
-                    );
-                }
-                if args.json {
-                    json_report::rep(
-                        repetition.index,
-                        repetition.seed,
-                        args.steps,
-                        args.warmup,
-                        repetition.elapsed,
-                        population,
-                        repetition.heap_bytes,
-                    );
-                }
-            }
-            // Other events print nothing.
-            _ => {}
-        }
-    });
-    // The line of a repetition that failed after its number was printed ends here. Otherwise `Error:` follows the
-    // number on the same line.
-    if finished.is_err() && number_open {
-        eprintln!();
-    }
-    let report = finished?;
-
-    let samples: Vec<Duration> = report.repetitions.iter().map(|repetition| repetition.elapsed).collect();
-    // For grid models the population is the total cell count, and for agent models the agent count, sampled after
-    // the last repetition's warm-up.
-    let population = report
-        .repetitions
-        .last()
-        .map_or(0, |repetition| repetition.population_after_warmup);
-    let setup = &settings.setup;
-    if args.json {
-        json_report::summary(
-            &samples,
-            args.steps,
-            population,
-            report.grid_size,
-            entry.param_descriptors(),
-            setup.values(),
-            setup.schedule(),
-        );
-    } else {
-        print_report(&samples, args.steps, population, report.grid_size)?;
-    }
-    Ok(())
-}
-
-/// Returns the median of an already sorted slice, averaging the middle two on an even count.
-///
-/// The driver's `statistics.median` computes the same value.
-fn median_of(sorted: &[Duration]) -> Duration {
-    match sorted.len() {
-        0 => Duration::ZERO,
-        n if n % 2 == 1 => sorted[n / 2],
-        n => (sorted[n / 2 - 1] + sorted[n / 2]) / 2,
-    }
-}
-
-/// Prints the benchmark result computed from the repetition timings.
-///
-/// `samples` holds one wall-clock time per repetition, each covering `steps_per_rep` steps, and is never empty.
-/// `population` is the population sampled after warm-up (see [`benchmark`]), and `grid_dims` is the width and height of
-/// a grid model.
-fn print_report(
-    samples: &[Duration],
-    steps_per_rep: u64,
-    population: u64,
-    grid_dims: Option<(u32, u32)>,
-) -> Result<()> {
-    println!("benchmark result:");
-    // `samples` is non-empty (`--reps` >= 1), so the defaults are never actually used.
-    let min = samples.iter().min().copied().unwrap_or_default();
-    let max = samples.iter().max().copied().unwrap_or_default();
-    let mean = samples.iter().sum::<Duration>() / (samples.len() as u32);
-    let median = {
-        let mut sorted = samples.to_vec();
-        sorted.sort_unstable();
-        median_of(&sorted)
-    };
-    let std_dev = {
-        let mean_secs = mean.as_secs_f64();
-        let variance = samples
-            .iter()
-            .map(|s| {
-                let diff = s.as_secs_f64() - mean_secs;
-                diff * diff
-            })
-            .sum::<f64>()
-            / (samples.len() as f64);
-        Duration::from_secs_f64(variance.sqrt())
-    };
-
-    let mut f = Formatter::new()
-        .scales(Scales::none())
-        .separator(' ')?
-        .precision(numfmt::Precision::Decimals(3));
-
-    println!("  min:     {min:>10.3?}");
-    println!("  median:  {median:>10.3?}");
-    println!("  max:     {max:>10.3?}");
-    println!("  mean:    {mean:>10.3?}");
-    println!("  std dev: {std_dev:>10.3?}");
-    let mean_steps_per_sec = f.fmt2(steps_per_rep as f64 / mean.as_secs_f64());
-    println!("  > mean steps/sec:   {mean_steps_per_sec:>20}");
-    let mean_updates_per_sec = f.fmt2((steps_per_rep as f64 * population as f64) / mean.as_secs_f64());
-    println!("  > mean updates/sec: {mean_updates_per_sec:>20}");
-    if let Some((w, h)) = grid_dims {
-        f = f.precision(numfmt::Precision::Decimals(0));
-        let grid_size = f.fmt2(w as u64 * h as u64);
-        println!("  > grid size:        {grid_size:>16}");
-    }
-    Ok(())
-}
-
-/// Runs `setup` once for `--warmup` plus `--steps` ticks and writes the final state to `path`.
-///
-/// Each action fires once, including actions due on the tick that the run ends on.
-fn export_final(setup: &RunSetup, args: &Args, path: &Path) -> Result<()> {
-    let entry = setup.entry();
-    if entry.gpu_needs().is_some() {
-        bail!("model '{}' is GPU-backed; this path is CPU-only", entry.id());
-    }
-    let topology = entry.topology_hint();
-    if !topology.grid && !topology.agents {
-        bail!("model exposes no CPU-side view to export");
-    }
-    let mut simulation = setup.build(None)?;
-    simulation.run_to(args.warmup + args.steps)?;
-    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
-    let mut out = BufWriter::new(file);
-    simulation.write_state(&mut out)?;
-    out.flush()?;
-    eprintln!(
-        "exported final state (tick {}) to {}",
-        simulation.tick(),
-        path.display()
-    );
-    Ok(())
-}
-
-/// Runs `setup` once and writes the per-tick stat series to `path` as CSV.
-///
-/// Unlike [`benchmark`], this path is untimed. Each sample is significant work, a full reduction over the grid for a
-/// `GridModel` and a blocking readback for a GPU model, so a run's time does not measure the cost of its steps.
-/// `--reps` is ignored. A time series is one trajectory, and N repetitions would put N trajectories in one file.
-fn export_stats(setup: &RunSetup, args: &Args, path: &Path, gpu_ctx: Option<&GpuContext>) -> Result<()> {
-    if args.stats_every == 0 {
-        bail!("--stats-every must be at least 1");
-    }
-    if args.reps > 1 {
-        eprintln!("note: --reps is ignored by --export-stats");
-    }
-
-    let total = args.warmup + args.steps;
-    let file = File::create(path).with_context(|| format!("cannot create '{}'", path.display()))?;
-    let writer = StatsWriter::new(BufWriter::new(file));
-
-    let entry = setup.entry();
-    eprintln!(
-        "exporting stats for {} ({}): {} steps, sampling every {}",
-        entry.name(),
-        entry.id(),
-        total,
-        args.stats_every
-    );
-
-    let mut simulation = setup.build(gpu_ctx)?;
-    let rows = write_series(&mut simulation, total, args.stats_every, writer)?;
-    eprintln!("wrote {rows} rows to {}", path.display());
-    Ok(())
-}
-
-/// Steps `simulation` to `total` and writes a sample at its current tick, every `every` ticks and at `total`, then
-/// returns the number of rows written.
-///
-/// The final tick is always written, even off a sampling boundary. The end state of a run is the one value a
-/// reader is most likely to want.
-fn write_series<W: std::io::Write + Send>(
-    simulation: &mut Simulation,
-    total: u64,
-    every: u64,
-    mut writer: StatsWriter<W>,
-) -> Result<u64> {
-    let flow = simulation.run_sampled(total, every, |sample| {
-        match writer.push(sample.tick(), sample.entries()) {
-            Ok(()) => ControlFlow::Continue(()),
-            Err(error) => ControlFlow::Break(error),
-        }
-    })?;
-    if let ControlFlow::Break(error) = flow {
-        return Err(error.into());
-    }
-    Ok(writer.finish()?)
 }
 
 /// Returns the provenance a test's sweep records, with no command line.
@@ -826,23 +626,12 @@ fn test_provenance() -> Provenance {
     Provenance::new(henad_core::build_info!(), Vec::new())
 }
 
-/// Converts an error from resolving `--set` into a command-line error with `--set ID` as its context.
-fn set_error(error: ValueError) -> anyhow::Error {
-    match error {
-        ValueError::Param { id, source } => anyhow::Error::new(*source).context(format!("--set {id}")),
-        other => other.into(),
-    }
-}
-
-/// Checks that `--set` has the form `ID=VALUE`, and returns it unchanged.
+/// Reads `--set ID=VALUE` into an `(id, value)` pair, split at its first `=`.
 ///
 /// The model checks the id and the value once it is known. The parser then rejects a malformed flag.
-fn check_set(raw: &str) -> Result<String, String> {
-    if raw.contains('=') {
-        Ok(raw.to_owned())
-    } else {
-        Err("expected ID=VALUE".to_owned())
-    }
+fn parse_set(raw: &str) -> Result<(String, String), String> {
+    let (id, value) = raw.split_once('=').ok_or("expected ID=VALUE")?;
+    Ok((id.to_owned(), value.to_owned()))
 }
 
 /// Checks that `--act` has the form `ID@TICK` with a `u64` tick, and returns it unchanged.
@@ -863,10 +652,10 @@ mod tests {
 
     use super::{
         Args, CliOptions, Mode, SOME_RUNS_NOT_OK, has_gpu_models, params_text, parse_args, run, test_provenance,
-        write_series,
     };
     use crate::explore::{self, ExploreArgs};
-    use crate::json_report;
+    use crate::single::{SingleRun, write_series};
+
     use clap::Parser as _;
     use henad_compute::entry::{ModelEntry, ModelSet};
     use henad_compute::gpu::GpuContext;
@@ -879,7 +668,6 @@ mod tests {
     use henad_core::params::ParamValue;
     use henad_explore::testing::{TestDeviceRequest, headless_test_device};
     use henad_models::example_models;
-    use serde_json::json;
 
     /// Directory under the system's temporary directory, unique to one test, removed with its contents on drop.
     struct ScratchDir {
@@ -962,11 +750,10 @@ mod tests {
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs");
+        let status = explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
-        let overrides = parse_overrides(&args.set).expect("valid");
-        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
+        let params = resolve_params(entry.param_descriptors(), &args.set).expect("in range");
         let mut simulation = cpu_simulation(&entry, &params, run_seed(7, 0), &[]);
         let mut exported_bytes = Vec::new();
         write_series(&mut simulation, 31, 3, StatsWriter::new(&mut exported_bytes)).expect("writes");
@@ -1005,11 +792,10 @@ mod tests {
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs");
+        let status = explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
-        let overrides = parse_overrides(&args.set).expect("valid");
-        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
+        let params = resolve_params(entry.param_descriptors(), &args.set).expect("in range");
         let mut simulation = cpu_simulation(&entry, &params, run_seed(7, 0), &args.act);
         let mut exported_bytes = Vec::new();
         write_series(&mut simulation, 20, 2, StatsWriter::new(&mut exported_bytes)).expect("writes");
@@ -1087,7 +873,7 @@ mod tests {
             ];
             line.extend(shard.map(|shard| ["--shard", shard]).into_iter().flatten());
             let args = Args::parse_from(line);
-            explore::run(&args, &entry, None, None, test_provenance()).expect("the sweep runs")
+            explore::run(&args, &entry, None, None, None, test_provenance()).expect("the sweep runs")
         };
         let whole = dir.path.join("whole");
         assert_eq!(sweep(&whole, None), 0);
@@ -1211,43 +997,20 @@ parameters for virus_network (Virus on a Network):
         assert_eq!(params_text(&cpu_entry("virus_network")), expected);
     }
 
-    #[test]
-    fn params_json_lists_every_descriptor() {
-        let models = example_models();
-        for entry in models.runnable(None) {
-            let line = json_report::params(entry, None);
-            assert_eq!(line["kind"], json!("params"), "{}", entry.id());
-            assert_eq!(line["model"], json!(entry.id()));
-            let params = line["params"].as_array().expect("params is a list");
-            let ids: Vec<&str> = params.iter().filter_map(|param| param["id"].as_str()).collect();
-            let declared: Vec<&str> = entry.param_descriptors().iter().map(|d| d.id).collect();
-            assert_eq!(ids, declared, "{}", entry.id());
-            for param in params {
-                assert!(param["kind"].is_string() && !param["default"].is_null(), "{param}");
-            }
-            let columns = line["stat_columns"]
-                .as_array()
-                .expect("the model builds at its defaults");
-            assert!(columns.len() >= entry.stat_descriptors().len(), "{}", entry.id());
-            let actions = line["actions"].as_array().expect("actions is a list");
-            assert_eq!(actions.len(), entry.action_descriptors().len(), "{}", entry.id());
-        }
-    }
-
     /// Returns the mode a command line had before sweeps existed.
-    fn legacy_mode(args: &Args) -> Mode {
+    fn legacy_mode(args: &Args) -> Mode<'_> {
         if args.list {
             Mode::List
         } else if args.model.is_none() {
             Mode::InfoOnly
         } else if args.params {
             Mode::Params
-        } else if args.export_stats.is_some() {
-            Mode::ExportStats
-        } else if args.export.is_some() {
-            Mode::ExportFinal
+        } else if let Some(path) = &args.export_stats {
+            Mode::Single(SingleRun::ExportStats(path))
+        } else if let Some(path) = &args.export {
+            Mode::Single(SingleRun::ExportFinal(path))
         } else {
-            Mode::Benchmark
+            Mode::Single(SingleRun::Benchmark)
         }
     }
 
@@ -1314,7 +1077,10 @@ parameters for virus_network (Virus on a Network):
         for line in &lines {
             let argv = std::iter::once("henad-cli").chain(line.iter().map(String::as_str));
             let args = Args::try_parse_from(argv).unwrap_or_else(|error| panic!("{line:?} parses: {error}"));
-            if args.explore == ExploreArgs::default() {
+            if args.print_lowered {
+                // No line written before `--print-lowered` holds the flag.
+                assert_eq!(Mode::of(&args), Mode::PrintLowered, "{line:?}");
+            } else if args.explore == ExploreArgs::default() {
                 assert_eq!(Mode::of(&args), legacy_mode(&args), "{line:?}");
             } else {
                 let mode = if args.explore.merge.is_empty() {
@@ -1332,44 +1098,13 @@ parameters for virus_network (Virus on a Network):
         );
     }
 
-    /// Each exported sample is prepared as a publish would be, so a stat computed in `prepare_view` is current.
-    /// Team Assembly's component stats are computed there.
-    ///
-    /// With `p` at zero every tick adds a separate clique of four newcomers, and nothing retires yet.
-    /// Rows are written at tick 0, at tick 2 on the sampling boundary, and at the final tick 3 off it.
-    #[test]
-    fn exported_stats_are_prepared_like_a_publish() {
-        let entry = example_models()
-            .get("team_assembly")
-            .cloned()
-            .expect("team_assembly is registered");
-        let overrides =
-            parse_overrides(&["num_agents=4".to_owned(), "team_size=4".to_owned(), "p=0".to_owned()]).expect("valid");
-        let params = resolve_params(entry.param_descriptors(), &overrides).expect("in range");
-        let mut simulation = cpu_simulation(&entry, &params, 1, &[]);
-
-        let mut out = Vec::new();
-        let rows = write_series(&mut simulation, 3, 2, StatsWriter::new(&mut out)).expect("writes");
-        assert_eq!(rows, 3);
-        let text = String::from_utf8(out).expect("utf-8");
-        let mut lines = text.lines();
-        let header: Vec<&str> = lines.next().expect("a header").split(',').collect();
-        let at = |name: &str| header.iter().position(|h| *h == name).expect("the column is exported");
-        let (tick, share, size) = (at("tick"), at("Giant Component Share"), at("Mean Component Size"));
-        for (line, cliques) in lines.zip([1.0, 3.0, 4.0]) {
-            let row: Vec<f64> = line.split(',').map(|v| v.parse().expect("a number")).collect();
-            assert!(
-                (row[share] - 1.0 / cliques).abs() < 1e-9,
-                "tick {}: giant share {}",
-                row[tick],
-                row[share]
-            );
-            assert_eq!(row[size], 4.0, "tick {}", row[tick]);
-        }
-    }
-
     /// Returns `entry` built from `params` with `seed` and the `--act` entries `actions`.
-    fn cpu_simulation(entry: &ModelEntry, params: &[ParamValue], seed: u64, actions: &[String]) -> Simulation {
+    pub(crate) fn cpu_simulation(
+        entry: &ModelEntry,
+        params: &[ParamValue],
+        seed: u64,
+        actions: &[String],
+    ) -> Simulation {
         let schedule = Schedule::parse(actions, entry.id(), entry.action_descriptors()).expect("declared actions");
         RunSetup::from_parts(entry, params, Some(seed), schedule)
             .expect("the values fit the model")
@@ -1378,7 +1113,7 @@ parameters for virus_network (Virus on a Network):
     }
 
     /// A 64 by 64 GPU grid model and the device it runs on.
-    struct SmallGpuGrid {
+    pub(crate) struct SmallGpuGrid {
         ctx: GpuContext,
         entry: ModelEntry,
         params: Vec<ParamValue>,
@@ -1390,7 +1125,7 @@ parameters for virus_network (Virus on a Network):
         /// # Panics
         ///
         /// Panics when `HENAD_REQUIRE_GPU` is set and no device is available.
-        fn new(id: &str) -> Option<Self> {
+        pub(crate) fn new(id: &str) -> Option<Self> {
             let ctx = headless_test_device(&TestDeviceRequest::raised(example_models().gpu_needs()))?;
             let entry = example_models().get(id).cloned().expect("the model is registered");
             let overrides = parse_overrides(&["grid_width=64".to_owned(), "grid_height=64".to_owned()]).expect("valid");
@@ -1398,13 +1133,13 @@ parameters for virus_network (Virus on a Network):
             Some(Self { ctx, entry, params })
         }
 
-        fn schedule(&self, raw: &[&str]) -> Schedule {
+        pub(crate) fn schedule(&self, raw: &[&str]) -> Schedule {
             let raw: Vec<String> = raw.iter().map(|&s| s.to_owned()).collect();
             Schedule::parse(&raw, self.entry.id(), self.entry.action_descriptors()).expect("declared actions")
         }
 
         /// Returns the model built with `seed` and `schedule`.
-        fn simulation(&self, seed: u64, schedule: &Schedule) -> Simulation {
+        pub(crate) fn simulation(&self, seed: u64, schedule: &Schedule) -> Simulation {
             RunSetup::from_parts(&self.entry, &self.params, Some(seed), schedule.clone())
                 .expect("the values fit the model")
                 .build(Some(&self.ctx))
@@ -1413,28 +1148,11 @@ parameters for virus_network (Virus on a Network):
     }
 
     /// Returns the stats export's rows for `total` ticks of `simulation`, without the header.
-    fn rows(mut simulation: Simulation, every: u64, total: u64) -> Vec<String> {
+    pub(crate) fn rows(mut simulation: Simulation, every: u64, total: u64) -> Vec<String> {
         let mut out = Vec::new();
         write_series(&mut simulation, total, every, StatsWriter::new(&mut out)).expect("writes");
         let text = String::from_utf8(out).expect("utf-8");
         text.lines().skip(1).map(str::to_owned).collect()
-    }
-
-    /// Checks that a GPU action on a sampling boundary fires once, whatever `--stats-every` is.
-    ///
-    /// `randomise` draws a fresh board on every press. At `--stats-every 1` tick 2 is a boundary, and a
-    /// second press there would change every later row. At `--stats-every 3` it is inside a run.
-    #[test]
-    fn a_gpu_action_fires_once_whatever_the_sampling_interval() {
-        let Some(life) = SmallGpuGrid::new("gpu_game_of_life") else {
-            return;
-        };
-        let schedule = life.schedule(&["randomise@2"]);
-        let every_tick = rows(life.simulation(1, &schedule), 1, 6);
-        let every_third = rows(life.simulation(1, &schedule), 3, 6);
-        assert_eq!(every_tick.len(), 7, "ticks 0 to 6");
-        let shared = [0, 3, 6].map(|tick| every_tick[tick].clone());
-        assert_eq!(every_third, shared, "rows at ticks 0, 3 and 6");
     }
 
     /// Checks that a GPU sweep of one run writes the series `--export-stats` writes for the run's seed.
@@ -1460,7 +1178,8 @@ parameters for virus_network (Virus on a Network):
             "--out",
             dir.arg(),
         ]);
-        let status = explore::run(&args, &sir.entry, Some(&sir.ctx), None, test_provenance()).expect("the sweep runs");
+        let status =
+            explore::run(&args, &sir.entry, None, Some(&sir.ctx), None, test_provenance()).expect("the sweep runs");
         assert_eq!(status, 0);
 
         let exported = rows(sir.simulation(run_seed(7, 0), &sir.schedule(&[])), 4, 13);

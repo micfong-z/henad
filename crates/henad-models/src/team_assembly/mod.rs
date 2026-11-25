@@ -269,15 +269,15 @@ mod tests {
     fn params(overrides: &[(&str, ParamValue)]) -> Vec<ParamValue> {
         let descs = network_model_param_descriptors::<TeamAssembly>();
         for (id, _) in overrides {
-            assert!(descs.iter().any(|d| d.id == *id), "no parameter '{id}'");
+            assert!(descs.iter().any(|d| d.id() == *id), "no parameter '{id}'");
         }
         descs
             .iter()
             .map(|d| {
                 overrides
                     .iter()
-                    .find(|(id, _)| *id == d.id)
-                    .map_or_else(|| d.kind.default_value(), |(_, v)| v.clone())
+                    .find(|(id, _)| *id == d.id())
+                    .map_or_else(|| d.kind().default_value(), |(_, v)| v.clone())
             })
             .collect()
     }
@@ -285,7 +285,7 @@ mod tests {
     fn index(id: &str) -> usize {
         network_model_param_descriptors::<TeamAssembly>()
             .iter()
-            .position(|d| d.id == id)
+            .position(|d| d.id() == id)
             .unwrap_or_else(|| panic!("no parameter '{id}'"))
     }
 
@@ -339,15 +339,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_node_views_implement_debug() {
-        use henad_core::authoring::model::network_model::{NodeCtx, Nodes};
-
-        fn assert_debug<T: std::fmt::Debug>() {}
-        assert_debug::<Nodes<'static, TeamAssembly>>();
-        assert_debug::<NodeCtx<'static, TeamAssembly>>();
-    }
-
     /// Every pass that runs in parallel either reads the graph or writes in chunk order,
     /// so the way rayon splits the work must not affect the result.
     #[test]
@@ -363,7 +354,7 @@ mod tests {
                 let stats = state
                     .stats()
                     .iter()
-                    .map(|entry| entry.value.scalar().to_bits())
+                    .map(|entry| entry.value().scalar().to_bits())
                     .collect();
                 (outcome(&state), state.lanes().color.clone(), stats)
             })

@@ -12,7 +12,7 @@ _See [Writing a GPU agent model](../guide/first-model/gpu-ants.md) for a tutoria
 You declare your buffers, your passes and your bindings as plain data, and the engine derives every wgpu object, the neighbour index, the ping-pong, the stat reduction and the whole runner interface from them.
 A model can also declare `ACTIONS`, a list of one-off `GpuAgentAction` passes with a button each, and [actions on the GPU](parameters.md#actions-on-the-gpu) covers them.
 
-Unlike a grid, a step here is a *list* of passes, because the two real models disagree about almost everything structural.
+Unlike a grid, a step here is a *list* of passes, because the two real models share almost no structure.
 Boids rebuilds a neighbour index and runs one pass over three ping-ponged lanes.
 Ants runs two passes over seven in-place buffers, together with a display pass and a persistent counter.
 
@@ -37,7 +37,7 @@ Flags are named rather than positional, and every flag defaults to off.
 
 `drawable`
 
-:   Also binds the buffer as a vertex stream, letting the view draw it without a copy.
+:   Also binds the buffer as a vertex stream, for the view to draw without a copy.
     `POS_BUFFER` and `COLOR_BUFFER` specify the two buffers that the renderer reads.
 
 `buffer_lens` returns each buffer's length in `u32`-sized elements, worked out from the resolved geometry.
@@ -91,7 +91,8 @@ Ants counts cumulative deliveries this way, whereas the reduction target is clea
 ## Bindings
 
 A pass never says which resource goes in which slot, because its `BindingDecl` slice is generated from the shader at build time.
-The engine resolves each name itself, which stops a slot index disagreeing with the shader that owns it.
+The engine resolves each name itself.
+Otherwise a slot index could disagree with the shader that owns it.
 
 Seven names are reserved for resources the engine owns.
 
@@ -108,7 +109,8 @@ The agent engine has no `dims` resource, and a pass that binds it fails to build
 A display pass carries its texture size in its own uniform block, from `geom.display` in the `PassCtx` that `pass_params_bytes` receives.
 
 Anything else refers to one of your own buffers by its label, optionally with an `_in` or `_out` suffix.
-The access mode decides which side a name resolves to, and the suffix does not, so a buffer that one pass reads and another writes needs no special naming.
+The access mode decides which side a name resolves to, whatever the suffix.
+A buffer that one pass reads and another writes therefore needs no special naming.
 
 ## The neighbour index
 
@@ -118,12 +120,13 @@ Ants leaves it off, since ants read the field instead of each other.
 
 With it set, `cell_start` and `sorted` become bindable, and the resolved `HashGrid` geometry arrives in `Geometry::index` for the uniform block to carry onward.
 The engine fixes the hash grid from `index_cell_size` at construction.
-A GPU model accepts no live edit, and every parameter applies when the model is rebuilt.
+A `GpuAgentModel` accepts no live edit, and every parameter applies when the model is rebuilt.
 
 ## Parameters and geometry
 
 As with a GPU grid model, nothing is prepended to the parameter list, and you spell the whole list out yourself.
-Both ports reuse their CPU counterpart's composed list verbatim, which lets both backends accept the same vector and be driven from the same UI state.
+Both ports reuse their CPU counterpart's composed list verbatim.
+Both backends then accept the same vector, and the same UI state can drive either one.
 
 `Geometry` is resolved once at construction and carries the population, the extent, the cell grid, the display size and the index geometry.
 Once per pass, identified by `PassId`, the engine then requests that pass's uniform block from `pass_params_bytes`.
@@ -132,7 +135,8 @@ You return the bytes of the `Params` struct generated from that pass's shader, a
 ## Seeding
 
 `seed_buffers` returns raw bytes per buffer, because agent lanes hold mixed types.
-An empty vector leaves that buffer cleared, which is exactly right for a scratch buffer that is read before its first write.
+An empty vector leaves that buffer cleared.
+Use one for a scratch buffer that is read before its first write.
 Only the current side is seeded, since a double-buffered lane has its other side fully written by the first step anyway.
 
 ## Contracts nothing checks
@@ -146,6 +150,7 @@ Only the current side is seeded, since a double-buffered lane has its other side
 The engine reads the `@workgroup_size` of each shader's `main` when it builds the model.
 It rejects a pass shader that declares anything but `@workgroup_size(256)`, and a display shader whose `@workgroup_size(N, N)` differs from its `DisplaySpec::workgroup`.
 It also rejects a buffer label that is reserved or ends in `_in` or `_out`, since a binding of that name resolves to something other than the buffer.
+It rejects a `POS_BUFFER` or `COLOR_BUFFER` that is not `drawable`, a double-buffered buffer whose next side no step pass writes, and a pass that binds one side of a buffer both read-only and writable.
 
 The testing kit's `StatCount` check, given a device, catches a `stats` that returns fewer values than `STATS.len()`.
 

@@ -24,16 +24,15 @@ fn gpu_warnings(ui: &mut egui::Ui, info: &RuntimeInfo) {
             MDI_INFORMATION,
             ui.visuals().text_color(),
             "GPU performance uncertain",
-            "No discrete GPU was directly detected. This may be a basic integrated GPU, a virtual GPU, or a SoC. \
-            If you believe you have a discrete GPU, check that your OS is configured to use it for Henad.",
+            "No discrete GPU was detected. The adapter might be a basic integrated GPU, a virtual GPU, or a system \
+            on a chip (SoC). If this machine has a discrete GPU, check that the OS is configured to use it for Henad.",
         ),
         GpuVerdict::Absent => banner(
             ui,
             MDI_ALERT,
             ui.visuals().error_fg_color,
             "No GPU detected",
-            "Rendering is going through a software rasteriser. GPU-backed models will likely be \
-             extremely slow.",
+            "Rendering uses a software rasteriser. GPU-backed models will be slow.",
         ),
     }
 }
@@ -47,63 +46,54 @@ pub fn system_ui(ui: &mut egui::Ui, app: &AppState) {
         ui.add_space(4.0);
         ui.strong("Host");
         kv_grid(ui, "system_host_grid").show(ui, |ui, rows| {
-            ui.label("Platform");
-            ui.label(format!("{} ({})", info.host.os, info.host.arch));
-            rows.end_row(ui);
+            rows.row(ui, "Platform", format!("{} ({})", info.host.os, info.host.arch));
 
-            ui.label("Logical CPUs");
-            ui.label(
+            rows.row(
+                ui,
+                "Logical CPUs",
                 info.host
                     .logical_cpus
                     .map_or_else(|| "Unknown".to_owned(), |n| n.to_string()),
             );
-            rows.end_row(ui);
 
-            ui.label("Worker threads");
-            ui.label(
+            rows.row(
+                ui,
+                "Worker threads",
                 info.host
                     .worker_threads
                     .map_or_else(|| "None (single-threaded)".to_owned(), |n| n.to_string()),
             );
-            rows.end_row(ui);
         });
 
         ui.add_space(8.0);
         ui.strong("Graphics");
         kv_grid(ui, "system_gpu_grid").show(ui, |ui, rows| {
-            ui.label("Adapter");
-            ui.label(info.adapter.name.as_str());
-            rows.end_row(ui);
+            rows.row(ui, "Adapter", info.adapter.name.as_str());
 
-            ui.label("Type");
-            ui.label(device_type_name(info.adapter.device_type));
-            rows.end_row(ui);
+            rows.row(ui, "Type", device_type_name(info.adapter.device_type));
 
-            ui.label("Backend");
-            ui.label(info.adapter.backend.to_string());
-            rows.end_row(ui);
+            rows.row(ui, "Backend", info.adapter.backend.to_string());
 
             if !info.adapter.driver_info.is_empty() {
-                ui.label("Driver");
-                ui.label(info.adapter.driver_info.as_str());
-                rows.end_row(ui);
+                rows.row(ui, "Driver", info.adapter.driver_info.as_str());
             }
 
-            ui.label("Timestamp query");
-            ui.label(if info.timestamp_query {
-                "Supported"
-            } else {
-                "Unavailable"
-            });
-            rows.end_row(ui);
+            rows.row(
+                ui,
+                "Timestamp query",
+                if info.timestamp_query {
+                    "Supported"
+                } else {
+                    "Unavailable"
+                },
+            );
 
             ui.label("Network edges");
             if info.vertex_storage {
                 ui.label("Supported");
             } else {
-                ui.label("Unavailable").on_hover_text(
-                    "Drawing edges is unsupported on this GPU. Network models should still run normally.",
-                );
+                ui.label("Unavailable")
+                    .on_hover_text("Drawing edges is unsupported on this GPU. Network models will still run normally.");
             }
             rows.end_row(ui);
         });

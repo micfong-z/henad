@@ -38,12 +38,15 @@ inspection = ["eframe/inspection"]
 henad-core = { workspace = true }
 henad-compute = { workspace = true }
 henad-models = { workspace = true, optional = true }
-henad-explore = { workspace = true }
+# Grid rules and the model files that hold them.
+henad-explore = { workspace = true, features = ["model-files"] }
+henad-graph = { workspace = true }
 egui = { workspace = true }
 egui_dock = { workspace = true }
 egui_extras = { workspace = true }
 eframe = { workspace = true }
 egui_plot = { workspace = true }
+egui-snarl = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 log = { workspace = true }
@@ -68,16 +71,24 @@ henad-build = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { workspace = true, optional = true }
 
+# The app menu, whose Quit item would end the app past the unsaved changes dialog.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 send_wrapper = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 web-sys = { workspace = true, features = [
+    "BeforeUnloadEvent",
     "Blob",
     "BlobPropertyBag",
     "Document",
     "Element",
+    "Event",
+    "EventTarget",
     "HtmlAnchorElement",
     "HtmlCanvasElement",
     "HtmlElement",

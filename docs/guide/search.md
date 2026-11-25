@@ -141,7 +141,7 @@ Henad holds a candidate as a **genome**, with one **gene** for each factor, a nu
 An `f32` range with no step maps `u` onto its values in a straight line.
 An integer range or a set of `m` values takes the value at position `floor(u * m)`.
 A change to an ordered factor adds `mutation_scale * (r1 + r2 - 1)` to `u`, for two numbers `r1` and `r2` drawn uniformly from 0 to 1.
-A step past either end folds back into the range.
+A step past either end reflects back into the range.
 `mutation_scale` is then the longest step, as a share of the range, and short steps come up more often than long ones.
 
 The search draws its random numbers from a **search seed**, derived from the root seed and printed in the plan.
@@ -161,7 +161,7 @@ A spec gives the same candidates on every machine.
 : `maximize` or `minimize`.
 
 `aggregate`
-: `median` or `mean`, the rule that folds a candidate's replicates into one value.
+: `median` or `mean`, the rule that combines a candidate's replicates into one value.
   The median is the default, and one unusual run moves it less than it moves the mean.
 
 A replicate that fails counts as the worst value there is: minus infinity when the goal is to maximize, and infinity when it is to minimize.
@@ -195,17 +195,19 @@ The search ends once the budget is spent, and has no other stop condition.
 
 A search runs in batches.
 It requests up to `batch_size` candidates from its method, runs the batch on the lanes or tracks that a sweep would use, several runs at once, and tells the method the results before it requests more.
-A larger batch keeps more cores busy.
-A smaller one lets the method react sooner.
+A larger batch keeps more cores busy, and the method reacts to the results later.
 
 The candidates of a search depend on its seed, its settings and the results it is told, and on nothing else.
 Every table comes out the same byte for byte at any `--concurrent`, apart from the timing columns, and a second run of the spec gives the same search.
 The exceptions are those of a sweep.
-`gpu_boids` does not replay.
+A model that does not replay exactly, such as `gpu_boids` or the boids sheet, can give other results and other candidates.
 A run that times out ends wherever the clock caught it, and every candidate the search picks after it can change.
 
 A search of a GPU model steps its runs on [GPU tracks](sweeps.md#gpu-tracks), as a sweep does, in the CLI and the desktop app.
 The web app searches CPU models only.
+Before the first batch, only the fixed values are checked against the GPU.
+A candidate that the GPU cannot hold, such as a population past the work one run may take, is never built.
+Its runs are recorded as `refused`, with the reason in the note, and a sheet's reason names its lines.
 
 ## Random search
 
@@ -252,8 +254,8 @@ Generation 0 is `population` random candidates.
 Each later generation starts by re-evaluating the best members of the previous generation.
 It keeps the `elite_count` best members of the previous generation unchanged, and fills the rest of the population with children.
 
-A child needs a parent.
-A **tournament** draws `tournament_size` members at random and takes the best of them as the parent.
+A **tournament** picks each child's parent.
+It draws `tournament_size` members at random and takes the best of them.
 With chance `crossover_rate`, a second tournament picks a second parent, and the child takes each factor from one parent or the other with even odds.
 Otherwise the child starts as a copy of its one parent.
 Each factor of the child then changes with chance `mutation_rate`, by a step of up to `mutation_scale`.
@@ -339,7 +341,7 @@ The range stays fixed for the rest of the search, and the evaluations held so fa
 Until then the archive is empty, each batch holds initial samples alone, and `evaluations.csv` lists the values of each evaluation but no cell.
 An axis sets both bounds or no bounds, and an automatic range needs at least one initial sample.
 The manifest records the range of each axis as `axis_ranges`, and `archive.csv` lists the bounds of every cell.
-`aggregate` folds the replicates into one value per axis, and leaves failed replicates out.
+`aggregate` combines the replicates into one value per axis, and leaves failed replicates out.
 An evaluation with no value left on an axis lands in no cell.
 
 The **archive** keeps every filled cell with its **exemplar**, the first candidate to land in it.
@@ -356,7 +358,7 @@ Until a candidate lands in a cell, the archive has nothing to breed from, and ea
 | `x_axis`, `y_axis` | | Each `{ column, min, max, cells }`, or `{ column, cells }` for an automatic range. Both needed |
 | `initial_samples` | 64 | Candidates drawn at random before any candidate is bred from the archive |
 | `mutation_scale` | 0.1 | Longest step of a factor from its exemplar, as a share of its range |
-| `aggregate` | `median` | Rule that folds the replicates into one value per axis |
+| `aggregate` | `median` | Rule that combines the replicates into one value per axis |
 
 The example fills 298 of its 640 cells.
 The same 1200 evaluations drawn at random, with `initial_samples = 1200`, fill 167 cells.
@@ -491,7 +493,7 @@ In the desktop app, open the directory in the [Results tab](app.md#opening-resul
 ## Searching in the app
 
 The app's <span class="ui" markdown>:material-flask-outline: Sweep</span> tab runs a search in its **Search** mode.
-Tick the parameters to search over, pick the **Method**, the **Objective** and the **Evaluations**, and press <span class="ui" markdown>:material-play: Start</span>.
+Select the parameters to search over, set the **Method**, the **Objective** and the **Evaluations**, and press <span class="ui" markdown>:material-play: Start</span>.
 Every setting on this page has a field there, and the [app tour](app.md#search-mode) describes each one.
 <span class="ui" markdown>:material-tray-arrow-down: Save spec</span> writes the search as a spec file for `henad-cli`, and <span class="ui" markdown>:material-tray-arrow-up: Load spec</span> reads a spec file back.
 

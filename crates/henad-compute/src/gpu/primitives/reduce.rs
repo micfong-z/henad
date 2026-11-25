@@ -4,7 +4,7 @@
 //! pairs in a fixed order, so the sum is reproducible.
 
 use crate::gpu::primitives::dispatch::{WORKGROUP, linear_dispatch};
-use crate::gpu::primitives::pipeline::{compute_pipeline, storage_buffer, uniform_buffer};
+use crate::gpu::primitives::pipeline::{compute_pipeline, dispatch_pass, storage_buffer, uniform_buffer};
 use crate::gpu::primitives::readback::{CounterReadback, StatsPoll};
 use crate::shader_bindings::primitives::reduce::ReduceParams;
 
@@ -56,15 +56,49 @@ fn level_sizes(leaf_blocks: u32) -> Vec<u32> {
 impl GpuLaneReduce {
     /// Builds the levels and the readback for `lanes` lanes over `num_agents` agents.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, lanes: usize, num_agents: u32) -> Self {
-        let agent_groups = linear_dispatch(num_agents);
-        let sizes = level_sizes(leaf_blocks(num_agents));
+        Self::with_leaf(
+            device,
+            queue,
+            label,
+            lanes,
+            linear_dispatch(num_agents),
+            leaf_blocks(num_agents),
+        )
+    }
+
+    /// Builds the levels and the readback for `lanes` lanes over the partials of a leaf that dispatches `blocks`
+    /// workgroups of its own shape, such as a grid's reduce pass over its cells. The leaf writes the partial of
+    /// workgroup `block` at `partials[block * lanes + lane]`.
+    ///
+    /// Note that [`Self::agent_groups`] then returns `(blocks, 1)`, which the leaf need not dispatch.
+    pub fn over_blocks(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, lanes: usize, blocks: u32) -> Self {
+        Self::with_leaf(device, queue, label, lanes, (blocks.max(1), 1), blocks)
+    }
+
+    /// Builds the levels and the readback for `lanes` lanes over the partials of `blocks` leaf workgroups, which the
+    /// leaf dispatches as the rectangle `agent_groups`.
+    fn with_leaf(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        lanes: usize,
+        agent_groups: (u32, u32),
+        blocks: u32,
+    ) -> Self {
+        let sizes = level_sizes(blocks);
 
         let partials = storage_buffer(device, &format!("{label}_reduce_partials"), sizes[0] as usize * lanes);
         // The last level writes straight into the readback's storage, so nothing extra is copied.
         let intermediates: Vec<wgpu::Buffer> = sizes[1..]
             .iter()
             .enumerate()
-            .map(|(k, &n)| storage_buffer(device, &format!("{label}_reduce_level{}", k + 1), n as usize * lanes))
+            .map(|(level, &level_len)| {
+                storage_buffer(
+                    device,
+                    &format!("{label}_reduce_level{}", level + 1),
+                    level_len as usize * lanes,
+                )
+            })
             .collect();
         let readback = CounterReadback::new(device, &format!("{label}_reduce"), lanes);
 
@@ -148,13 +182,14 @@ impl GpuLaneReduce {
     /// Records the tree and the staging copy. Record the leaf pass before calling.
     pub fn encode(&mut self, encoder: &mut wgpu::CommandEncoder) {
         for level in &self.levels {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("henad_reduce_pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &level.bind, &[]);
-            pass.dispatch_workgroups(level.groups.0, level.groups.1, 1);
+            dispatch_pass(
+                encoder,
+                "henad_reduce_pass",
+                &self.pipeline,
+                &level.bind,
+                level.groups,
+                None,
+            );
         }
         // The last level writes every entry unconditionally, and no clear is needed.
         self.readback.encode_copy(encoder);
@@ -172,11 +207,7 @@ impl GpuLaneReduce {
 
     /// Completes an in-flight readback, waiting when `block` is set, and returns its state after the poll.
     pub fn poll_readback(&mut self, device: &wgpu::Device, block: bool) -> StatsPoll {
-        if block {
-            self.readback.poll_blocking(device)
-        } else {
-            self.readback.poll(device)
-        }
+        self.readback.poll_or_block(device, block)
     }
 
     /// Sum of each lane, all zero until the first readback completes.
@@ -256,7 +287,12 @@ fn main(
     /// Returns the sums of lanes `a` and `b`, computed by the leaf shader and the tree on the GPU.
     fn sum_lanes(ctx: &GpuContext, a: &[f32], b: &[f32]) -> Vec<f32> {
         let n = a.len() as u32;
-        let mut reduce = GpuLaneReduce::new(&ctx.device, &ctx.queue, "test", 2, n);
+        sum_lanes_with(ctx, a, b, GpuLaneReduce::new(&ctx.device, &ctx.queue, "test", 2, n))
+    }
+
+    /// Returns the sums of lanes `a` and `b`, computed by the leaf shader and the tree `reduce` on the GPU.
+    fn sum_lanes_with(ctx: &GpuContext, a: &[f32], b: &[f32], mut reduce: GpuLaneReduce) -> Vec<f32> {
+        let n = a.len() as u32;
 
         let upload = |label: &str, values: &[f32]| {
             let buffer = storage_buffer(&ctx.device, label, values.len());
@@ -363,8 +399,7 @@ fn main(
     /// drop the blocks past the buffer from the sum.
     #[test]
     fn a_built_reduce_holds_a_partial_for_every_dispatched_block() {
-        let Some(ctx) = headless_context("gpu_reduce_partials_test", wgpu::Features::empty()) else {
-            log::warn!("skipping a_built_reduce_holds_a_partial_for_every_dispatched_block: no adapter");
+        let Some(ctx) = headless_context("gpu_reduce_partials_test") else {
             return;
         };
         let lanes = 2;
@@ -378,8 +413,7 @@ fn main(
     /// Sizes straddle the workgroup width, including a ragged tail and a multi-level chain.
     #[test]
     fn sums_match_a_cpu_reference() {
-        let Some(ctx) = headless_context("gpu_reduce_test", wgpu::Features::empty()) else {
-            log::warn!("skipping sums_match_a_cpu_reference: no adapter");
+        let Some(ctx) = headless_context("gpu_reduce_test") else {
             return;
         };
 
@@ -399,8 +433,7 @@ fn main(
     /// Each lane sums on its own. A stride mistake in the group-major layout would otherwise give plausible numbers.
     #[test]
     fn lanes_stay_separate() {
-        let Some(ctx) = headless_context("gpu_reduce_lane_test", wgpu::Features::empty()) else {
-            log::warn!("skipping lanes_stay_separate: no adapter");
+        let Some(ctx) = headless_context("gpu_reduce_lane_test") else {
             return;
         };
 
@@ -410,5 +443,28 @@ fn main(
         let got = sum_lanes(&ctx, &a, &b);
         assert_eq!(got[0], n as f32, "lane a must total the population");
         assert_eq!(got[1], 0.0, "lane b must stay empty");
+    }
+
+    /// A tree over the partials of a given number of blocks sums as the tree over the population that dispatches the
+    /// same blocks, bit for bit.
+    #[test]
+    fn a_tree_over_blocks_sums_as_the_tree_over_the_population() {
+        let Some(ctx) = headless_context("gpu_reduce_blocks_test") else {
+            return;
+        };
+        for n in [1usize, 257, 70_000] {
+            let a: Vec<f32> = (0..n).map(|i| (i % 13) as f32 * 0.1).collect();
+            let b: Vec<f32> = (0..n).map(|i| 2.0 - (i % 3) as f32 * 0.7).collect();
+            let blocks = (n as u32).div_ceil(WORKGROUP);
+            let over_blocks = GpuLaneReduce::over_blocks(&ctx.device, &ctx.queue, "test_blocks", 2, blocks);
+            assert_eq!(over_blocks.agent_groups(), (blocks, 1), "n={n}");
+            let got = sum_lanes_with(&ctx, &a, &b, over_blocks);
+            let want = sum_lanes(&ctx, &a, &b);
+            assert_eq!(
+                got.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                want.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                "n={n}"
+            );
+        }
     }
 }
