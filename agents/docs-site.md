@@ -40,6 +40,6 @@ shell and `<!-- --8<-- [start:fetch] -->` in HTML and Markdown, so a user's copy
 Its Rust files carry no markers and are included whole. `crates/henad/examples/complete.rs` carries
 regions for `guide/library.md`, and its README copy leaves the marker lines out.
 `crates/henad/tests/facade_paths.rs` carries the page's two other regions. Every page that
-includes template or tutorial code opens with an `!!! info "Henad 0.3"` admonition naming the
+includes template or tutorial code opens with an `!!! info "Henad 0.x"` admonition naming the
 release it describes, since the site deploys from `master` and can run ahead of crates.io. An
 unused region is deleted with its include.

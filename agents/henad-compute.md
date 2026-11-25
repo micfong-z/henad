@@ -170,7 +170,8 @@ types an unsuffixed literal falls back to.
   call no hook, a press calls `pass_params_bytes` once and a stats read calls `stats` once, which
   `a_step_calls_no_hook` holds. The specs, hooks and shader types are `pub(crate)` modules whose
   items `gpu/mod.rs` re-exports only behind `runtime-wgsl`. Each struct and enum is
-  `#[non_exhaustive]`, each struct has a `new`, and `SideTable` keeps its field private instead.
+  `#[non_exhaustive]`, each struct but `GridPassCtx` has a `new`, and `SideTable` keeps its field
+  private instead. Only the engine builds a `GridPassCtx`, and the hooks receive it as an argument.
   The engines stay `pub(crate)`. `GpuSimState::read_buffer` is a blocking read of a buffer's
   current side for a parity test or an export, `None` by default, and the runner never calls it.
   `an_owned_spec_entry_reads_like_the_registered_one`
@@ -283,7 +284,7 @@ types an unsuffixed literal falls back to.
   `henad-core/src/authoring/primitives/` is the model-author-facing vocabulary and is a
   counterpart of its own `wgsl/` directory instead.
 - Behind the `runtime-wgsl` feature (naga 30 and naga_oil 0.23 with `default-features = false`,
-  native and wasm32), `gpu/compose.rs` is the one module that calls naga_oil, decision 9 of #49.
+  native and wasm32), `gpu/compose.rs` is the one module that calls naga_oil.
   `compose_wgsl` adds the shared modules in `SHARED_WGSL_MODULES` order and then the caller's
   `#define_import_path` modules, composes with `make_naga_module`, validates with every flag and
   capability and writes with `WriterFlags::empty()`, the steps of `wgsl_bindgen` 0.23.3's

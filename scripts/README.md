@@ -11,8 +11,12 @@ Analysis and comparison scripts.
 - `plot_compare.py`: figures and tables from that CSV, for the benchmarks page
 - `changelog_section.py`: prints one version's `CHANGELOG.md` section, which the release workflow uses as the release body
 - `docs_rs.py`: builds each published crate's documentation as docs.rs builds it, from the crate's `[package.metadata.docs.rs]` table, for the `docs` CI job
+- `ci_tiers.py`: runs `cargo test` for CI's quick or full tier, prints the jobs a change needs, and checks that every line of `slow_tests.txt` matches exactly one test
+- `slow_tests.txt`: the slow tests that CI's quick tier and `./check.sh --quick` leave out
+- `check_packaging.sh`: checks the packaging rules that cargo never checks, such as workspace versions, licence copies and the template's requirements, for `./check.sh` and CI
+- `build_web.sh`: builds or serves the web target on the pinned nightly, the only supported web build
 
-`changelog_section.py` and `docs_rs.py` need no dependencies, and CI runs them with a bare `python3`.
+`changelog_section.py`, `ci_tiers.py` and `docs_rs.py` need no dependencies, and CI runs them with a bare `python3`.
 Their tests run in CI as `python3 -m unittest discover -s scripts -p 'test_*.py'`.
 
 `progress.py` is a helper rather than a script: the live display the sweep draws while it runs, which falls back to one line per run whenever output is redirected.

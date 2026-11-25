@@ -3,7 +3,7 @@
 The full dependency rule behind the crate graph in `AGENTS.md`. Read it before adding or moving
 a dependency between Henad crates.
 
-The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
+The rule, settled in #48: henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it in the graph in
 `AGENTS.md`: henad-explore and henad-models onto henad-compute, the hosts onto henad-explore,
 henad-compute and, for `example_models()`, henad-models, and any crate with shader bindings or a

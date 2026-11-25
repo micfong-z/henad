@@ -5,8 +5,11 @@ Produces `crates/henad-models/tests/fixtures/lowered/`, the graph files a lowere
 
 | Directory | Files | Models |
 | --- | --- | --- |
-| `lowered/round1/` | `game_of_life.toml`, `vote.toml`, `sir.toml`, `forest_fire.toml`, `random_walk.toml`, `bounded_confidence.toml`, `boids.toml`, `ants.toml` | the eight models of round 1 of the #37 redesign, SIR with chances per tick |
+| `lowered/round1/` | `game_of_life.toml`, `vote.toml`, `sir.toml`, `forest_fire.toml`, `random_walk.toml`, `bounded_confidence.toml`, `boids.toml`, `ants.toml` | round 1's eight models, SIR with chances per tick |
 | `lowered/rates/` | `sir_rates.toml`, `sird_competing.toml`, `sird_higher_wins.toml` | SIR with rates per day, and SIRD with two rates out of Infected, as competing risks and under "the higher change wins" |
+
+Round 1 is a design round of the sheet and card redesign in #37, where the eight models of `round1/` got their cards.
+The `rates/` files come from the redesign's rates design, named round 2 in their headers.
 
 No script generates these files and no reference engine is involved.
 Each was written by hand, from the model's sheet and card, as the graph the sheet lowering would write.

@@ -464,7 +464,7 @@ henad          the facade, one module tree over the others, the crate a program 
 henad-tutorial the first-model guide's finished code, in examples/tutorial, on the facade alone
 ```
 
-The rule (decision 2.14 of #48): henad-core depends on nothing, and henad-build on henad-core alone.
+The rule, settled in #48: henad-core depends on nothing, and henad-build on henad-core alone.
 Every other normal or build dependency runs from a crate to one drawn above it. henad-cli and
 henad-app take henad-models only behind their default `example-models` feature, and the facade
 takes henad-models, henad-app, henad-cli and henad-graph only behind its features. henad-explore
