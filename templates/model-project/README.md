@@ -12,22 +12,33 @@ The template is fetched from the release it belongs to, and requires that releas
 mkdir my-model && cd my-model
 curl -L https://github.com/micfong-z/henad/archive/refs/tags/v0.4.0.tar.gz \
   | tar -xzf - --strip-components=3 henad-0.4.0/templates/model-project
-git init
+git init -b main
 ```
 <!-- --8<-- [end:fetch] -->
 
 On Windows, the commands in this README run in Git Bash or WSL.
 
+## Licence
+
+<!-- --8<-- [start:licence] -->
+The template's files are dedicated to the public domain under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+A project made from the template need not keep a notice for them, and can take any licence.
+The Henad crates the project depends on keep their own licences, MIT OR Apache-2.0 for Henad's code.
+`assets/icon-256.png` is Henad's icon and is not part of the dedication.
+Replace it with the project's own icon before publishing the project.
+<!-- --8<-- [end:licence] -->
+
 ## Renaming the project
 
 Renaming the package renames its library, and the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` have to be edited to the new name.
-A full rebrand renames these:
+A full rebrand changes these:
 
 <!-- --8<-- [start:rename] -->
 - the package name in `Cargo.toml`, and the `my_model::models()` paths in `src/main.rs` and `src/bin/my-model-cli.rs`,
 - the two `[[bin]]` names, `default-run`, and the CLI binary's file,
 - `data-bin` and `<title>` in `index.html`,
 - `cli_command` in `src/main.rs`, and `command_name` and `about` in the CLI binary,
+- the icon in `assets/icon-256.png`, shown on the app's window, in its About window and on the web page's tab,
 - the product name passed to `AppOptions::new`.
 <!-- --8<-- [end:rename] -->
 
@@ -103,7 +114,7 @@ cargo update              # every dependency
 ```
 
 Never update `henad-build` alone with `cargo update -p henad-build`, which leaves the engine behind it.
-A new minor release, such as 0.3 to 0.4, changes the `henad` and `henad-build` requirements in `Cargo.toml` together.
+A new minor release, such as 0.4 to 0.5, changes the `henad` and `henad-build` requirements in `Cargo.toml` together.
 Dependabot opens one pull request for both crates.
 <!-- --8<-- [end:update] -->
 

@@ -22,6 +22,8 @@ Its `Cargo.toml` then requires that release's crates.
 
 On Windows, the commands on this page run in Git Bash or WSL.
 
+--8<-- "templates/model-project/README.md:licence"
+
 The project starts with two models of the voting rule, `vote` on the CPU and `gpu_vote`, its port to the GPU.
 The [first-model tutorials](first-model/game-of-life.md) add models beside them, and you can delete `vote` and `gpu_vote` once you have your own models.
 `gpu_vote` can be deleted on its own, while `vote` can only be deleted together with `gpu_vote`, since the port seeds itself by calling `Vote::init`.
@@ -29,7 +31,7 @@ The [first-model tutorials](first-model/game-of-life.md) add models beside them,
 ## Renaming it
 
 Renaming the package renames the library too, and the `my_model::` paths in `src/main.rs` and `src/bin/my-model-cli.rs` have to be edited to the new name.
-A full rebrand renames these:
+A full rebrand changes these:
 
 --8<-- "templates/model-project/README.md:rename"
 
