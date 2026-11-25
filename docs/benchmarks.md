@@ -15,7 +15,8 @@ The following common frameworks for ABM are compared:
 - [Mesa](https://mesa.readthedocs.io/latest/) - an agent-based modeling framework in Python
 - [krABMaga](https://krabmaga.github.io/) - a discrete events simulation engine for agent-based modeling in Rust
 
-All data are tested on one rented machine, with a 12-core **AMD Ryzen 9 3900** CPU (24 vCPUs), 94 GB of RAM and an **NVIDIA RTX 4090** GPU, at Henad commit [`3c7c7e0`](https://github.com/micfong-z/henad/commit/3c7c7e0) on 8 and 9 October 2026.
+All data are tested on one rented machine, with a 16-core **AMD Ryzen 9 9950X3D** CPU (32 threads), 60 GB of RAM and an **NVIDIA RTX 4090** GPU, at Henad commit [`885a0d2`](https://github.com/micfong-z/henad/commit/885a0d2) on 25 November 2026.
+The machine's container allowed 31 of the 32 threads, so Henad's all-cores rows ran on 31 threads, and every other engine ran on one.
 Every engine ran in the same sweep, with the following population sizes and step counts:
 
 | Model | Population | Steps |
