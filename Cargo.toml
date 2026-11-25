@@ -26,8 +26,8 @@ henad-explore = { path = "crates/henad-explore", version = "0.4.0" }
 # The facade alone takes the two hosts, without the example models their binaries need.
 henad-cli = { path = "crates/henad-cli", version = "0.4.0", default-features = false }
 henad-app = { path = "crates/henad-app", version = "0.4.0", default-features = false }
-egui = "0.36.1"
-eframe = { version = "0.36.1", default-features = false, features = [
+egui = "0.36.2"
+eframe = { version = "0.36.2", default-features = false, features = [
     "wgpu",
     "persistence",
     "wayland",
@@ -36,7 +36,7 @@ eframe = { version = "0.36.1", default-features = false, features = [
 ] }
 egui_dock = "0.21.1"
 # The runs table only. Default features off: the default file loader is unused.
-egui_extras = { version = "0.36.1", default-features = false }
+egui_extras = { version = "0.36.2", default-features = false }
 image = { version = "0.25.6", default-features = false, features = ["png"] }
 bytemuck = "1.25.0"
 pollster = "1.0"
@@ -46,7 +46,7 @@ pollster = "1.0"
 # `#[cfg]`-ed out of existence instead. The feature is a no-op on native, and on wasm the handles
 # are never actually sent across threads (there are none), which is exactly the condition under
 # which it is sound.
-wgpu = { version = "30.0", features = [
+wgpu = { version = "30.0.2", features = [
     "metal",
     "dx12",
     "vulkan",
@@ -73,7 +73,7 @@ heck = "0.5"
 # henad-compute's `runtime-wgsl` alone, which composes and validates a grid rule's WGSL while the program runs. The
 # version is wgpu's. naga_oil's default features add GLSL and a test shader. wgsl_bindgen's build-time copy is a build
 # dependency, outside this graph.
-naga = { version = "30.0.0", features = ["wgsl-in", "wgsl-out"] }
+naga = { version = "30.0.2", features = ["wgsl-in", "wgsl-out"] }
 naga_oil = { version = "0.23.0", default-features = false }
 egui_plot = "0.37"
 egui-snarl = "0.12"
