@@ -28,6 +28,7 @@ Every engine ran in the same sweep, with the following population sizes and step
 ## Results
 
 In the figures below, "over budget" indicates that the engine took longer than 1000 seconds to run the required repetitions.
+On the smallest grids a GPU step costs mostly the fixed overhead of submitting work to the device, so a fast CPU engine can beat Henad's GPU row there, as Agents.jl and MASON do on SIR at 64².
 
 ### Game of Life
 
