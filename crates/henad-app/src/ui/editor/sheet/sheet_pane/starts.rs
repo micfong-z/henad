@@ -421,16 +421,18 @@ fn starts_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &Sheet
 /// Width in points the Starts as column takes at most while the table fits.
 const STARTS_MOST: f32 = 280.0;
 
-/// Returns the width in points the Starts as of `property`, a property of `thing`, takes with each of its lines whole on
-/// one line: its select, each chance row with its delete button, the state of every other cell, the lead and numbers
-/// of a value, or its words.
+/// Returns the width in points the Starts as of `property`, a property of `thing`, takes with each line of controls
+/// whole on one line: its select, each chance row with its delete button, the state of every other cell, and the lead
+/// and numbers of a value.
+///
+/// A sentence, such as the words of a Vector's start or of a painted start, wraps as prose and counts no width here.
 fn starts_line_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &SheetProperty) -> f32 {
     let selected = starts_text(document, property);
     let Some(start) = &property.starts_as else {
         return text_width(ui, &selected);
     };
     if property.property_type == PropertyType::Arrow {
-        return text_width(ui, &Sentences::new(document).slot(&start.value, Some(&property.id)));
+        return 0.0;
     }
     let state = |state: Option<&str>| {
         let name = state.and_then(|state| state_name(property, state)).unwrap_or_default();
@@ -448,14 +450,6 @@ fn starts_line_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &
             });
             let otherwise = text_width(ui, OTHERWISE) + ITEM_GAP + state(start.otherwise.as_deref());
             rows.fold(otherwise, f32::max)
-        }
-        StartRule::Painted => {
-            let base = start
-                .base
-                .as_deref()
-                .and_then(|base| state_name(property, base))
-                .unwrap_or_default();
-            text_width(ui, &painted_shapes(base, start.shapes.len()))
         }
         StartRule::Value if !matches!(property.property_type, PropertyType::States | PropertyType::YesNo) => {
             match start.value.value() {

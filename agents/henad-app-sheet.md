@@ -98,9 +98,10 @@ kind (`STATES_KIND` with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND` wi
 `starts_all` per state and `BY_CHANCE`, or `A_VALUE` and `A_RANDOM_NUMBER`, the latter for Number
 only, since the lowering refuses a random whole number), `changed_by` over the Become and Set lines
 of the cards that run each tick, then `EDIT` named `edit_property_heading`, which opens the property
-form, and × named `delete_property_name`, or where the table cannot hold both with no word cut short
-(`Table::fits` without the last two give-up steps) a menu button named `property_actions_name` with
-both as its items (`row_actions_menu`). Delete goes through `delete_or_ask`, as Delete property, and
+form, and × named `delete_property_name`, or where the table cannot hold both with every column at
+its natural width a menu button named `property_actions_name` with both as its items
+(`row_actions_menu`), in a column of its own or in the Changed by column (`RowActions`,
+`agents/henad-app-sheet-pane.md`). Delete goes through `delete_or_ask`, as Delete property, and
 closes the open form of the property it deletes
 (`each_property_row_edits_and_deletes_its_property`). The name is a label. The form scrolls into
 view as it opens (`PropertyForm::reveal`), since it can open below the pane's edge, through

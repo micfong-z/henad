@@ -60,9 +60,10 @@ the measure Total trail, and Undo after each delete). The tables and their order
   actions (`RowActions`) never take room a word needs: `property_columns` builds the columns for a
   symbol width and a place of the actions, and the table takes the first of the Edit and × columns
   with symbols, the menu's column with symbols and the menu's column alone that fits with no step
-  run and Starts as at `starts_line_width`, the width that holds each of its lines whole (a chance
-  row with its ×, the otherwise row, a value's lead and numbers, `chip_width` for a parameter's
-  chip). Otherwise the menu goes into the Changed by column (`MenuUnder`), right-aligned beside its
+  run and Starts as at `starts_line_width`, the width that holds each line of controls whole (a
+  chance row with its ×, the otherwise row, a value's lead and numbers, `chip_width` for a
+  parameter's chip; a Vector's or a painted start's sentence wraps as prose and counts nothing).
+  Otherwise the menu goes into the Changed by column (`MenuUnder`), right-aligned beside its
   words where they fit with it and on a line under them otherwise, and the table lays its words out
   as it did before it had symbols or actions
   (`a_property_table_leaves_out_its_symbols_and_buttons_before_a_word_wraps`, over the SIR sheet
