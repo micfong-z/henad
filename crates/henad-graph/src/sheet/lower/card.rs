@@ -784,7 +784,7 @@ impl<'a> CardLowering<'_, 'a> {
     fn order(&mut self, site: &Site, op: &str, a: &Operand, b: &Operand) -> Result<Operand, String> {
         let value_type = common_type(a, b)?;
         if matches!(value_type, ValueType::Category(_) | ValueType::Bool) && !matches!(op, "cmp.eq" | "cmp.ne") {
-            return Err("states and yes or no values cannot be ordered".to_owned());
+            return Err("states and Boolean values cannot be ordered".to_owned());
         }
         let a = self.builder.input_as(site, a, &value_type)?;
         let b = self.builder.input_as(site, b, &value_type)?;

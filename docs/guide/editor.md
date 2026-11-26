@@ -109,7 +109,7 @@ Each card is a frame with its heading, such as "Each tick, every cell", and its 
 Under the heading, grey words give the rule every line follows: everyone reads the world as it was at the start of the tick, all changes are applied together at the end of the tick, and a property that no line changes is left unchanged.
 
 A line either works out a result, which lines below it can use, or changes one of the cell's properties.
-A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a yes or no, grey for a calculation, green for a change, and white for a When or a Repeat.
+A bar at the left of each line shows its kind by colour, as the square on each add button does: blue for a look around, purple for a chance, yellow for a Boolean, grey for a calculation, green for a change, and white for a When or a Repeat.
 Hover over the bar to read the kind.
 In a sentence, each chosen value is a *chip*: a result in blue, a state with its colour, a parameter with a slider mark, and "my" before a property in grey.
 An empty slot is a *blank*, a faint box that names what goes in it, such as "state" or "old state".
@@ -118,8 +118,8 @@ Hover over a result chip to highlight the line that works it out.
 The add buttons under the lines add a line at the end of the card, each from a menu with a pattern of the sentence under every item:
 
 - **+ Look around** counts the cells around a cell whose property is in a state, or totals or averages a number over them.
-- **+ Chance** adds a change made by chance or at a rate, or a yes or no result drawn that way that several lines can share.
-- **+ Yes or no** compares two values, or joins yes or no results with all of or any of.
+- **+ Chance** adds a change made by chance or at a rate, or a Boolean result drawn that way that several lines can share.
+- **+ Boolean** compares two values, or joins Boolean results, each yes or no, with all of or any of.
 - **+ Calculate** works out a number from two numbers.
   A division by 0 gives 0.
 - **+ Change** adds a Become, which changes a state, or a Set, which changes a number.
@@ -152,7 +152,7 @@ A result takes a name from what it works out, such as "Alive neighbours" for a c
 
 A change applies when its condition holds.
 A new change from **+ Change** starts with an empty "when" blank and does nothing until a condition is chosen.
-The blank opens **Choose when**, which lists the yes or no results of the lines above, then the kinds of condition:
+The blank opens **Choose when**, which lists the Boolean results of the lines above, then the kinds of condition:
 
 - **always**, for a change that applies to every cell in its old state.
 - **when … is …**, **when … is at least …**, **when … is at most …**, and **when … is less than … or more than …**, which compare a value.
@@ -252,9 +252,9 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 **+ Repeat…** comes after them on a card over agents alone.
 
 - **+ Look around** counts the agents within a distance whose property is in a state, looks at them and sums them up, picks the neighbouring cell of the ground with the most or the least of a property or one at random, or looks at the cell an agent is on or the cell ahead of it.
-- **+ Chance** adds a change made by chance, a yes or no drawn by chance, a random number between two values, or a random direction of a length.
+- **+ Chance** adds a change made by chance, a Boolean drawn by chance, a random number between two values, or a random direction of a length.
 - **+ Calculate** works out a number, chooses the first of several values whose condition holds, or gives one value for each state of a property.
-- **+ Change** adds a Become, a Set, a Steer of a number or an arrow by a value or towards it, a Keep between that holds a number or an arrow's length inside two bounds, a Move by an arrow or to a cell, a Leave that marks the ground, and a Record that counts an event.
+- **+ Change** adds a Become, a Set, a Steer of a number or a vector by a value or towards it, a Keep between that holds a number or a vector's length inside two bounds, a Move by a vector or to a cell, a Leave that marks the ground, and a Record that counts an event.
   A ground property whose marks add up takes at most 65536 on one cell in a tick, and a Leave of a fixed amount that the most agents on one cell can take past that shows a warning under its line.
   A Leave of a worked-out amount shows a warning once the most agents of the kind reach 65536, since nothing bounds the amount.
 - **+ Repeat…** adds a Repeat line, whose lines run that many times each tick.
@@ -274,7 +274,7 @@ A Steer towards a value that reads such a summary adds nothing while the look fi
 To steer towards another value while the look finds no one, test the look's count in a row of a Choose.
 
 A value on a card over agents also takes the summaries of the looks above, as "Flockmates' centre", the cells picked above, and new values: a random number between two values, or a random direction of a length.
-A number also takes the length of an arrow property, as "length of my Velocity".
+A number also takes the length of a Vector property, as "length of my Velocity".
 Below the last line that changes a property, a value can take "my new Velocity", the value the changes above give it this tick.
 Above that line it is not offered.
 Move to takes a cell picked or looked at above.
@@ -636,7 +636,7 @@ A heavy step on a large grid can still take long enough per tick to lose the GPU
 - The Editor writes sheets, grid rules, and node graphs on a grid or of agents.
   CPU models cannot be written as a model file.
 - The card writes the lines of a world of cells and of a world of agents.
-  A formula of more than one operation, a condition on a Steer, Keep between or Move, the "only those whose" filter of a look at agents, a summary's own name and an arrow's start are written in the model file.
+  A formula of more than one operation, a condition on a Steer, Keep between or Move, the "only those whose" filter of a look at agents, a summary's own name and a vector's start are written in the model file.
 - A grid rule's step has no initialisation of its own.
   The states' `initial` shares seed the grid at tick 0.
 - A grid rule reads its parameters when it is built.

@@ -154,7 +154,7 @@ fn state_rows(ui: &mut Ui, form: &mut PropertyForm) {
 }
 
 /// Returns the kinds the property form offers: States and Number for every kind of thing, Integer for cells and
-/// agents, then for agents Yes or no, and a Position or a Heading while the agents have none. A property's own kind is
+/// agents, then for agents Boolean, and a Position or a Heading while the agents have none. A property's own kind is
 /// always offered.
 ///
 /// The ground holds only numbers and states.

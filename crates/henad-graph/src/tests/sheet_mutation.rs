@@ -228,7 +228,7 @@ fn a_number_in_a_condition_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "expected yes or no in a slot, got a number",
+        "expected a Boolean in a slot, got a number",
         "[card.line.l4]",
     );
 }
@@ -589,7 +589,7 @@ fn an_any_or_all_of_a_value_that_is_not_yes_or_no_is_an_error_at_its_line() {
     assert_reported(
         &values,
         Expected::Error,
-        "expected yes or no in a slot, got a number",
+        "expected a Boolean in a slot, got a number",
         "[card.line.l2]",
     );
     let values = VALUES.replace(
@@ -599,7 +599,7 @@ fn an_any_or_all_of_a_value_that_is_not_yes_or_no_is_an_error_at_its_line() {
     assert_reported(
         &values,
         Expected::Error,
-        "expected yes or no in a slot, got a number",
+        "expected a Boolean in a slot, got a number",
         "[card.line.l2]",
     );
     // A summary of the boids that no line reads.
@@ -614,7 +614,7 @@ fn an_any_or_all_of_a_value_that_is_not_yes_or_no_is_an_error_at_its_line() {
     let error = assert_reported(
         &boids,
         Expected::Error,
-        "expected yes or no in a slot, got an arrow",
+        "expected a Boolean in a slot, got a vector",
         "[card.line.l1]",
     );
     assert_eq!(error.line.as_deref(), Some("l1"));
@@ -911,27 +911,27 @@ fn a_value_of_the_wrong_type_is_an_error_at_its_line_as_the_lowering_refuses_it(
              test = \"{test}\"\nleft = {{ my = \"{left}\" }}\n{right}"
         )
     };
-    let unordered = "states and yes or no values cannot be ordered";
+    let unordered = "states and Boolean values cannot be ordered";
     let cases = [
-        (set("energy", "true"), "expected a number in a slot, got yes or no"),
+        (set("energy", "true"), "expected a number in a slot, got a Boolean"),
         (
             set("whole", "{ my = \"flag\" }"),
-            "expected a number in a slot, got yes or no",
+            "expected a number in a slot, got a Boolean",
         ),
-        (set("flag", "3"), "expected yes or no in a slot, got a number"),
+        (set("flag", "3"), "expected a Boolean in a slot, got a number"),
         (
             set("flag", "{ my = \"energy\" }"),
-            "expected yes or no in a slot, got a number",
+            "expected a Boolean in a slot, got a number",
         ),
-        (keep("status"), "Keep between needs a Number or an Arrow, got 'status'"),
-        (keep("flag"), "Keep between needs a Number or an Arrow, got 'flag'"),
+        (keep("status"), "Keep between needs a Number or a Vector, got 'status'"),
+        (keep("flag"), "Keep between needs a Number or a Vector, got 'flag'"),
         (
             compare("status", "is", "right = 1"),
             "cannot compare a state with a number",
         ),
         (
             compare("energy", "is", "right = { my = \"flag\" }"),
-            "cannot compare a number with yes or no",
+            "cannot compare a number with a Boolean",
         ),
         (
             compare("energy", "one_of", "right = [1, { my = \"status\" }]"),
@@ -941,7 +941,7 @@ fn a_value_of_the_wrong_type_is_an_error_at_its_line_as_the_lowering_refuses_it(
         (compare("status", "outside", "low = 0\nhigh = 1"), unordered),
         (
             compare("energy", "within", "right = true\ntolerance = 1"),
-            "is within compares numbers, got yes or no",
+            "is within compares numbers, got a Boolean",
         ),
         (
             compare("status", "within", "right = 1\ntolerance = 1"),
@@ -1047,7 +1047,7 @@ fn a_set_of_an_arrow_takes_a_place_as_the_lowering_does() {
     assert_reported(
         &text,
         Expected::Error,
-        "cannot compare an arrow with a place",
+        "cannot compare a vector with a place",
         "[card.line.l17]",
     );
 }

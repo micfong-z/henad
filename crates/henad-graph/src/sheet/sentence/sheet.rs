@@ -745,11 +745,11 @@ pub const POSITION_KIND: &str = "Position";
 /// Kind of an agent's direction of travel.
 pub const HEADING_KIND: &str = "Heading";
 
-/// Kind of a property that holds yes or no.
-pub const YES_NO_KIND: &str = "Yes or no";
+/// Kind of a property that holds yes or no, a Boolean.
+pub const YES_NO_KIND: &str = "Boolean";
 
-/// Kind of a property that holds an arrow in the plane.
-pub const ARROW_KIND: &str = "Arrow";
+/// Kind of a property that holds a vector in the plane.
+pub const ARROW_KIND: &str = "Vector";
 
 /// Description of [`ARROW_KIND`].
 pub const ARROW_KIND_DESCRIPTION: &str =
@@ -762,12 +762,12 @@ pub const POSITION_KIND_DESCRIPTION: &str = "Where the agent is in the world.";
 pub const HEADING_KIND_DESCRIPTION: &str = "The direction the agent last moved in.";
 
 /// Description of [`YES_NO_KIND`].
-pub const YES_NO_KIND_DESCRIPTION: &str = "A yes or no value, such as whether an agent is hungry.";
+pub const YES_NO_KIND_DESCRIPTION: &str = "A value that is yes or no, such as whether an agent is hungry.";
 
-/// Value yes of a Yes or no property.
+/// Value yes of a Boolean property.
 pub const YES: &str = "Yes";
 
-/// Value no of a Yes or no property.
+/// Value no of a Boolean property.
 pub const NO: &str = "No";
 
 /// Choice of Starts as where every agent starts at a random place.

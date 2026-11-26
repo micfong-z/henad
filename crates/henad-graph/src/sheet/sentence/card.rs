@@ -184,7 +184,7 @@ pub enum AddButton {
     LookAround,
     /// "+ Chance".
     Chance,
-    /// "+ Yes or no".
+    /// "+ Boolean".
     YesOrNo,
     /// "+ Calculate".
     Calculate,
@@ -244,7 +244,7 @@ impl AddButton {
         match self {
             Self::LookAround => "+ Look around",
             Self::Chance => "+ Chance",
-            Self::YesOrNo => "+ Yes or no",
+            Self::YesOrNo => "+ Boolean",
             Self::Calculate => "+ Calculate",
             Self::Change => "+ Change",
             Self::When => "+ When, for several lines",
@@ -257,7 +257,7 @@ impl AddButton {
         match self {
             Self::LookAround => "Count or total of the cells around me (neighbours)",
             Self::Chance => "Change a state by chance or at a rate",
-            Self::YesOrNo => "Compare values, or join yes or no results",
+            Self::YesOrNo => "Compare values, or join Boolean results",
             Self::Calculate => "Work out a number from two numbers",
             Self::Change => "Change a state or a number",
             Self::When => "Give several lines one shared condition",
@@ -279,7 +279,7 @@ impl AddButton {
     /// Returns the button whose menus add a line of `kind`, the group the kind belongs to.
     ///
     /// Note that a Become belongs to Change wherever it was added, "Become, with chance" from "+ Chance" included, and
-    /// the condition "always", which no line holds alone, to Yes or no.
+    /// the condition "always", which no line holds alone, to Boolean.
     pub fn for_kind(kind: LineKind) -> Self {
         match kind {
             LineKind::Count | LineKind::LookAround | LineKind::PickCell | LineKind::LookAtCell => Self::LookAround,
@@ -301,12 +301,12 @@ impl AddButton {
     }
 
     /// Heading of the button's group in the menu of a When block's add row: "Change", "When", "Chance", "Look
-    /// around", "Yes or no" or "Calculate".
+    /// around", "Boolean" or "Calculate".
     pub fn group(self) -> &'static str {
         match self {
             Self::LookAround => "Look around",
             Self::Chance => "Chance",
-            Self::YesOrNo => "Yes or no",
+            Self::YesOrNo => "Boolean",
             Self::Calculate => "Calculate",
             Self::Change => "Change",
             Self::When => "When",
@@ -319,7 +319,7 @@ impl AddButton {
         match self {
             Self::LookAround => "Look at the cells around me (neighbours)",
             Self::Chance => "Change a state by chance",
-            Self::YesOrNo => "Make a yes or no result",
+            Self::YesOrNo => "Make a Boolean result",
             Self::Calculate => "Work out a number",
             Self::Change => "Change one of my properties",
             Self::When => "Several lines that share one condition",
@@ -394,9 +394,9 @@ impl AddButton {
 /// [`AddItem::RandomNumber`].
 pub const RANDOM_VALUE_GROUP: &str = "Or a random value";
 
-/// Heading of the group of the Chance menu that adds a yes or no result, above [`AddItem::WithChance`] and
+/// Heading of the group of the Chance menu that adds a Boolean result, above [`AddItem::WithChance`] and
 /// [`AddItem::AtRate`].
-pub const SHARED_DRAW_GROUP: &str = "Or a yes or no that several lines share";
+pub const SHARED_DRAW_GROUP: &str = "Or a Boolean that several lines share";
 
 /// One item of an add menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -410,15 +410,15 @@ pub enum AddItem {
     BecomeWithChance,
     /// Become, at a rate, under "+ Chance".
     BecomeAtRate,
-    /// With chance, a yes or no result under "+ Chance".
+    /// With chance, a Boolean result under "+ Chance".
     WithChance,
-    /// At a rate, a yes or no result under "+ Chance".
+    /// At a rate, a Boolean result under "+ Chance".
     AtRate,
-    /// Compare, under "+ Yes or no".
+    /// Compare, under "+ Boolean".
     Compare,
-    /// All of, under "+ Yes or no".
+    /// All of, under "+ Boolean".
     AllOf,
-    /// Any of, under "+ Yes or no".
+    /// Any of, under "+ Boolean".
     AnyOf,
     /// Calculate, under "+ Calculate".
     Calculate,
@@ -505,8 +505,8 @@ impl AddItem {
             Self::TotalOrAverage => "total of … over the cells around me (8, 4 or a 3 by 3 block)".to_owned(),
             Self::BecomeWithChance => format!("Become {new} from {old}, with chance …, optionally for each …"),
             Self::BecomeAtRate => format!("Become {new} from {old}, at rate … per day, optionally for each …"),
-            Self::WithChance => "a yes or no: with chance …".to_owned(),
-            Self::AtRate => "a yes or no: at rate … per day".to_owned(),
+            Self::WithChance => "a Boolean: with chance …".to_owned(),
+            Self::AtRate => "a Boolean: at rate … per day".to_owned(),
             Self::Compare => "… is …, is at least …, is more than … and others".to_owned(),
             Self::AllOf => "all of …, …".to_owned(),
             Self::AnyOf => "any of …, …".to_owned(),
@@ -890,8 +890,8 @@ impl Blank {
             Self::Chance => "a chance",
             Self::Rate => "a rate",
             Self::Count => "what to count",
-            Self::YesOrNo => "a yes or no result",
-            Self::YesOrNoList => "yes or no results",
+            Self::YesOrNo => "a Boolean result",
+            Self::YesOrNoList => "Boolean results",
             Self::LowerNumber => "the lower number",
             Self::UpperNumber => "the upper number",
             Self::When => "when",

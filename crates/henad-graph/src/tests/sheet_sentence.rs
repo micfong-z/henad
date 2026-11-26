@@ -300,7 +300,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::NO_NUMBER_PROPERTY_ON_SHEET),
         ),
         (
-            "No yes or no result above this line yet. Make one with + Yes or no above this line.",
+            "No Boolean result above this line yet. Make one with + Boolean above this line.",
             fixed(sentence::NO_YES_OR_NO_RESULT),
         ),
         (
@@ -332,7 +332,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         ),
         // Add menus.
         (
-            "Or a yes or no that several lines share",
+            "Or a Boolean that several lines share",
             fixed(sentence::SHARED_DRAW_GROUP),
         ),
         (
@@ -667,11 +667,11 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::NOT_YET_REPEAT_CHANGE),
         ),
         (
-            "Walls around agents that move by an arrow are not supported yet.",
+            "Walls around agents that move by a vector are not supported yet.",
             fixed(sentence::NOT_YET_AGENT_WALLS),
         ),
         (
-            "Blocked ground under agents that move by an arrow is not supported yet.",
+            "Blocked ground under agents that move by a vector is not supported yet.",
             fixed(sentence::NOT_YET_BLOCKED_MOVE_BY),
         ),
         (
@@ -691,7 +691,7 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::LOOK_IN_REPEAT),
         ),
         (
-            "An arrow cannot be compared with a number. Compare its length instead.",
+            "A vector cannot be compared with a number. Compare its length instead.",
             fixed(sentence::ARROW_COMPARED_WITH_NUMBER),
         ),
         (
@@ -703,11 +703,11 @@ fn every_wording_table_entry_equals_the_final_words() {
             sentence::steered_already("Line 3", "Velocity"),
         ),
         (
-            "Line 2 moves by an arrow. This card cannot also move to a place.",
+            "Line 2 moves by a vector. This card cannot also move to a place.",
             sentence::moved_by_already("Line 2"),
         ),
         (
-            "Line 2 moves to a place. This card cannot also move by an arrow.",
+            "Line 2 moves to a place. This card cannot also move by a vector.",
             sentence::moved_to_already("Line 2"),
         ),
         ("line 3, Flockmates", sentence::look_name(&[(3, Some("Flockmates"))])),
@@ -799,7 +799,7 @@ fn every_wording_table_entry_equals_the_final_words() {
     let labels = [
         "+ Look around",
         "+ Chance",
-        "+ Yes or no",
+        "+ Boolean",
         "+ Calculate",
         "+ Change",
         "+ When, for several lines",
@@ -807,7 +807,7 @@ fn every_wording_table_entry_equals_the_final_words() {
     let tooltips = [
         "Count or total of the cells around me (neighbours)",
         "Change a state by chance or at a rate",
-        "Compare values, or join yes or no results",
+        "Compare values, or join Boolean results",
         "Work out a number from two numbers",
         "Change a state or a number",
         "Give several lines one shared condition",
@@ -815,7 +815,7 @@ fn every_wording_table_entry_equals_the_final_words() {
     let headings = [
         "Look at the cells around me (neighbours)",
         "Change a state by chance",
-        "Make a yes or no result",
+        "Make a Boolean result",
         "Work out a number",
         "Change one of my properties",
         "Several lines that share one condition",
@@ -832,8 +832,8 @@ fn every_wording_table_entry_equals_the_final_words() {
         "Total or average: total of … over the cells around me (8, 4 or a 3 by 3 block)",
         "Become, with chance: Become [new] from [old], with chance …, optionally for each …",
         "Become, at a rate: Become [new] from [old], at rate … per day, optionally for each …",
-        "With chance: a yes or no: with chance …",
-        "At a rate: a yes or no: at rate … per day",
+        "With chance: a Boolean: with chance …",
+        "At a rate: a Boolean: at rate … per day",
         "Compare: … is …, is at least …, is more than … and others",
         "All of: all of …, …",
         "Any of: any of …, …",
@@ -855,7 +855,7 @@ fn every_wording_table_entry_equals_the_final_words() {
         .map(|button| button.label())
         .collect();
     entries.push((
-        "+ Change, + When, for several lines, + Chance, + Look around, + Yes or no, + Calculate",
+        "+ Change, + When, for several lines, + Chance, + Look around, + Boolean, + Calculate",
         inside.join(", "),
     ));
 
@@ -912,8 +912,8 @@ fn every_wording_table_entry_equals_the_final_words() {
         ("Line 2: choose a chance", Blank::Chance),
         ("Line 2: choose a rate", Blank::Rate),
         ("Line 2: choose what to count", Blank::Count),
-        ("Line 2: choose a yes or no result", Blank::YesOrNo),
-        ("Line 2: choose yes or no results", Blank::YesOrNoList),
+        ("Line 2: choose a Boolean result", Blank::YesOrNo),
+        ("Line 2: choose Boolean results", Blank::YesOrNoList),
         ("Line 2: choose the lower number", Blank::LowerNumber),
         ("Line 2: choose the upper number", Blank::UpperNumber),
         ("Line 2: choose when", Blank::When),
@@ -1136,6 +1136,16 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("Property name", fixed(sentence::PROPERTY_NAME_FIELD)),
         ("States", fixed(sentence::STATES_KIND)),
         ("Number", fixed(sentence::NUMBER_KIND)),
+        ("Boolean", fixed(sentence::YES_NO_KIND)),
+        ("Vector", fixed(sentence::ARROW_KIND)),
+        (
+            "A value that is yes or no, such as whether an agent is hungry.",
+            fixed(sentence::YES_NO_KIND_DESCRIPTION),
+        ),
+        (
+            "A direction with a length, such as a velocity. It starts in a random direction of length 1.",
+            fixed(sentence::ARROW_KIND_DESCRIPTION),
+        ),
         (
             "One of a few named states, such as Dead and Alive. Give it at least two states.",
             fixed(sentence::STATES_KIND_DESCRIPTION),

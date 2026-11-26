@@ -272,7 +272,7 @@ fn formula_text(
                 if arrow {
                     Ok(())
                 } else {
-                    Err(format!("{what} takes an arrow, got a number"))
+                    Err(format!("{what} takes a vector, got a number"))
                 }
             };
             match *function {

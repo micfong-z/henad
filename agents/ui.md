@@ -195,7 +195,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   pane is the inline select with its list in an overlay (`select_within`, `select_list`), and the
   pickers ("Choose a parameter", a chip's picker, "Choose a colour") are overlays too.
 - **A hue names a line's kind in one place.** The bar at the left of a card's row, and the square
-  on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Yes or no
+  on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Boolean
   yellow, Change green, Calculate gray, When and Repeat gray 100 (`widgets::kind_hue`, over
   `AddButton::for_kind`). The Diagram's boxes take the same bar. Everywhere else a hue still means
   a state: blue the primary action and a result, orange a warning, red a failure.

@@ -189,9 +189,8 @@ pub const NO_PROPERTY: &str = "No property yet.";
 pub const NO_STATES_PROPERTY: &str = "No States property yet. Add one under Cells on the sheet.";
 /// No Number property for a picker of a property.
 pub const NO_NUMBER_PROPERTY_ON_SHEET: &str = "No Number property yet. Add one under Cells on the sheet.";
-/// No yes or no result above the line.
-pub const NO_YES_OR_NO_RESULT: &str = "No yes or no result above this line yet. Make one with + Yes or no above this \
-                                       line.";
+/// No Boolean result above the line.
+pub const NO_YES_OR_NO_RESULT: &str = "No Boolean result above this line yet. Make one with + Boolean above this line.";
 /// No state for a picker of a state.
 pub const NO_STATES: &str = "No states yet. Add a States property under Cells on the sheet.";
 /// No state for a picker of a state of an agent, on a card over agents.

@@ -265,9 +265,9 @@ pub(super) fn property_form_or_add(
     }
 }
 
-/// Draws the kind of `property`: "States" with each state's swatch and name under it, "Number", "Integer", "Yes or
-/// no", "Position", "Heading" or "Arrow". A state's name too long for the column wraps, or ends in an ellipsis where a
-/// word of it does not fit.
+/// Draws the kind of `property`: "States" with each state's swatch and name under it, "Number", "Integer", "Boolean",
+/// "Position", "Heading" or "Vector". A state's name too long for the column wraps, or ends in an ellipsis where a word
+/// of it does not fit.
 fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
     match property.property_type {
         PropertyType::States => {
@@ -293,7 +293,7 @@ fn kind_ui(ui: &mut Ui, property: &SheetProperty) {
     }
 }
 
-/// Returns the word of a property's kind, such as "Number" or "Yes or no".
+/// Returns the word of a property's kind, such as "Number" or "Boolean".
 pub(super) fn kind_words(kind: PropertyType) -> &'static str {
     match kind {
         PropertyType::States => STATES_KIND,

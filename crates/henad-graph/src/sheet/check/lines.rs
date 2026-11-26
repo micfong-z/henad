@@ -82,9 +82,9 @@ impl ValueType {
     /// Words of the type in a message.
     fn words(self) -> &'static str {
         match self {
-            Self::YesNo => "yes or no",
+            Self::YesNo => "a Boolean",
             Self::Number => "a number",
-            Self::Arrow => "an arrow",
+            Self::Arrow => "a vector",
             Self::Place => "a place",
             Self::State => "a state",
             Self::List => "a list",
@@ -771,7 +771,7 @@ impl<'a> Checker<'a> {
                     && !matches!(property.property_type, PropertyType::Number | PropertyType::Arrow)
                 {
                     self.error(
-                        format!("Steer needs a Number or an Arrow, got '{}'", property.id),
+                        format!("Steer needs a Number or a Vector, got '{}'", property.id),
                         place,
                     );
                 }
@@ -792,7 +792,7 @@ impl<'a> Checker<'a> {
                     && matches!(property.property_type, PropertyType::States | PropertyType::YesNo)
                 {
                     self.error(
-                        format!("Keep between needs a Number or an Arrow, got '{}'", property.id),
+                        format!("Keep between needs a Number or a Vector, got '{}'", property.id),
                         place,
                     );
                 }
@@ -1077,7 +1077,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .any(|side| matches!(side, ValueType::YesNo | ValueType::State)) =>
             {
-                Some("states and yes or no values cannot be ordered".to_owned())
+                Some("states and Boolean values cannot be ordered".to_owned())
             }
             _ => (left != right).then(|| format!("cannot compare {} with {}", left.words(), right.words())),
         };

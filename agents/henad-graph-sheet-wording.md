@@ -34,7 +34,10 @@ words), the New model and New parameter dialogs (`STARTER_CHOICES` with every st
 description), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
 (`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (the tried-value words,
-`PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Shown text takes
+`PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. A value's type is named "Boolean" for
+yes or no, capitalised as a proper adjective in running text ("a Boolean result", "+ Boolean"), and
+"vector" for an arrow ("a vector", the kind `ARROW_KIND` "Vector"), while the values keep the words
+yes and no and the file keeps its stored names `yes_no` and `arrow`. Shown text takes
 the proper characters: "…" in a menu item, a pattern or a button ("+ Repeat…", "New parameter…",
 "when … is …"), "→" between a state and its
 value in a Depending on, and "×" and "−" in a note. A blank reads `BLANK_TEXT`, "…", in shown

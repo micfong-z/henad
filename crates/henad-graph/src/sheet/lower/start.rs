@@ -123,7 +123,7 @@ fn start_value(
                 let key = draws.record(builder, "starts_as.value");
                 random_direction(builder, site, key, length)
             }
-            _ => return Err("an arrow can only start as a random direction".to_owned()),
+            _ => return Err("a vector can only start as a random direction".to_owned()),
         },
         StartRule::Value => match start.value.value() {
             Some(SheetValue::Phrase(phrase)) if phrase.kind == LineKind::RandomNumber => {

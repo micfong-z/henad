@@ -29,7 +29,7 @@ title a heading) named `add_inside_name`, with, for each group of `add_inside_gr
 written file can give a When), the `AddButton::group` label and `add_items_ui`'s items, and an item
 runs `AddLine` with `inside` set to the When. `add_items_ui` puts the items of one add button in a
 `menu_group` labelled by the node it is passed (the group label here, the title in an add button's
-menu), and each later group that `opens_group` heads ("Or a yes or no that several lines share", "Or
+menu), and each later group that `opens_group` heads ("Or a Boolean that several lines share", "Or
 a random value") in a `menu_group` of its own. The groups, and the items of each add button's menu,
 sit in `widgets::overlay_items`, a scroll area as tall as the window leaves under the title, so the
 24 items of a card over agents stay in reach of the wheel in a short window.
@@ -159,7 +159,7 @@ filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and `REMOVE_FOR_EAC
 opens on a typed number as typed (`typed_text`), and a refused text keeps the box focused. The
 boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
-lines after it inside that When. `choose_when(context, otherwise)` lists the yes or no results as
+lines after it inside that When. `choose_when(context, otherwise)` lists the Boolean results as
 "when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey lines,
 "otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
 condition set to always on a copy of the sheet), and "at rate" only on a card that runs each tick

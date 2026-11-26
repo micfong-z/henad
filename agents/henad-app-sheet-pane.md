@@ -77,13 +77,13 @@ waits for Start again), and
 `property_table` draws any thing's table and `property_form_or_add` its form or "+ Add property",
 named `add_property_name(kind)` under the agents and `ADD_GROUND_PROPERTY_NAME` under the ground.
 `PropertyForm::thing` keeps the form under its own table. `form_kinds` offers States and Number,
-Integer for cells and agents (the ground lowers only numbers and states), and for agents Yes or no
-and Arrow (`ARROW_KIND_DESCRIPTION`), then Position or Heading while the agents hold none, and
-always the property's own kind. A new property starts in its first state, at 0, at no
-(`Bool(false)`), anywhere at random (a Position), in a random direction of length 1 (an Arrow, a
-start no control changes) or with no start (a Heading). `kind_words` and `starts_text(document,
-property)` read every kind and start ("Anywhere at random", `on_ground_start`, `PAINTED`, "All Yes",
-`HEADING_START`).
+Integer for cells and agents (the ground lowers only numbers and states), and for agents Boolean
+(`YES_NO_KIND`) and Vector (`ARROW_KIND`, `ARROW_KIND_DESCRIPTION`), then Position or Heading while
+the agents hold none, and always the property's own kind. A new property starts in its first state,
+at 0, at no (`Bool(false)`), anywhere at random (a Position), in a random direction of length 1 (a
+Vector, a start no control changes) or with no start (a Heading). `kind_words` and
+`starts_text(document, property)` read every kind and start ("Anywhere at random",
+`on_ground_start`, `PAINTED`, "All Yes", `HEADING_START`).
 `start_select` offers by kind: a state or By chance (with `PAINTED` as a selected entry that
 changes nothing while the start is painted), All Yes or All No, Anywhere at random or each state of
 a ground States property that `StartsAs::paints_single_cells` accepts, the predicate the lowering's

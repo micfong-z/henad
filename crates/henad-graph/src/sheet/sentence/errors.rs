@@ -38,11 +38,11 @@ pub const NOT_YET_REPEAT: &str = "Repeat is not supported yet.";
 pub const NOT_YET_REPEAT_CHANGE: &str =
     "Keep between, When, Repeat, Leave, Record and Move to inside a Repeat are not supported yet.";
 
-/// Error on a world of agents with walls at its edges whose agents move by an arrow.
-pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents that move by an arrow are not supported yet.";
+/// Error on a world of agents with walls at its edges whose agents move by a vector.
+pub const NOT_YET_AGENT_WALLS: &str = "Walls around agents that move by a vector are not supported yet.";
 
 /// Error on a Move by line in a sheet whose ground blocks some states.
-pub const NOT_YET_BLOCKED_MOVE_BY: &str = "Blocked ground under agents that move by an arrow is not supported yet.";
+pub const NOT_YET_BLOCKED_MOVE_BY: &str = "Blocked ground under agents that move by a vector is not supported yet.";
 
 /// Error on a line too long for Henad to run, such as one that tests against hundreds of values.
 pub const LINE_TOO_LONG: &str = "This line is too long. Use shorter lists in it.";
@@ -68,8 +68,8 @@ pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell can
 pub const SET_IN_REPEAT: &str =
     "A Set inside a Repeat sets one value every time, so its value cannot read a line inside the Repeat.";
 
-/// Error on a comparison of an arrow with a number.
-pub const ARROW_COMPARED_WITH_NUMBER: &str = "An arrow cannot be compared with a number. Compare its length instead.";
+/// Error on a comparison of a vector with a number.
+pub const ARROW_COMPARED_WITH_NUMBER: &str = "A vector cannot be compared with a number. Compare its length instead.";
 
 // Errors on a change of a property in a second way, and the words of a look at agents that costs too much
 
@@ -87,14 +87,14 @@ pub fn steered_already(line: &str, property: &str) -> String {
     format!("{line} steers {property}. This card cannot also set it.")
 }
 
-/// Returns the error on a Move to below line `line`, a line that moves by an arrow.
+/// Returns the error on a Move to below line `line`, a line that moves by a vector.
 pub fn moved_by_already(line: &str) -> String {
-    format!("{line} moves by an arrow. This card cannot also move to a place.")
+    format!("{line} moves by a vector. This card cannot also move to a place.")
 }
 
 /// Returns the error on a Move by below line `line`, a line that moves to a place.
 pub fn moved_to_already(line: &str) -> String {
-    format!("{line} moves to a place. This card cannot also move by an arrow.")
+    format!("{line} moves to a place. This card cannot also move by a vector.")
 }
 
 /// Returns the name of the looks at agents of the lines numbered in `lines`, each with its name when it has one: "line
