@@ -645,6 +645,15 @@ pub fn always_name(prefix: &str) -> String {
 /// Tooltip of the "always" button.
 pub const ALWAYS_TOOLTIP: &str = "No condition. Press to add one.";
 
+/// Returns the accessible name of the words that open a value a picker put in a slot whole, such as "Line 2: replace
+/// a random number between", where `words` are those words.
+pub fn phrase_lead_name(prefix: &str, words: &str) -> String {
+    format!("{prefix}: replace {words}")
+}
+
+/// Tooltip of the words that open a value a picker put in a slot whole, such as "a random number between".
+pub const PHRASE_LEAD_TOOLTIP: &str = "Press to choose another value, such as a typed number.";
+
 /// Kind of a condition that is not always: a test, a chance or a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

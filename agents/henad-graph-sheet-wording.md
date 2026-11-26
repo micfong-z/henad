@@ -102,9 +102,12 @@ its "otherwise", "depending on"). A phrase inside a slot writes the same words a
 (`Parts::lead`). A `ResultName` is the name before " = " on a named result line, which the card
 draws as the line's result chip. An `Alternative` reads as nothing and opens each row of a Choose
 and each branch of a Depending on, which the card draws on a row of its own. `map_first_text` lowers
-the first letter of a lead word as of words, so "otherwise ... become" keeps its case. `Competing`
-is the "or" (`COMPETING_WORD`) that `competing_parts` puts before a lower line of a competing group,
-in the card alone. One builder (`Parts`) writes both forms, so the card and the writer never differ.
+the first letter of a lead word as of words, so "otherwise ... become" keeps its case. `PhraseLead`
+is the first words of a random number, a random direction or a length of mine (`length(my.<id>)`,
+`is_length_of_mine`) in a slot, placed at the slot (`Parts::lead_at_slot`), which the card draws as
+a control. `Competing` is the "or" (`COMPETING_WORD`) that `competing_parts` puts before a lower
+line of a competing group, in the card alone. One builder (`Parts`) writes both forms, so the card
+and the writer never differ.
 `placed_parts` returns the same parts as `PlacedPart`s, each with the `PartPlace` an edit of it
 sets: a `target` (`PlaceTarget::Slot` with its slot path, `ListItem` with the list's slot path and
 the item's index, or `Field` with the phrase's slot path and a `FieldPlace`: `Property`, `NewState`,

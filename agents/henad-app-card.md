@@ -112,9 +112,14 @@ a select (`select_control`, its words and a chevron, named `LineSelect::name`, i
 `slot_outline` while empty), `Always` (a `text_control` named `always_name`), `ForEach` (the words
 "for each", named `for_each_change_name`) and `ForEachBlank` (named `for_each_optional_name`, its
 weak words alone until its row is hovered or focused, then a blank) each take the widget id
-`CardState::control_id(line, target, tag)`, so another frame can open or focus them. After the last
-item of a list, `add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for
-one item past the end. `CardLine::control` returns each control's visible words and name, which the
+`CardState::control_id(line, target, tag)`, so another frame can open or focus them. The first words
+of a random number, a random direction or a length a picker put in a slot
+(`SentencePart::PhraseLead`) are a `text_control` named `phrase_lead_name` ("Line 6: replace a
+random number between", tooltip `PHRASE_LEAD_TOOLTIP`) at the slot's place, so its picker and its
+Number box put a number back in its place
+(`a_random_value_returns_to_a_typed_number_from_its_first_words`). After the last item of a list,
+`add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for one item past the
+end. `CardLine::control` returns each control's visible words and name, which the
 label-in-name tests read. Hovering or focusing a result chip or "otherwise" highlights the lines it
 names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours, a note's button a
 `note_button`. The add buttons (`add_buttons_ui`) are `add_row_button`s, each with a square of its
@@ -161,15 +166,16 @@ boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
 lines after it inside that When, for "Choose when". Every picker of a value lists `values_above`
 under "From lines above": every result above whatever its kind, then the parts above.
-`mark_refusals(picker, context, target)` gives each value item the place cannot take a `refusal`,
-`place_refusal(...).reason(label)` from henad-graph's checker (`agents/henad-graph-sheet-check.md`),
-so a picker and the checker never disagree, and `groups_ui` draws it disabled with the reason as its
-tooltip. A value of a Calculate line of one operation (a field) refuses a phrase
-(`CALCULATE_TAKES_PLAIN_VALUES`) and a cell (`kind_needed`). A picker whose items are all refused
-still shows its empty words under them, such as `NO_PLACE` under the greyed values of a Move to.
-`control_picker` keeps the picker it built under the popup's id with "built", beside
-`CardState::fingerprint` (`fnv1a64` of the sheet's text, set as `card_pane` starts), and builds it
-again only once the sheet changes, since each reason reads the checker.
+`mark_refusals(picker, context, target)` drops the Number box and "New parameter…" where the place
+refuses a typed number, as the value of a Set of a Vector does, and gives each value item the place
+cannot take a `refusal`, `place_refusal(...).reason(label)` from henad-graph's checker
+(`agents/henad-graph-sheet-check.md`), so a picker and the checker never disagree, and `groups_ui`
+draws it disabled with the reason as its tooltip. A value of a Calculate line of one operation (a
+field) refuses a phrase (`CALCULATE_TAKES_PLAIN_VALUES`) and a cell (`kind_needed`). A picker whose
+items are all refused still shows its empty words under them, such as `NO_PLACE` under the greyed
+values of a Move to. `control_picker` keeps the picker it built under the popup's id with "built",
+beside `CardState::fingerprint` (`fnv1a64` of the sheet's text, set as `card_pane` starts), and
+builds it again only once the sheet changes, since each reason reads the checker.
 `every_offered_value_the_checker_takes_and_every_greyed_one_it_refuses` puts each value of each slot
 picker of four starters in its slot through `apply_choice`: an offered value adds no error and
 lowers, a greyed one adds an error. `choose_when(context, otherwise)` lists the Boolean results as

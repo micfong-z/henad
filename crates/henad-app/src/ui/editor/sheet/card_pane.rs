@@ -57,13 +57,13 @@ use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKin
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, AddButton, AddItem, BLANK_MODEL_CARD, BUTTON_CARD_EMPTY, Blank,
     CONDITION_ARROW_TOOLTIP, ChipKind, DELETE_WHEN_TOOLTIP, DRAW_NEW_NUMBERS, DrawKind, FOR_EACH_BLANK_WORDS,
-    FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST, ONE_SIDED_RANGE, PartPlace,
-    PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip, SentencePart, Sentences,
-    add_inside_label, add_inside_name, add_value_name, card_header, condition_arrow_name, count_used_as_draw,
-    delete_line, for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name, line_count,
-    line_list_name, move_into_label, move_into_name, move_line_down, move_line_up, operation_words, otherwise_words,
-    remove_when_name, rename_field_name, rename_line, rename_result_name, result_name_taken, use_for_each_label,
-    use_for_each_name, use_instead_label, use_instead_name,
+    FOR_EACH_WORDS, FROM_WORD, FieldPlace, LAW, LineSelect, MOVE_DOWN_LAST, MOVE_UP_FIRST, ONE_SIDED_RANGE,
+    PHRASE_LEAD_TOOLTIP, PartPlace, PlaceTarget, PlacedPart, REMOVE_THIS_WHEN, SHARED_DRAW_GROUP, SentenceChip,
+    SentencePart, Sentences, add_inside_label, add_inside_name, add_value_name, card_header, condition_arrow_name,
+    count_used_as_draw, delete_line, for_each_optional_tooltip, for_each_words, from_tooltip, line_actions_name,
+    line_count, line_list_name, move_into_label, move_into_name, move_line_down, move_line_up, operation_words,
+    otherwise_words, remove_when_name, rename_field_name, rename_line, rename_result_name, result_name_taken,
+    use_for_each_label, use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP,
@@ -2070,6 +2070,10 @@ fn part_ui(
             response.on_hover_or_focus_text(&for_each_optional_tooltip(*draw))
         }
         SentencePart::ForEach(_) => text_control(ui, id, FOR_EACH_WORDS, &name, SENTENCE_ROW),
+        // A random value's words open the picker of its slot, whose Number box puts a number in its place.
+        SentencePart::PhraseLead(words) => {
+            text_control(ui, id, words.trim(), &name, SENTENCE_ROW).on_hover_or_focus_text(PHRASE_LEAD_TOOLTIP)
+        }
         _ => return,
     };
     gathered.focused |= response.has_focus();

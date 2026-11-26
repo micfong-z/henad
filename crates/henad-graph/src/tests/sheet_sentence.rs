@@ -708,6 +708,14 @@ fn every_wording_table_entry_equals_the_final_words() {
             "Expected a place in a slot, got a number.",
             sentence::as_sentence("expected a place in a slot, got a number"),
         ),
+        (
+            "Line 2: replace a random number between",
+            sentence::phrase_lead_name("Line 2", "a random number between"),
+        ),
+        (
+            "Press to choose another value, such as a typed number.",
+            fixed(sentence::PHRASE_LEAD_TOOLTIP),
+        ),
         ("Move to", fixed(sentence::move_owner(true))),
         ("Move by", fixed(sentence::move_owner(false))),
         ("Set Speed", sentence::set_owner("Speed")),

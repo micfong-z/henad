@@ -279,6 +279,7 @@ A Steer towards a value that reads such a summary adds nothing while the look fi
 To steer towards another value while the look finds no one, test the look's count in a row of a Choose.
 
 A value on a card over agents also takes the summaries of the looks above, as "Flockmates' centre", the cells picked above, and new values: a random number between two values, or a random direction of a length.
+Press the first words of a new value, such as "a random number between", to open its blank's picker again, where a typed number can take its place.
 A number also takes the length of a Vector property, as "length of my Velocity".
 Below the last line that changes a property, a value can take "my new Velocity", the value the changes above give it this tick.
 Above that line it is not offered.

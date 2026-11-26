@@ -177,6 +177,20 @@ impl Parts {
         }
     }
 
+    /// Turns the words that open the parts into a [`SentencePart::PhraseLead`] placed at the slot that holds them,
+    /// when the parts open with words.
+    fn lead_at_slot(&mut self) {
+        if let Some(first) = self.0.first_mut()
+            && let SentencePart::Text(words) = &mut first.part
+        {
+            first.part = SentencePart::PhraseLead(std::mem::take(words));
+            first.place = Some(PartPlace {
+                target: PlaceTarget::Slot(String::new()),
+                want: None,
+            });
+        }
+    }
+
     /// Merges every run of adjacent words into one part.
     fn merge_text(&mut self) {
         for placed in std::mem::take(&mut self.0) {
@@ -595,9 +609,18 @@ impl<'a> Sentences<'a> {
                 let mut parts = Parts::text("(");
                 parts.append(self.phrase(phrase, true));
                 parts.push(")");
+                if phrase.formula.as_deref().is_some_and(is_length_of_mine) {
+                    parts.lead_at_slot();
+                }
                 parts
             }
-            SheetValue::Phrase(phrase) => self.phrase(phrase, true),
+            SheetValue::Phrase(phrase) => {
+                let mut parts = self.phrase(phrase, true);
+                if matches!(phrase.kind, LineKind::RandomNumber | LineKind::RandomDirection) {
+                    parts.lead_at_slot();
+                }
+                parts
+            }
             SheetValue::List(items) => Parts::join(
                 items.iter().enumerate().map(|(index, item)| {
                     let mut parts = self.value_parts(item, about);
@@ -1476,4 +1499,14 @@ fn formula_tokens(formula: &str) -> Vec<String> {
         tokens.push(chars[start..index].iter().collect());
     }
     tokens
+}
+
+/// Returns whether `formula` is the length of a property of mine, as `length(my.velocity)`, the one formula a picker
+/// puts in a slot.
+fn is_length_of_mine(formula: &str) -> bool {
+    formula
+        .trim()
+        .strip_prefix("length(my.")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .is_some_and(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }

@@ -7,7 +7,7 @@
 use egui::{Key, Modifiers};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
-    LineKind, ParameterType, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetValue, Slot,
+    LineKind, ParameterType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::{
@@ -1430,5 +1430,58 @@ fn every_offered_value_the_checker_takes_and_every_greyed_one_it_refuses() {
     assert!(
         tried > 600 && refused > 300 && lowered > 200,
         "{tried} values tried, {refused} greyed and {lowered} lowered"
+    );
+}
+
+/// A random value put in a slot opens the slot's picker from its first words, and a typed number takes its place: a
+/// random number back to a number, and the length of a random direction, worked out as the length of my Velocity,
+/// back to a number too.
+#[test]
+fn a_random_value_returns_to_a_typed_number_from_its_first_words() {
+    use henad_graph::sheet::edit::slot_value;
+    use henad_graph::sheet::sentence::phrase_lead_name;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    let value = |harness: &Harness, line: &str, path: &str| {
+        let (_, line) = sheet(harness).document().line(line).expect("the line");
+        slot_value(line, path).cloned()
+    };
+    let number = |number: f64| Some(SheetValue::Literal(SheetLiteral::Number(number)));
+    click_on_line(&mut harness, "Line 6", "Min speed");
+    click_in(
+        &mut harness,
+        "Choose the lower number",
+        "a random number between … and …",
+    );
+    assert!(matches!(value(&harness, "l6", "minimum"), Some(SheetValue::Phrase(_))));
+    let lead = phrase_lead_name("Line 6", "a random number between");
+    click(&mut harness, &lead);
+    assert!(
+        is_open(&mut harness, "Choose the lower number"),
+        "the words open the slot's picker"
+    );
+    type_and_enter(&mut harness, "3");
+    assert_eq!(value(&harness, "l6", "minimum"), number(3.0));
+    assert!(named(&mut harness, &lead).is_empty());
+
+    let prefix = "Randomise headings line 1";
+    click(&mut harness, &phrase_lead_name(prefix, "(length of"));
+    assert!(is_open(&mut harness, "Choose a number"));
+    type_and_enter(&mut harness, "2");
+    assert_eq!(value(&harness, "l8", "value.length"), number(2.0));
+    // Set Velocity takes a vector, so its picker has no Number box, and the vector a property of mine.
+    click(&mut harness, &phrase_lead_name(prefix, "a random direction of length"));
+    assert!(is_open(&mut harness, "Choose a value"));
+    assert!(
+        named(&mut harness, NUMBER_BOX_HINT).is_empty(),
+        "a vector takes no typed number"
+    );
+    click_in(&mut harness, "Choose a value", "my Velocity");
+    assert_eq!(
+        value(&harness, "l8", "value"),
+        Some(SheetValue::Chip(SheetChip::My("velocity".to_owned())))
     );
 }

@@ -51,6 +51,10 @@ pub enum SentencePart {
     ForEachBlank(DrawKind),
     /// The words "for each" of a chance or a rate whose "for each" is on, before its count.
     ForEach(DrawKind),
+    /// The words that open a value a picker puts in a slot whole, such as "a random number between " or "(length of
+    /// ", placed at the slot. A card draws them as a control that opens the slot's picker, so a typed number can take
+    /// the value's place again. Plain text reads them as their words.
+    PhraseLead(String),
 }
 
 impl SentencePart {
@@ -58,9 +62,11 @@ impl SentencePart {
     pub fn text(&self) -> String {
         match self {
             Self::Select(_, words) if words.is_empty() => BLANK_TEXT.to_owned(),
-            Self::Text(words) | Self::Keyword(words) | Self::ResultName(words) | Self::Select(_, words) => {
-                words.clone()
-            }
+            Self::Text(words)
+            | Self::Keyword(words)
+            | Self::ResultName(words)
+            | Self::Select(_, words)
+            | Self::PhraseLead(words) => words.clone(),
             Self::ConditionWord(words) => (*words).to_owned(),
             Self::From => FROM_WORD.to_owned(),
             Self::Chip(chip) => chip.text(),

@@ -11,8 +11,9 @@ use henad_graph::sheet::sentence::{
     ALWAYS, ANY_STATE_ID, BLANK_TEXT, ChipKind, FOR_EACH_BLANK_WORDS, FOR_EACH_WORDS, LineSelect, OtherwiseRepeat,
     PartPlace, SentenceChip, SentencePart, Sentences, UNIT_PLACEHOLDER, USES_OWN_RESULT, always_name,
     for_each_change_name, for_each_optional_name, line_name, line_prefix, line_word, move_to_otherwise_notice,
-    move_to_otherwise_tooltip, otherwise_notice, otherwise_tooltip, otherwise_words, result_below_tooltip,
-    result_inside_tooltip, result_own_tooltip, sentence_text, uses_result_below, uses_result_inside,
+    move_to_otherwise_tooltip, otherwise_notice, otherwise_tooltip, otherwise_words, phrase_lead_name,
+    result_below_tooltip, result_inside_tooltip, result_own_tooltip, sentence_text, uses_result_below,
+    uses_result_inside,
 };
 use henad_graph::sheet::sentence::{COMPETING_WORD, competing_parts, competing_tooltip};
 
@@ -130,6 +131,11 @@ impl CardLine {
                 false,
             ),
             SentencePart::ForEach(_) => (FOR_EACH_WORDS.to_owned(), for_each_change_name(&self.prefix), false),
+            SentencePart::PhraseLead(words) => (
+                words.trim().to_owned(),
+                phrase_lead_name(&self.prefix, words.trim()),
+                false,
+            ),
             _ => return None,
         };
         Some(LineControl { visible, name, select })
