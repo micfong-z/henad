@@ -47,6 +47,8 @@ pub struct EventForm {
     pub message: Option<String>,
     /// Whether the Name field takes the focus on the next frame.
     focus_name: bool,
+    /// Whether the pane scrolls the form into view on the next frame, as it opens.
+    reveal: bool,
 }
 
 /// Draws the Agents section: the kind of agent's name, its number at the start and at most, the table of its
@@ -406,7 +408,11 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
     match &mut pane.event_form {
         Some(form) => {
             let mut close = false;
-            event_form(ui, document, form, &mut close, pending);
+            let drawn = ui.scope(|ui| event_form(ui, document, form, &mut close, pending));
+            // A form opened by "+ Add event" scrolls into view, since it can open below the pane's edge.
+            if std::mem::take(&mut form.reveal) {
+                pane.reveal = Some(drawn.response.rect);
+            }
             if close {
                 pane.event_form = None;
             }
@@ -417,6 +423,7 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
                     name: String::new(),
                     message: None,
                     focus_name: true,
+                    reveal: true,
                 });
             }
         }

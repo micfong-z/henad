@@ -12,7 +12,12 @@ apart. `sheet_pane` puts `REGION_GAP` 12 between sections. A section's "+ Add ..
 the `widgets::add_row_button` with no kind, except "+ Add property" while the sheet holds no
 property, which stays the primary `filled_button`. A form inside a section (property, measure,
 button, event) is `form_heading` in the semibold face, `Form` rows and `form_buttons` (Done, Cancel,
-then the property form's Delete, returning the presses), with no box of its own. The property,
+then the property form's Delete, returning the presses), with no box of its own. Each of the four
+scrolls into view in the frame it first draws (its `reveal` flag, set as it opens, puts its rect in
+`PaneState::reveal`, which the pane scrolls to once every section is drawn), since each can open
+below the pane's edge (`the_measure_event_and_button_forms_scroll_into_view_as_they_open`, the ants'
+"+ Add measure", "+ Add event", "Edit button Reset colony" and "+ Add button" at the bottom of a
+pane 800 points tall). The New parameter dialog is a modal window and needs no scroll. The property,
 button and event forms draw their Name field with `form_name_field` (at most `NAME_FIELD_WIDTH` 200,
 focused once on opening, Enter as Done for a button or an event), and every name check of the pane
 and the New parameter dialog goes through `widgets::name_taken`, case aside.

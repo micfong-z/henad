@@ -228,6 +228,8 @@ struct MeasureForm {
     event: Option<String>,
     /// Message of the last refused Done, `None` while none shows.
     message: Option<String>,
+    /// Whether the pane scrolls the form into view on the next frame, as it opens.
+    reveal: bool,
 }
 
 impl MeasureForm {
@@ -246,6 +248,7 @@ impl MeasureForm {
         Self {
             kind,
             property: first.map(|property| property.id.clone()),
+            reveal: true,
             ..Self::default()
         }
     }
@@ -269,6 +272,8 @@ struct ButtonForm {
     message: Option<String>,
     /// Whether the Name field takes the focus on the next frame.
     focus_name: bool,
+    /// Whether the pane scrolls the form into view on the next frame, as it opens.
+    reveal: bool,
 }
 
 impl ButtonForm {
@@ -282,6 +287,7 @@ impl ButtonForm {
             property: None,
             message: None,
             focus_name: true,
+            reveal: true,
         }
     }
 
@@ -306,6 +312,7 @@ impl ButtonForm {
             property,
             message: None,
             focus_name: true,
+            reveal: true,
         }
     }
 }

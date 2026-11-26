@@ -221,7 +221,11 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
     ui.add_space(6.0);
     if let Some(form) = &mut pane.measure_form {
         let mut close = false;
-        measure_form(ui, document, form, &mut close, pending);
+        let drawn = ui.scope(|ui| measure_form(ui, document, form, &mut close, pending));
+        // A form opened by "+ Add measure" scrolls into view, since it can open below the pane's edge.
+        if std::mem::take(&mut form.reveal) {
+            pane.reveal = Some(drawn.response.rect);
+        }
         if close {
             pane.measure_form = None;
         }

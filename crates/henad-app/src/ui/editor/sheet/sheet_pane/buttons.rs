@@ -136,7 +136,12 @@ pub(super) fn buttons(
                     .filter(|form| form.editing.as_deref() == Some(button.id.as_str()))
                 {
                     let mut close = false;
-                    button_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
+                    let drawn =
+                        ui.scope(|ui| button_form(ui, document, form, &mut close, &mut pane.delete_question, pending));
+                    // A form opened by Edit scrolls into view, since it can open below the pane's edge.
+                    if std::mem::take(&mut form.reveal) {
+                        pane.reveal = Some(drawn.response.rect);
+                    }
                     if close {
                         pane.button_form = None;
                     }
@@ -156,7 +161,11 @@ pub(super) fn buttons(
     match &mut pane.button_form {
         Some(form) if form.editing.is_none() => {
             let mut close = false;
-            button_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
+            let drawn = ui.scope(|ui| button_form(ui, document, form, &mut close, &mut pane.delete_question, pending));
+            // A form opened by "+ Add button" scrolls into view, since it can open below the pane's edge.
+            if std::mem::take(&mut form.reveal) {
+                pane.reveal = Some(drawn.response.rect);
+            }
             if close {
                 pane.button_form = None;
             }

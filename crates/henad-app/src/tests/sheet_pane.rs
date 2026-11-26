@@ -1983,6 +1983,78 @@ fn each_property_row_edits_and_deletes_its_property() {
     );
 }
 
+/// The measure, event and button forms of the ants open under a button at the bottom of the visible pane, below its
+/// edge, and each scrolls into view as it opens.
+#[test]
+fn the_measure_event_and_button_forms_scroll_into_view_as_they_open() {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::{
+        ADD_EVENT, EVENT_NAME_FIELD, MEASURE_PROPERTY_NAME, PROPERTY_NAME_FIELD, edit_button_name,
+    };
+
+    use crate::tests::panes::bounds_of;
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = egui::vec2(1600.0, 800.0);
+    // Bounds of the one node named `name` in the frame's tree, and of the Sheet pane.
+    let place = |harness: &mut Harness, name: &str| {
+        let nodes = harness.settle();
+        let pane = bounds_of(&nodes, Role::Group, "Sheet");
+        let found = nodes
+            .iter()
+            .filter(|node| node.label == name)
+            .find_map(|node| node.bounds)
+            .unwrap_or_else(|| panic!("no node is named {name}"));
+        (found, pane)
+    };
+    for (opens, field) in [
+        (ADD_MEASURE, MEASURE_PROPERTY_NAME),
+        (ADD_EVENT, EVENT_NAME_FIELD),
+        (&*edit_button_name("Reset colony"), BUTTON_NAME_FIELD),
+        (ADD_BUTTON, BUTTON_NAME_FIELD),
+    ] {
+        open_starter(&mut harness, "ants.toml");
+        // The wheel brings the button to the bottom of the visible pane, as a reader scrolling down meets it.
+        for _ in 0..4 {
+            let (button, pane) = place(&mut harness, opens);
+            let delta = pane.bottom() - 8.0 - button.bottom();
+            if delta.abs() < 2.0 {
+                break;
+            }
+            harness.frame(vec![egui::Event::PointerMoved(pane.center())]);
+            harness.frame(vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, delta),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            }]);
+            // The pane scrolls in an animation, which ends well within a second.
+            for _ in 0..60 {
+                harness.frame(Vec::new());
+            }
+        }
+        let (button, pane) = place(&mut harness, opens);
+        assert!(pane.y_range().contains(button.center().y), "{opens} is in view");
+        click(&mut harness, opens);
+        for _ in 0..60 {
+            harness.frame(Vec::new());
+        }
+        let (done, pane) = place(&mut harness, DONE);
+        assert!(
+            pane.y_range().contains(done.top()) && pane.y_range().contains(done.bottom()),
+            "{opens} opens a form whose Done scrolls into view: {done:?} in {pane:?}"
+        );
+        let (top, _) = place(&mut harness, field);
+        assert!(
+            pane.y_range().contains(top.top()),
+            "{opens}: the form's {field} is in view"
+        );
+        assert!(named(&mut harness, PROPERTY_NAME_FIELD).is_empty());
+    }
+}
+
 /// A table of properties with room for every column at its natural width shows the symbol of each property's type and
 /// its Edit and delete buttons. Short of room it gives up the buttons for a menu first, and then the symbols, which its
 /// Kind column names too. The parameters leave out their symbols short of room as well.
