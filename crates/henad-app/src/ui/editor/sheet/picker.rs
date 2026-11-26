@@ -1737,17 +1737,20 @@ pub fn calculate_edit(
     }
 }
 
-/// Returns `value` as a formula writes it: a parameter's id, `l2` for a result, `my.food` for a property of mine, or a
-/// number. A percent is written as its decimal.
-fn value_token(value: &SheetValue) -> Option<String> {
+/// Returns `value` as a formula writes it: a parameter's id, `l2` for a result, `l2.centre` for a part of a result or
+/// `l2.food` for a property of the cell it names, `my.food` and `my_new.food` for a property of mine, or a number. A
+/// percent is written as its decimal.
+///
+/// A phrase, such as a random number, has no such word and returns `None`.
+pub fn value_token(value: &SheetValue) -> Option<String> {
     match value {
         SheetValue::Chip(SheetChip::Param(id)) => Some(id.clone()),
-        SheetValue::Chip(SheetChip::Result {
-            line,
-            part: None,
-            property: None,
-        }) => Some(line.clone()),
+        SheetValue::Chip(SheetChip::Result { line, part, property }) => match part.as_ref().or(property.as_ref()) {
+            Some(tail) => Some(format!("{line}.{tail}")),
+            None => Some(line.clone()),
+        },
         SheetValue::Chip(SheetChip::My(id)) => Some(format!("my.{id}")),
+        SheetValue::Chip(SheetChip::MyNew(id)) => Some(format!("my_new.{id}")),
         SheetValue::Literal(literal @ (SheetLiteral::Number(_) | SheetLiteral::Percent(_))) => {
             literal.number().and_then(format_number)
         }

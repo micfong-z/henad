@@ -1227,3 +1227,61 @@ fn removing_a_summary_that_a_formula_reads_asks_first() {
     assert!(!is_open(&mut harness, REMOVE_SUMMARY_HEADING));
     assert_eq!(summaries(&harness), 1, "Remove removes the summary");
 }
+
+/// Each value of a Calculate line on a card over agents takes a part of a look above, its count among them, chosen
+/// from the value's picker as a typed number is.
+#[test]
+fn a_calculate_line_takes_the_parts_of_the_lines_above() {
+    use henad_graph::sheet::document::SummaryKind;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    let sheet_edit = |harness: &mut Harness, edit: SheetEdit| apply_sheet_edit(sheet_mut(harness), edit);
+    sheet_edit(
+        &mut harness,
+        SheetEdit::AddSummary {
+            line: "l1".to_owned(),
+            summary: SummaryKind::Count,
+        },
+    );
+    sheet_edit(
+        &mut harness,
+        SheetEdit::AddLine {
+            card: "bird_tick".to_owned(),
+            inside: None,
+            line: Box::new(SheetLine::new(LineKind::Calculate)),
+        },
+    );
+    let formula = |harness: &Harness| {
+        let document = sheet(harness).document();
+        let card = &document.cards[0];
+        let last = card.lines.last().expect("the Calculate line");
+        card.line_tables[last].formula.clone()
+    };
+    let first_blank = |harness: &mut Harness| {
+        named(harness, "Line 8: choose a number")
+            .iter()
+            .filter_map(|node| node.bounds)
+            .min_by(|a, b| a.left().total_cmp(&b.left()))
+            .expect("a value's blank")
+            .center()
+    };
+    let position = first_blank(&mut harness);
+    harness.click_at(position);
+    click_in(&mut harness, "Choose a number", "Flockmates' count");
+    assert_eq!(formula(&harness), None, "one value waits in the draft");
+    let position = first_blank(&mut harness);
+    harness.click_at(position);
+    type_and_enter(&mut harness, "2");
+    assert_eq!(formula(&harness).as_deref(), Some("l1.count_summary + 2"));
+    assert_eq!(
+        line_text(&mut harness, "Line 8"),
+        "Flockmates' count plus 2 = Flockmates' count plus 2"
+    );
+    // A written value takes a part of another look, through its chip.
+    click_on_line(&mut harness, "Line 8", "2");
+    click_in(&mut harness, "Choose a number", "Too close's push");
+    assert_eq!(formula(&harness).as_deref(), Some("l1.count_summary + l2.push"));
+}

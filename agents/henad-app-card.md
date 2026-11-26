@@ -181,8 +181,11 @@ turns blank), `ChooseCondition` for a form, and `SetField` for a field (an old s
 property also sets the line's property). A Calculate line of one operation keeps the values chosen
 while its formula is incomplete in `CardState::drafts` (`CalcDraft`, `+` until another operation is
 chosen), shown as chips, and writes the formula with `Formula` once both values are chosen
-(`calculate_edit`, `value_token`). A percent operand is written as its decimal and reads as one.
-Only the line's own values and operation take a choice: a formula inside a slot has no places, and
+(`calculate_edit`, `value_token`: a part of a result as `l1.centre`, a property of a cell picked
+above as `l3.food`, "my new" as `my_new.velocity`, held by
+`a_calculate_line_takes_the_parts_of_the_lines_above`). A percent operand is written as its decimal
+and reads as one. Only the line's own values and operation take a choice: a formula inside a slot
+has no places, and
 the guards in `field_choice`, `select_edit` and `draft_value` hold an empty phrase path. "New
 parameter…" opens the New parameter dialog for the place (a chance's or a rate's values, the
 rate's "per [unit]" as its Unit), drawn from the next frame, since the click that chose it would
