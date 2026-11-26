@@ -739,6 +739,20 @@ fn every_wording_table_entry_equals_the_final_words() {
              lines.",
             fixed(sentence::FORMULA_PART_TOOLTIP),
         ),
+        ("Add another value", fixed(sentence::ADD_VALUE_TOOLTIP)),
+        ("Add another row", fixed(sentence::ADD_ROW_TOOLTIP)),
+        ("Add another summary", fixed(sentence::ADD_SUMMARY_TOOLTIP)),
+        (
+            "Change or remove this summary",
+            fixed(sentence::CHANGE_OR_REMOVE_SUMMARY),
+        ),
+        ("including me", fixed(sentence::INCLUDING_ME)),
+        ("not including me", fixed(sentence::NOT_INCLUDING_ME)),
+        ("Line 1: including me", sentence::LineSelect::IncludeMe.name("Line 1")),
+        (
+            "Colour of Status Alive: Green",
+            sentence::state_swatch_name("Status", "Alive", "Green"),
+        ),
         ("Move to", fixed(sentence::move_owner(true))),
         ("Move by", fixed(sentence::move_owner(false))),
         ("Set Speed", sentence::set_owner("Speed")),
@@ -2457,6 +2471,45 @@ fn the_words_for_each_are_a_part_placed_at_its_count() {
     assert_eq!(
         sentence_text(&parts),
         "Become Infected from Susceptible, with chance Infection chance for each infected neighbour"
+    );
+}
+
+/// The words "including me" of a look at agents that counts the agent itself are a select placed at the look's
+/// `include_me`, and the sentence reads as it did with them as words.
+#[test]
+fn including_me_is_a_select_at_the_looks_include_me_and_the_sentence_reads_the_same() {
+    let bounded = document("bounded_confidence.toml");
+    let sentences = Sentences::new(&bounded);
+    let placed = sentences.placed_parts("l1", &[]);
+    let select = placed
+        .iter()
+        .find(|placed| matches!(placed.part, SentencePart::Select(sentence::LineSelect::IncludeMe, _)))
+        .expect("line 1 counts the agent itself");
+    assert_eq!(
+        select.part,
+        SentencePart::Select(sentence::LineSelect::IncludeMe, sentence::INCLUDING_ME.to_owned())
+    );
+    assert_eq!(
+        select.place.as_ref().map(|place| &place.target),
+        Some(&PlaceTarget::Field {
+            phrase: String::new(),
+            field: FieldPlace::IncludeMe,
+        })
+    );
+    let parts: Vec<SentencePart> = placed.into_iter().map(|placed| placed.part).collect();
+    assert!(
+        sentence_text(&parts).starts_with("Like-minded = look at people within Hearing range including me, only"),
+        "{}",
+        sentence_text(&parts)
+    );
+    // A look that leaves the agent out shows no select.
+    let boids = document("boids.toml");
+    let sentences = Sentences::new(&boids);
+    assert!(
+        !sentences
+            .line_parts("l1", &[])
+            .iter()
+            .any(|part| matches!(part, SentencePart::Select(sentence::LineSelect::IncludeMe, _)))
     );
 }
 

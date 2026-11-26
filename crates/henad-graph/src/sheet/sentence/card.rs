@@ -4,6 +4,7 @@
 use henad_core::metadata::TimeUnit;
 
 use super::grammar::{number_list, plural};
+use super::pickers::INCLUDING_ME;
 use crate::sheet::document::{Around, ChipRelation, CompareTest, LineKind};
 
 /// Text of a blank in a sentence written as plain text, and in an automatic name that holds a blank.
@@ -1003,11 +1004,13 @@ pub enum LineSelect {
     WhichCell,
     /// Kind of the summary at this index of a look at agents, the index counted from 0.
     LookSummary(usize),
+    /// Whether a look at agents counts the agent itself, shown while it does.
+    IncludeMe,
 }
 
 impl LineSelect {
     /// Every select of fixed words. [`Self::LookSummary`] takes the summary's number in its name.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::UnitOfTime,
         Self::Comparison,
         Self::WhichCells,
@@ -1017,6 +1020,7 @@ impl LineSelect {
         Self::MoveMode,
         Self::Pick,
         Self::WhichCell,
+        Self::IncludeMe,
     ];
 
     /// Words of the select, after the line prefix in its accessible name. A summary's select reads "summary" before
@@ -1033,6 +1037,7 @@ impl LineSelect {
             Self::Pick => "most, least or random",
             Self::WhichCell => "which cell",
             Self::LookSummary(_) => "summary",
+            Self::IncludeMe => INCLUDING_ME,
         }
     }
 
@@ -1049,6 +1054,7 @@ impl LineSelect {
             Self::Pick => "most, least or random",
             Self::WhichCell => "which cell",
             Self::LookSummary(_) => "a summary",
+            Self::IncludeMe => "whether to include me",
         }
     }
 
@@ -1108,6 +1114,9 @@ pub fn for_each_change_name(prefix: &str) -> String {
 pub fn add_value_name(prefix: &str) -> String {
     format!("{prefix}: add another value")
 }
+
+/// Tooltip of the "+" after the last value of a list.
+pub const ADD_VALUE_TOOLTIP: &str = "Add another value";
 
 /// Returns the label of the button of the "for each" prompt, such as "Add for each infected neighbour", where `count`
 /// is the count's words after "for each" from [`for_each_words`](super::for_each_words).

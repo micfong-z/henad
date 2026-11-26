@@ -102,10 +102,16 @@ pub fn add_summary_name(prefix: &str) -> String {
     format!("{prefix}: add another summary")
 }
 
+/// Tooltip of the "+" after the summaries of a look at agents.
+pub const ADD_SUMMARY_TOOLTIP: &str = "Add another summary";
+
 /// Returns the accessible name of the "+" after the rows of a Choose line, such as "Line 7: add another row".
 pub fn add_choose_row_name(prefix: &str) -> String {
     format!("{prefix}: add another row")
 }
+
+/// Tooltip of the "+" after the rows of a Choose line.
+pub const ADD_ROW_TOOLTIP: &str = "Add another row";
 
 /// Returns the accessible name of the "×" after row `row` of a Choose line, counted from 1, such as "Line 7: remove
 /// row 2".
@@ -126,6 +132,15 @@ pub fn summary_item(kind: SummaryKind) -> String {
 
 /// Item of a summary's picker that removes the summary.
 pub const REMOVE_SUMMARY: &str = "Remove this summary";
+
+/// Tooltip of a summary's select while the look holds another summary, which the select can remove it for.
+pub const CHANGE_OR_REMOVE_SUMMARY: &str = "Change or remove this summary";
+
+/// Words of a look at agents that counts the agent itself, and the option of their select that keeps it counted.
+pub const INCLUDING_ME: &str = "including me";
+
+/// Option of the select of [`INCLUDING_ME`] that leaves the agent itself out of a look at agents.
+pub const NOT_INCLUDING_ME: &str = "not including me";
 
 /// Returns the tool of a look at agents' menu that counts the agent itself among those it looks at, such as "Include
 /// me in line 1", where `word` is the line word.

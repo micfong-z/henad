@@ -88,7 +88,9 @@ otherwise no", "the 3 by 3 block including me", "for each infected neighbour" th
 percent as typed ("30%"), a Compare line's name hidden while it equals its sentence, a Calculate
 formula's operators as "plus", "minus", "times", "divided by" and "to the power of" with a call's
 parentheses left out and a Calculate inside a slot in parentheses. Agent lines keep those
-conventions, "including me" for `include_me`, an all of inside a slot joined by "and" with its draws
+conventions, "including me" for `include_me` (`INCLUDING_ME`, a `LineSelect::IncludeMe` placed at
+`FieldPlace::IncludeMe`, whose words read as they did before it was a select,
+`including_me_is_a_select_at_the_looks_include_me_and_the_sentence_reads_the_same`), an all of inside a slot joined by "and" with its draws
 after commas. A state chip that another States property also names reads "Status Alive".
 `literal_words` is public for an editor field that shows a literal, and `read_typed_number` reads a
 typed number back (a trailing "%" makes a percent, "inf" and "nan" are refused), with

@@ -68,7 +68,8 @@ use henad_graph::sheet::sentence::{
     use_for_each_label, use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, FORMULA_PART_TOOLTIP, RANDOM_VALUE_GROUP,
+    ADD_ROW_TOOLTIP, ADD_SUMMARY_TOOLTIP, ADD_VALUE_TOOLTIP, CHANGE_OR_REMOVE_SUMMARY, CHANGE_TO_CHANCE,
+    CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, FORMULA_PART_TOOLTIP, RANDOM_VALUE_GROUP,
     REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
     comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
     long_tick_note, rate_grow_prompt, tick_set_notice,
@@ -87,9 +88,10 @@ use super::delete_question::{DeleteAnswer, DeleteQuestion};
 use super::help::{Help, help_mark};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
-    calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mark_refusals,
-    mode_options, operation_options, phrase_of, pick_options, picker_for, read_property, summary_options,
-    summary_picker, takes_ground_states, typed_text, unit_options, value_at, which_options,
+    calculate_edit, choose_when, comparison_options, include_me_options, list_len, look_summary_options,
+    looked_at_picker, mark_refusals, mode_options, operation_options, phrase_of, pick_options, picker_for,
+    read_property, summary_options, summary_picker, takes_ground_states, typed_text, unit_options, value_at,
+    which_options,
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
@@ -2152,7 +2154,13 @@ fn part_ui(
                 }
                 _ => words.clone(),
             };
-            select_control(ui, id, select_words(*select, &words), &name, words.is_empty())
+            let response = select_control(ui, id, select_words(*select, &words), &name, words.is_empty());
+            // A summary's select removes it too while the look holds another, which its words do not show.
+            if matches!(select, LineSelect::LookSummary(_)) && drawing.context.line.summaries.len() > 1 {
+                response.on_hover_or_focus_text(CHANGE_OR_REMOVE_SUMMARY)
+            } else {
+                response
+            }
         }
         SentencePart::Always => {
             text_control(ui, id, ALWAYS, &name, SENTENCE_ROW).on_hover_or_focus_text(ALWAYS_TOOLTIP)
@@ -2492,7 +2500,8 @@ fn add_value_ui(
     };
     let id = state.control_id(&drawing.line.id, &place.target, 0);
     ui.add_space(4.0);
-    let response = text_control(ui, Some(id), "+", &add_value_name(&drawing.line.prefix), SENTENCE_ROW);
+    let response = text_control(ui, Some(id), "+", &add_value_name(&drawing.line.prefix), SENTENCE_ROW)
+        .on_hover_or_focus_text(ADD_VALUE_TOOLTIP);
     gathered.focused |= response.has_focus();
     let blank = SentencePart::Blank(place.want.unwrap_or(Blank::NumberList));
     control_picker(ui, drawing, place, &blank, &response, id, state, gathered, pending);
@@ -2518,7 +2527,8 @@ fn add_row_ui(
         "+",
         &add_choose_row_name(&drawing.line.prefix),
         SENTENCE_ROW,
-    );
+    )
+    .on_hover_or_focus_text(ADD_ROW_TOOLTIP);
     gathered.focused |= response.has_focus();
     control_picker(
         ui,
@@ -2572,7 +2582,8 @@ fn add_summary_ui(
     let target = PlaceTarget::Slot("summaries".to_owned());
     let id = state.control_id(&line.id, &target, 3);
     ui.add_space(4.0);
-    let response = text_control(ui, Some(id), "+", &add_summary_name(&line.prefix), SENTENCE_ROW);
+    let response = text_control(ui, Some(id), "+", &add_summary_name(&line.prefix), SENTENCE_ROW)
+        .on_hover_or_focus_text(ADD_SUMMARY_TOOLTIP);
     gathered.focused |= response.has_focus();
     let popup_id = id.with("picker");
     if !Popup::is_id_open(ui.ctx(), popup_id) && !response.clicked() {
@@ -2899,6 +2910,10 @@ fn select_popup(
             field: FieldPlace::LookSummary(index),
             ..
         } => look_summary_options(*index, line.summaries.len() > 1),
+        PlaceTarget::Field {
+            field: FieldPlace::IncludeMe,
+            ..
+        } => include_me_options(),
         _ => Vec::new(),
     };
     // The current option stays open, so the way back from a refused sheet is never greyed.
@@ -2986,6 +3001,7 @@ fn select_edit(
         SelectOption::Test(test) => LineField::Test(Some(test)),
         SelectOption::Around(around) => LineField::Around(Some(around)),
         SelectOption::Unit(unit) => LineField::RateUnit(Some(unit)),
+        SelectOption::IncludeMe(include) => LineField::IncludeMe(Some(include)),
         SelectOption::Summary(kind) => {
             let mut summary = line.summaries.first()?.clone();
             summary.summary = Some(kind);

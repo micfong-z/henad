@@ -119,7 +119,8 @@ random number between", tooltip `PHRASE_LEAD_TOOLTIP`) at the slot's place, so i
 Number box put a number back in its place
 (`a_random_value_returns_to_a_typed_number_from_its_first_words`). After the last item of a list,
 `add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for one item past the
-end. `CardLine::control` returns each control's visible words and name, which the
+end. Each "+" of the card shows what it adds under the pointer and on keyboard focus:
+`ADD_VALUE_TOOLTIP`, `ADD_ROW_TOOLTIP` and `ADD_SUMMARY_TOOLTIP`. `CardLine::control` returns each control's visible words and name, which the
 label-in-name tests read. Hovering or focusing a result chip or "otherwise" highlights the lines it
 names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours, a note's button a
 `note_button`. The add buttons (`add_buttons_ui`) are `add_row_button`s, each with a square of its
@@ -360,9 +361,15 @@ what the checker asks of a template: a look at agents the card's kind, `include_
 cells, a Look at a cell `Here`, Steer and Move a mode, a Choose one empty row. Selects:
 `mode_options` (by and towards for Steer, by and to for Move), `pick_options`, `which_options`, and
 `look_summary_options` per summary (`LOOK_SUMMARIES`, "Remove this summary" running `DeleteSummary`
-while two or more are left, and a count blanks its value). A removal that blanks a line that reads
-the summary waits on the dialog titled `REMOVE_SUMMARY_HEADING`, with `lost_question` and Remove
-(`removing_a_summary_that_lines_read_asks_first`, in `src/tests/sheet_agent_lines.rs`). `add_summary_ui` draws "+" named
+while two or more are left, when the select takes `CHANGE_OR_REMOVE_SUMMARY` as its tooltip, and a
+count blanks its value), and `include_me_options` for the words `INCLUDING_ME` of a look at agents
+that counts me, a select (`LineSelect::IncludeMe` at `FieldPlace::IncludeMe`) whose
+`NOT_INCLUDING_ME` runs `SetField` `IncludeMe(Some(false))` and takes the words away, as the line
+menu's `leave_me_out_tool` does
+(`the_plus_buttons_say_what_they_add_and_including_me_is_a_select`). A removal that blanks a line
+that reads the summary waits on the dialog titled `REMOVE_SUMMARY_HEADING`, with `lost_question`
+and Remove (`removing_a_summary_that_lines_read_asks_first`, in `src/tests/sheet_agent_lines.rs`).
+`add_summary_ui` draws "+" named
 `add_summary_name` after a look's summaries, opening `summary_picker` (`CHOOSE_A_SUMMARY`), whose
 choice runs `AddSummary` and opens the new summary's value. `add_row_ui` draws "+" named
 `add_choose_row_name` after a Choose line, a value picker at `row.N.value` that `SetSlot` appends,
@@ -387,8 +394,8 @@ line cannot take, through `refusals::change` in the line's own place, and "the c
 while `refusals::cell_ahead` refuses it. The current option is never greyed, so a refused line can
 always go back. `the_add_menus_and_selects_grey_each_choice_the_build_refuses_with_its_reason` (in
 `src/tests/sheet_agent_lines.rs`) holds each greyed item and its tooltip, and that a weak item adds
-nothing. `add_summary_ui` opens the new summary's value, except for a count, which has none. The author's own `note` under a line draws
-last, in grey (`author_note`).
+nothing. `add_summary_ui` opens the new summary's value, except for a count, which has none. The
+author's own `note` under a line draws last, in grey (`author_note`).
 
 `src/tests/sheet_agent_lines.rs` holds
 `a_blank_agent_model_builds_the_random_walk_with_its_lines_and_equals_the_starter` and

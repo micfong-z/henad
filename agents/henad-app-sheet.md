@@ -185,7 +185,10 @@ taken, and plotted as `event_count_measure`). Colours: "Colour cells by" a selec
 property and None (`colors_of` in `agents/henad-app-sheet-pane.md`, through the dialog that asks
 first when the rule replaced holds shades), `color_rule_edit` writing `by_state` or `shaded_rule`
 (blue from 0 to 1, or the previous shading's hue and ends),
-swatches under a States property, and `shading_ui` for a Number property: `SHADE` select of
+under a States property a `color_button` per state named `state_swatch_name` ("Colour of Health
+Infected: Red", the property's name keeping it apart from a measure named as the state) beside the
+state's weak name, running `Recolor` (`a_states_swatch_under_colours_recolours_the_state`), and
+`shading_ui` for a Number property: `SHADE` select of
 `SHADE_COLORS` over `ShadeHue::ALL`, a gradient of `ShadeHue::ends` in 16 bands, and `SHADE_FROM`
 [`DARKEST_NAME`] `SHADE_DARK_TO` [`LIGHTEST_NAME`] `SHADE_LIGHT`, the ends left out read as 0 and 1,
 and a value equal to the other end refused with `SHADE_ENDS_EQUAL` (a darkest value above the

@@ -12,7 +12,7 @@ use super::grammar::{lower_first, plural, possessive, thing_word, upper_first};
 use super::parts::{
     ChipKind, FieldPlace, PartPlace, PlaceTarget, PlacedPart, SentenceChip, SentencePart, sentence_text,
 };
-use super::pickers::{ANY_STATE, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE};
+use super::pickers::{ANY_STATE, INCLUDING_ME, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE};
 use super::rates::for_each_words;
 use crate::sheet::check::governing_property;
 use crate::sheet::document::{
@@ -1162,7 +1162,12 @@ impl<'a> Sentences<'a> {
                 let mut parts = Parts::text(&format!("{thing} within "));
                 parts.append(self.slot_parts(&line.distance, None, Blank::Number, "distance"));
                 if line.include_me == Some(true) {
-                    parts.push(" including me");
+                    parts.push(" ");
+                    parts.append(Parts::select(
+                        LineSelect::IncludeMe,
+                        INCLUDING_ME,
+                        FieldPlace::IncludeMe,
+                    ));
                 }
                 parts
             }

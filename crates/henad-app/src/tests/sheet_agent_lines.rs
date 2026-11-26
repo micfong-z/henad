@@ -13,10 +13,11 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::remove_choose_row_name;
 use henad_graph::sheet::sentence::{
-    ADD_BUTTON, AHEAD_NEEDS_CELLS, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER,
-    DONE, DrawKind, FORMULA_PART_TOOLTIP, LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES,
-    NO_STATES, NOT_YET_AGENT_WALLS, NOT_YET_BLOCKED_MOVE_BY, NOT_YET_REPEAT_CHANGE, NUMBER_BOX_HINT, OR_A_NEW_VALUE,
-    PlaceTarget, Sentences, add_property_name, add_summary_name, blocked_state_name, moved_by_already,
+    ADD_BUTTON, ADD_ROW_TOOLTIP, ADD_SUMMARY_TOOLTIP, ADD_VALUE_TOOLTIP, AHEAD_NEEDS_CELLS, ARROW_KIND, AddButton,
+    BUTTON_NAME_FIELD, Blank, CHANGE_OR_REMOVE_SUMMARY, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
+    FORMULA_PART_TOOLTIP, INCLUDING_ME, LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES,
+    NO_STATES, NOT_INCLUDING_ME, NOT_YET_AGENT_WALLS, NOT_YET_BLOCKED_MOVE_BY, NOT_YET_REPEAT_CHANGE, NUMBER_BOX_HINT,
+    OR_A_NEW_VALUE, PlaceTarget, Sentences, add_property_name, add_summary_name, blocked_state_name, moved_by_already,
     moved_to_already, run_once, sheet_parameter_name_field, steered_already, value_field_name, value_slider_name,
 };
 
@@ -1215,6 +1216,76 @@ fn refused_with(harness: &mut Harness, dialog: Option<&str>, label: &str, toolti
         texts.iter().any(|text| text == tooltip),
         "{label} shows the tooltip {tooltip}: {texts:?}"
     );
+}
+
+/// Returns the accessible texts of `harness` while a pointer rests on the one node named `label`, its tooltip among
+/// them.
+fn texts_at_rest(harness: &mut Harness, label: &str) -> Vec<String> {
+    let nodes = harness.settle();
+    let found: Vec<_> = nodes.iter().filter(|node| node.label == label).collect();
+    assert_eq!(found.len(), 1, "one control reads {label}: {found:?}");
+    let centre = found[0].bounds.expect("bounds").center();
+    harness.frame(vec![egui::Event::PointerMoved(centre)]);
+    // A tooltip shows once the pointer has rested past egui's delay.
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    harness.accessible_texts()
+}
+
+/// Each "+" of a card says what it adds under the pointer, a summary's select says it removes the summary while the
+/// look holds another, and the words "including me" are a select that leaves the agent out, one step of Undo.
+#[test]
+fn the_plus_buttons_say_what_they_add_and_including_me_is_a_select() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    let hovered = [
+        ("game_of_life.toml", "Line 3: add another value", ADD_VALUE_TOOLTIP),
+        ("ants.toml", "Line 7: add another row", ADD_ROW_TOOLTIP),
+        (
+            "bounded_confidence.toml",
+            "Line 1: add another summary",
+            ADD_SUMMARY_TOOLTIP,
+        ),
+        ("boids.toml", "Line 1: summary 1", CHANGE_OR_REMOVE_SUMMARY),
+    ];
+    for (file, label, tooltip) in hovered {
+        open_starter(&mut harness, file);
+        let texts = texts_at_rest(&mut harness, label);
+        assert!(
+            texts.iter().any(|text| text == tooltip),
+            "{label} shows {tooltip}: {texts:?}"
+        );
+    }
+    open_starter(&mut harness, "bounded_confidence.toml");
+    let texts = texts_at_rest(&mut harness, "Line 1: summary 1");
+    assert!(
+        !texts.iter().any(|text| text == CHANGE_OR_REMOVE_SUMMARY),
+        "a look's only summary cannot be removed"
+    );
+
+    // "including me" is a select of bounded confidence's line 1, and "not including me" leaves the agent out.
+    let starter = text(&harness);
+    let select = "Line 1: including me";
+    assert!(
+        harness
+            .settle()
+            .iter()
+            .any(|node| node.label == select && node.value == INCLUDING_ME),
+        "line 1 shows its select"
+    );
+    click(&mut harness, select);
+    click(&mut harness, NOT_INCLUDING_ME);
+    let (_, line) = sheet(&harness).document().line("l1").expect("line 1");
+    assert_eq!(line.include_me, Some(false));
+    assert!(
+        named(&mut harness, select).is_empty(),
+        "a look that leaves me out reads no select"
+    );
+    click(&mut harness, "Undo");
+    assert_eq!(text(&harness), starter, "one Undo includes me again");
+    assert_controls_hold_their_words(&mut harness);
 }
 
 /// Returns whether the one node of `harness` named `label` inside the dialog `dialog` is enabled.

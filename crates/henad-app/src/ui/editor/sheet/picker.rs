@@ -36,10 +36,11 @@ use henad_graph::sheet::sentence::{
     shared_state_name, this_cells_property, when_lead,
 };
 use henad_graph::sheet::sentence::{
-    AddItem, CALCULATE_TAKES_PLAIN_VALUES, CELL_WORDS, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD,
-    LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT, NO_GROUND_PROPERTY, NO_PLACE, NO_PROPERTY, NUMBER_WORDS, OR_A_NEW_VALUE,
-    REMOVE_SUMMARY, SUMMARIES, each_looked_at, kind_needed, length_of_item, my_new_detail, my_new_property_item,
-    relation_words, summary_item, their_property_item, this_things_properties, this_things_property,
+    AddItem, CALCULATE_TAKES_PLAIN_VALUES, CELL_WORDS, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, INCLUDING_ME,
+    LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT, NO_GROUND_PROPERTY, NO_PLACE, NO_PROPERTY, NOT_INCLUDING_ME,
+    NUMBER_WORDS, OR_A_NEW_VALUE, REMOVE_SUMMARY, SUMMARIES, each_looked_at, kind_needed, length_of_item,
+    my_new_detail, my_new_property_item, relation_words, summary_item, their_property_item, this_things_properties,
+    this_things_property,
 };
 
 use super::widgets::{
@@ -1408,6 +1409,8 @@ pub enum SelectOption {
     LookSummary(usize, SummaryKind),
     /// "Remove this summary" in the select of the summary at an index.
     RemoveSummary(usize),
+    /// Whether a look at agents counts the agent itself.
+    IncludeMe(bool),
 }
 
 /// Returns the options of the select of a Steer line's mode, "by" and "towards", or of a Move line's, "by" and "to",
@@ -1438,6 +1441,15 @@ pub fn which_options() -> Vec<(String, SelectOption)> {
     .into_iter()
     .map(|(words, which)| (words.to_owned(), SelectOption::Which(which)))
     .collect()
+}
+
+/// Returns the options of the select of a look at agents that counts the agent itself: "including me", which keeps it
+/// counted, and "not including me", which leaves it out.
+pub fn include_me_options() -> Vec<(String, SelectOption)> {
+    vec![
+        (INCLUDING_ME.to_owned(), SelectOption::IncludeMe(true)),
+        (NOT_INCLUDING_ME.to_owned(), SelectOption::IncludeMe(false)),
+    ]
 }
 
 /// Returns the options of the select of the summary at `index` of a look at agents: each way to sum the agents up,

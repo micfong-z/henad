@@ -164,6 +164,8 @@ pub enum FieldPlace {
     Event,
     /// Kind of the summary at this index of a look at agents, the index counted from 0.
     LookSummary(usize),
+    /// Whether a look at agents counts the agent itself, shown while it does.
+    IncludeMe,
 }
 
 impl PlaceTarget {

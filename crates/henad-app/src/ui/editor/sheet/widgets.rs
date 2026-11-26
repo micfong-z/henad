@@ -1550,6 +1550,9 @@ pub const PICKER_WIDTH: f32 = 300.0;
 /// Side in points of a colour swatch button.
 const SWATCH_SIDE: f32 = 14.0;
 
+/// Width in points of a swatch button: its square and 2 points either side.
+pub const SWATCH_BUTTON_WIDTH: f32 = SWATCH_SIDE + 4.0;
+
 /// Width in points of the New parameter dialog's content.
 const DIALOG_WIDTH: f32 = 380.0;
 
@@ -2228,7 +2231,7 @@ pub fn color_button(ui: &mut Ui, name: &str, color: Color) -> Option<Color> {
 /// The outline is gray 700, the theme's hover outline under the pointer and the selection's outline while the picker it
 /// opens is `open`. Keyboard focus draws the focus outline.
 fn swatch_button(ui: &mut Ui, color: Color32, name: &str, open: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH_SIDE + 4.0, CHIP_HEIGHT), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(SWATCH_BUTTON_WIDTH, CHIP_HEIGHT), Sense::click());
     response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
     if ui.is_rect_visible(rect) {
         let square = Rect::from_center_size(rect.center(), Vec2::splat(SWATCH_SIDE));

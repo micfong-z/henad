@@ -614,6 +614,14 @@ pub fn color_button_name(subject: &str, color: &str) -> String {
     format!("Colour of {subject}: {color}")
 }
 
+/// Returns the accessible name of the swatch under Colours that sets the colour of the state `state` of `property`,
+/// such as "Colour of Status Alive: Green".
+///
+/// The property's name keeps it apart from a measure named as the state.
+pub fn state_swatch_name(property: &str, state: &str, color: &str) -> String {
+    color_button_name(&format!("{property} {state}"), color)
+}
+
 /// Returns the accessible name of the button that removes `measure`, such as "Remove measure Alive".
 pub fn remove_measure_name(measure: &str) -> String {
     format!("Remove measure {measure}")

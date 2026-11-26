@@ -5,9 +5,11 @@ use egui::{CornerRadius, Id, Rect, Sense, Ui, vec2};
 use henad_graph::sheet::document::{
     CELLS_ID, ColorRule, ColorRuleKind, GROUND_ID, MadeOf, PropertyType, ShadeHue, SheetDocument, SheetProperty,
 };
-use henad_graph::sheet::edit::SheetEdit;
+use henad_graph::sheet::edit::{SheetEdit, SheetItem};
 use henad_graph::sheet::format_number;
-use henad_graph::sheet::sentence::{BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_BY_NOTHING, COLOR_GROUND_BY};
+use henad_graph::sheet::sentence::{
+    BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_BY_NOTHING, COLOR_GROUND_BY, state_swatch_name,
+};
 use henad_graph::sheet::sentence::{CHANGE, CHANGE_COLORS_HEADING};
 use henad_graph::sheet::sentence::{
     COLOR_CELLS_BY, DARKEST_NAME, LIGHTEST_NAME, SHADE, SHADE_COLORS, SHADE_DARK_TO, SHADE_ENDS_EQUAL, SHADE_FROM,
@@ -16,12 +18,12 @@ use henad_graph::sheet::sentence::{
 
 use super::layout::{Form, ITEM_GAP, text_width, wrapped_line};
 use super::parameters::typed_number;
-use super::starts::STATE_SWATCH_WIDTH;
 use super::{FIELD_WIDTH, GRADIENT_BANDS, GRADIENT_WIDTH, Pending, SWATCH_SIDE, measured_thing, select};
 use super::{PaneState, edit_or_ask};
 use crate::ui::editor::sheet::properties_of;
 use crate::ui::editor::sheet::widgets::{
-    OverlayItem, TypeSymbol, color32, commit_number, field_message, message_ui, swatch_ui, type_symbols_shown,
+    OverlayItem, SWATCH_BUTTON_WIDTH, TypeSymbol, color_button, color_name, commit_number, field_message, message_ui,
+    type_symbols_shown,
 };
 
 /// Returns the colour a number shaded in `hue` takes at `share` of the way from its darkest value to its lightest.
@@ -198,12 +200,24 @@ fn colors_of(
                     // the next line by hand.
                     let mut first = true;
                     for state in &chosen.states {
-                        let width = STATE_SWATCH_WIDTH + text_width(ui, &state.name);
+                        let width = SWATCH_BUTTON_WIDTH + ui.spacing().item_spacing.x + text_width(ui, &state.name);
                         if !first && width > ui.available_size_before_wrap().x {
                             ui.end_row();
                         }
                         first = false;
-                        swatch_ui(ui, color32(state.color));
+                        // The swatch opens "Choose a colour", as the state's swatch in the property form does.
+                        let name = state_swatch_name(&chosen.name, &state.name, color_name(state.color));
+                        if let Some(color) = color_button(ui, &name, state.color)
+                            && color != state.color
+                        {
+                            pending.push(Pending::one(SheetEdit::Recolor {
+                                item: SheetItem::State {
+                                    property: chosen.id.clone(),
+                                    state: state.id.clone(),
+                                },
+                                color,
+                            }));
+                        }
                         ui.weak(&state.name);
                         ui.add_space(ITEM_GAP);
                     }

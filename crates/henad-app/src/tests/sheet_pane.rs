@@ -1983,6 +1983,54 @@ fn each_property_row_edits_and_deletes_its_property() {
     );
 }
 
+/// Each state's swatch under Colours is a colour button, named apart from a measure named as the state, whose colour
+/// recolours the state in one step of Undo. The ants' swatches of the ground and of the agents differ by their
+/// property's name.
+#[test]
+fn a_states_swatch_under_colours_recolours_the_state() {
+    use henad_graph::sheet::sentence::state_swatch_name;
+
+    use crate::ui::editor::sheet::widgets::color_name;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "sir.toml");
+    let starter = text(&harness);
+    let infected = |harness: &Harness| {
+        let document = sheet(harness).document();
+        let health = document
+            .cells
+            .iter()
+            .flatten()
+            .find(|property| property.name == "Health")
+            .expect("Health");
+        health
+            .states
+            .iter()
+            .find(|state| state.name == "Infected")
+            .expect("Infected")
+            .color
+    };
+    let swatch = state_swatch_name("Health", "Infected", color_name(infected(&harness)));
+    assert_eq!(named(&mut harness, &swatch).len(), 1, "one swatch is named {swatch}");
+    click(&mut harness, &swatch);
+    click(&mut harness, "Purple");
+    harness.settle();
+    assert_eq!(infected(&harness), PALETTE_COLORS[11]);
+    click(&mut harness, UNDO);
+    assert_eq!(text(&harness), starter, "one Undo puts the colour back");
+    open_starter(&mut harness, "ants.toml");
+    for (property, state) in [("Cargo", "Searching"), ("Ground", "Nest")] {
+        let found = harness
+            .settle()
+            .iter()
+            .filter(|node| node.label.starts_with(&format!("Colour of {property} {state}: ")))
+            .count();
+        assert_eq!(found, 1, "{property} {state} has its swatch");
+    }
+}
+
 /// The measure, event and button forms of the ants open under a button at the bottom of the visible pane, below its
 /// edge, and each scrolls into view as it opens.
 #[test]

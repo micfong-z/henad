@@ -107,6 +107,7 @@ In a world of agents, **Number of times an event happened** plots how many times
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
 **Colours** chooses the property that colours the cells in the Viewport, or **None** for black cells, white agents or no ground.
+Under a property of states, press a state's swatch to choose its colour, as in the property's form.
 With no other choice, cells and agents take the colours of their first States property, and a new model of agents is coloured by heading.
 **Buttons** adds a button beside the world, either to start again or to run its own short card of lines once on every cell.
 
@@ -276,10 +277,12 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
 **+** after the rows of a Choose adds a row, and **×** after a row removes it while two or more rows are left.
 
 A look at agents starts with one summary, an average.
-The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
+The select before each summary changes it to a total, the largest, the smallest or a count, or removes it while the look holds another, as its tooltip says, and **+** after the summaries adds another.
+Each **+** on a card says what it adds under the pointer: another value of a list, another row of a Choose, or another summary.
 A summary names itself after what it sums up, such as "average velocity" for the average of their Velocity, "centre" for the average offset to them and "push" for the total offset away from them.
 A summary's picker lists each agent's properties as "their Velocity" and the relations "offset to them", "offset away from them" and "distance to them".
 The line menu's **Include me in line 1** counts the agent itself among those it looks at, and **Exclude me from line 1** undoes it.
+The words "including me" of such a look are a select too, whose "not including me" leaves the agent out.
 An average, a largest and a smallest of no one are 0, so "smallest of distance to them" is 0 for an agent with no one around.
 A Steer towards a value that reads such a summary adds nothing while the look finds no one, whether it reads the summary itself or a Calculate worked out from it.
 To steer towards another value while the look finds no one, test the look's count in a row of a Choose.
