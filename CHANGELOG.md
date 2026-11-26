@@ -5,7 +5,7 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-11-25
+## [0.4.0] - 2026-11-26
 
 Models without Rust: write a sheet, a node graph or a WGSL grid rule in the app's new Editor tab, then run and sweep it on the GPU, in the app or with henad-cli.
 
