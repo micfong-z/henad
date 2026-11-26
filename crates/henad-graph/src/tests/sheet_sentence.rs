@@ -734,6 +734,11 @@ fn every_wording_table_entry_equals_the_final_words() {
             "Press to choose another value, such as a typed number.",
             fixed(sentence::PHRASE_LEAD_TOOLTIP),
         ),
+        (
+            "The card cannot change a value inside a formula. Delete the line, then work the value out with Calculate \
+             lines.",
+            fixed(sentence::FORMULA_PART_TOOLTIP),
+        ),
         ("Move to", fixed(sentence::move_owner(true))),
         ("Move by", fixed(sentence::move_owner(false))),
         ("Set Speed", sentence::set_owner("Speed")),

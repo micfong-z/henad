@@ -68,10 +68,10 @@ use henad_graph::sheet::sentence::{
     use_for_each_label, use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, RANDOM_VALUE_GROUP, REMOVE_SUMMARY_HEADING,
-    add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name, comparison_words, drag_line_tooltip,
-    fire_count, fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt,
-    tick_set_notice,
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, FORMULA_PART_TOOLTIP, RANDOM_VALUE_GROUP,
+    REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
+    comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
+    long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 use henad_graph::sheet::sentence::{
     DUPLICATE_BLOCK_TOOLTIP, NOTE_FIELD_HINT, REMOVE_CHOOSE_ROW, add_above_name, add_below_name, add_line_above,
@@ -2133,8 +2133,16 @@ fn part_ui(
             match draft_value(drawing, state) {
                 // A value chosen for an empty Calculate line shows as its chip until the formula is written.
                 Some(chip) => chip_with_id(ui, id, &chip, false, None),
+                None if id.is_none() => blank_ui(ui, id, blank.word(), &name, true)
+                    .1
+                    .on_hover_text(FORMULA_PART_TOOLTIP),
                 None => blank_ui(ui, id, blank.word(), &name, true).1,
             }
+        }
+        // The operation of a formula inside a slot opens nothing, and reads as the words of the other operations.
+        SentencePart::Select(_, words) if drawing.place.is_none() => {
+            text_ui(ui, words);
+            return;
         }
         SentencePart::Select(select, words) => {
             let words = match (select, words.is_empty(), drawing.place.as_ref()) {
@@ -2204,9 +2212,12 @@ fn chip_part_ui(
         .map(|(_, color)| *color);
     let shown = draft_chip(drawing, state, chip);
     let response = chip_with_id(ui, id, &shown, red.is_some(), swatch);
-    let response = match red {
-        Some(tooltip) => response.on_hover_or_focus_text(tooltip.as_str()),
-        None => response,
+    // A chip no edit sets is a value inside a formula, and says how to change it under the pointer.
+    let response = match (red, id) {
+        (Some(tooltip), Some(_)) => response.on_hover_or_focus_text(tooltip.as_str()),
+        (Some(tooltip), None) => response.on_hover_text(format!("{tooltip}\n{FORMULA_PART_TOOLTIP}")),
+        (None, Some(_)) => response,
+        (None, None) => response.on_hover_text(FORMULA_PART_TOOLTIP),
     };
     if let ChipKind::Result(result) = &shown.kind
         && (response.contains_pointer() || response.has_focus())

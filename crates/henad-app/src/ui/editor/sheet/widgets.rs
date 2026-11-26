@@ -1603,7 +1603,9 @@ fn chip_colors(kind: &ChipKind, red: bool) -> ChipColors {
 ///
 /// A result chip is blue, or red and struck through when `red` holds, and every other chip neutral. A parameter chip
 /// carries a slider mark, a state chip a swatch of the colour `swatch`, a property chip its lead word ("my"), "any
-/// state" is in italics and a number in the mono face. Clicking a chip does nothing.
+/// state" is in italics and a number in the mono face. Clicking a chip does nothing. A chip with no `id`, which no edit
+/// sets, senses hover alone ([`allocate_part`]): it takes no keyboard focus, keeps its idle look under the pointer and
+/// is a label in the accessibility tree.
 ///
 /// The chip is a button in egui's look with its own fill: the theme's outline and expansion under the pointer and on
 /// focus, and while the picker of `id` is open the selection fill and text colour of a selected button. The eye then
@@ -1682,17 +1684,29 @@ pub fn chip_within(
     let name = painter.layout_job(job);
     let elided = name.elided;
     let width = frame + name.size().x;
-    let (rect, response) = allocate_control(ui, id, vec2(width, CHIP_HEIGHT));
+    let (rect, response) = allocate_part(ui, id, vec2(width, CHIP_HEIGHT));
     let response = if elided {
         response.on_hover_or_focus_text(&chip.text())
     } else {
         response
     };
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, chip.text()));
+    response.widget_info(|| WidgetInfo::labeled(part_type(id), true, chip.text()));
     if ui.is_rect_visible(rect) {
         // A red chip keeps its red while its picker is open. The hue tells that its line cannot use it.
         let selected = open && !red;
-        let visuals = paint_button(ui, rect, &response, selected, Framed::Always, Some(colors.fill));
+        let visuals = if id.is_some() {
+            paint_button(ui, rect, &response, selected, Framed::Always, Some(colors.fill))
+        } else {
+            let visuals = ui.visuals().widgets.inactive;
+            ui.painter().rect(
+                rect.expand(visuals.expansion),
+                visuals.corner_radius,
+                colors.fill,
+                visuals.bg_stroke,
+                StrokeKind::Inside,
+            );
+            visuals
+        };
         if open && red {
             ui.painter().rect_stroke(
                 rect,
@@ -1734,7 +1748,8 @@ pub fn chip_within(
 /// A blank with `painted` false is laid out and named but not painted, and returns the index of an empty shape that
 /// the caller fills to paint it. The blank takes the widget id `id` when one is given. Under the pointer its outline
 /// is brighter and its word takes the text colour, and while the picker of `id` is open it takes the selection fill
-/// and text colour of a selected button.
+/// and text colour of a selected button. A blank with no `id`, which no edit fills, senses hover alone and keeps its
+/// idle look, as a chip with no id does.
 pub fn blank_ui(
     ui: &mut Ui,
     id: Option<Id>,
@@ -1744,8 +1759,8 @@ pub fn blank_ui(
 ) -> (Option<egui::layers::ShapeIdx>, Response) {
     let font = TextStyle::Body.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(word.to_owned(), font, mcs::GRAY_400);
-    let (rect, response) = allocate_control(ui, id, vec2(galley.size().x + CHIP_PADDING * 2.0, CHIP_HEIGHT));
-    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, name));
+    let (rect, response) = allocate_part(ui, id, vec2(galley.size().x + CHIP_PADDING * 2.0, CHIP_HEIGHT));
+    response.widget_info(|| WidgetInfo::labeled(part_type(id), true, name));
     if !painted {
         return (Some(ui.painter().add(Shape::Noop)), response);
     }
@@ -1754,7 +1769,7 @@ pub fn blank_ui(
         if picker_open(ui, id) {
             let visuals = paint_button(ui, rect, &response, true, Framed::Always, None);
             ui.painter().add(blank_word(ui, rect, word, visuals.text_color()));
-        } else if response.hovered() {
+        } else if response.hovered() && id.is_some() {
             painter.rect_stroke(rect, CornerRadius::ZERO, slot_outline(true), StrokeKind::Inside);
             painter.add(blank_word(ui, rect, word, ui.visuals().text_color()));
         } else {
@@ -1783,6 +1798,26 @@ fn blank_word(ui: &Ui, rect: Rect, word: &str, color: Color32) -> Shape {
         galley,
         color,
     )
+}
+
+/// Allocates a part of a card's line of `size` under the widget id `id`, a control as [`allocate_control`] allocates
+/// it, or with no `id` a part that senses hover alone, which no edit sets, and returns its rectangle and response.
+fn allocate_part(ui: &mut Ui, id: Option<Id>, size: Vec2) -> (Rect, Response) {
+    if id.is_some() {
+        allocate_control(ui, id, size)
+    } else {
+        ui.allocate_exact_size(size, Sense::hover())
+    }
+}
+
+/// Returns the type of a part of a card's line in the accessibility tree: a button for a control under the widget id
+/// `id`, and a label for a part with no id, which opens nothing.
+fn part_type(id: Option<Id>) -> WidgetType {
+    if id.is_some() {
+        WidgetType::Button
+    } else {
+        WidgetType::Label
+    }
 }
 
 /// Allocates a clickable control of `size`, under the widget id `id` when one is given, and returns its rectangle and

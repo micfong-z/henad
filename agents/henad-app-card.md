@@ -154,7 +154,14 @@ above as `l3.food`, "my new" as `my_new.velocity`, held by
 `a_calculate_line_takes_the_parts_of_the_lines_above`). A percent operand is written as its decimal
 and reads as one. Only the line's own values and operation take a choice: a formula inside a slot
 has no places, and
-the guards in `field_choice`, `select_edit` and `draft_value` hold an empty phrase path. "New
+the guards in `field_choice`, `select_edit` and `draft_value` hold an empty phrase path. A chip or
+blank with no place, a value of a formula of more than one operation or of one inside a slot, takes
+no widget id: `widgets::chip_within` and `blank_ui` allocate it with `Sense::hover()` alone, keep
+its idle look under the pointer, name it as a `Label` and take no keyboard focus, and `part_ui`
+gives it `FORMULA_PART_TOOLTIP` under the pointer, after a red chip's own tooltip. The operation of
+a formula inside a slot is a select with no place and reads as plain words, as the operations of a
+longer formula do. `CardLine::controls` leaves such parts out
+(`a_value_inside_a_formula_opens_nothing_and_says_how_to_change_it`, the ants' Trail falloff). "New
 parameter…" opens the New parameter dialog for the place (a chance's or a rate's values, the
 rate's "per [unit]" as its Unit), drawn from the next frame, since the click that chose it would
 land on its backdrop. Create runs `NewParameter::add_edit` and the place's commands as one edit.

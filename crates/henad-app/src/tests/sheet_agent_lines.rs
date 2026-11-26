@@ -14,10 +14,10 @@ use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::remove_choose_row_name;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, AHEAD_NEEDS_CELLS, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER,
-    DONE, DrawKind, LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES, NO_STATES,
-    NOT_YET_AGENT_WALLS, NOT_YET_BLOCKED_MOVE_BY, NOT_YET_REPEAT_CHANGE, NUMBER_BOX_HINT, OR_A_NEW_VALUE, PlaceTarget,
-    Sentences, add_property_name, add_summary_name, blocked_state_name, moved_by_already, moved_to_already, run_once,
-    sheet_parameter_name_field, steered_already, value_field_name, value_slider_name,
+    DONE, DrawKind, FORMULA_PART_TOOLTIP, LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES,
+    NO_STATES, NOT_YET_AGENT_WALLS, NOT_YET_BLOCKED_MOVE_BY, NOT_YET_REPEAT_CHANGE, NUMBER_BOX_HINT, OR_A_NEW_VALUE,
+    PlaceTarget, Sentences, add_property_name, add_summary_name, blocked_state_name, moved_by_already,
+    moved_to_already, run_once, sheet_parameter_name_field, steered_already, value_field_name, value_slider_name,
 };
 
 use crate::tests::panes::{
@@ -1224,6 +1224,53 @@ fn offered(harness: &mut Harness, dialog: &str, label: &str) -> bool {
         .iter()
         .find(|node| node.label == label && node.dialog == dialog)
         .is_some_and(|node| !node.disabled)
+}
+
+/// A value inside the formula of the ants' trail lines opens nothing: it is a label, not a button, keeps no keyboard
+/// focus, says under the pointer how to change it, and a click on it opens no picker.
+#[test]
+fn a_value_inside_a_formula_opens_nothing_and_says_how_to_change_it() {
+    use egui::accesskit::Role;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "ants.toml");
+    let nodes = harness.settle();
+    let chips: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.value == "Trail falloff" && node.role == Role::Label && node.bounds.is_some())
+        .collect();
+    assert_eq!(chips.len(), 2, "lines 3 and 4 read Trail falloff in their formulas");
+    assert!(
+        !nodes
+            .iter()
+            .any(|node| node.role == Role::Button && node.label == "Trail falloff"),
+        "no button reads Trail falloff"
+    );
+    let chip = chips[0].bounds.expect("bounds").center();
+    harness.frame(vec![egui::Event::PointerMoved(chip)]);
+    // A tooltip shows once the pointer has rested past egui's delay.
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    assert!(
+        harness
+            .accessible_texts()
+            .iter()
+            .any(|text| text == FORMULA_PART_TOOLTIP),
+        "the chip says how to change it"
+    );
+    let before = text(&harness);
+    harness.click_at(chip);
+    let nodes = harness.settle();
+    assert!(
+        !nodes.iter().any(|node| node.role == Role::Dialog),
+        "a click on a value inside a formula opens no picker"
+    );
+    assert_eq!(text(&harness), before);
+    assert_ne!(harness.focused, "Trail falloff", "the chip takes no focus");
+    assert_controls_hold_their_words(&mut harness);
 }
 
 #[test]

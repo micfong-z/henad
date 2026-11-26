@@ -375,6 +375,7 @@ Removing a measure that the Sheet pane cannot add again, such as Total trail, as
 Press the dialog's action, such as <span class="ui">Delete</span>, to go ahead, or <span class="ui">Cancel</span> to keep the sheet as it is.
 One Undo takes the whole edit back.
 An edit that takes nothing else away, such as deleting a parameter no line uses, asks nothing.
+A value inside a formula of more than one operation, or inside a formula in a slot, such as Trail falloff in the ant foraging model's line 3, does not open a picker, and its tooltip says to delete the line and work the value out with Calculate lines instead.
 Grey notes explain how lines work together:
 
 - Two Become lines from different states say that their order does not matter, as in Game of Life: "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."

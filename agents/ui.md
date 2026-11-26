@@ -95,7 +95,8 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     200, a result its line cannot use red 900 under red 200 and struck through, every other chip
     gray 800 under gray 100 with a gray 400 lead word or slider mark, a number in the mono face,
     "any state" in italics. Hover, focus and an open picker follow the button, but a red chip
-    keeps its colours while its picker is open, inside the selection's outline.
+    keeps its colours while its picker is open, inside the selection's outline. A chip that opens
+    nothing, a value inside a formula, keeps its idle look under the pointer and takes no focus.
   - Blank: its word weak inside a 1 point gray 800 outline (`slot_outline`), gray 600 on hover
     with the word in the text colour, selected while open. The optional "for each …" is its weak
     word alone, with no outline, until its line is hovered or focused. Nothing is dashed.

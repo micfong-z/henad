@@ -141,10 +141,22 @@ impl CardLine {
         Some(LineControl { visible, name, select })
     }
 
-    /// Returns every control of the line in order.
+    /// Returns every control of the line in order. A chip, blank or select that no edit sets is no control: it opens
+    /// nothing, and the card draws a label or words in its place.
     #[cfg(test)]
     pub fn controls(&self) -> Vec<LineControl> {
-        self.parts.iter().filter_map(|part| self.control(part)).collect()
+        self.parts
+            .iter()
+            .zip(&self.places)
+            .filter(|(part, place)| {
+                place.is_some()
+                    || !matches!(
+                        part,
+                        SentencePart::Chip(_) | SentencePart::Blank(_) | SentencePart::Select(..)
+                    )
+            })
+            .filter_map(|(part, _)| self.control(part))
+            .collect()
     }
 }
 

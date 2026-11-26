@@ -120,7 +120,8 @@ the item's index, or `Field` with the phrase's slot path and a `FieldPlace`: `Pr
 `LookSummary(index)`) and the `want`, the `Blank` the place shows while empty (`None` for a select).
 `Parts` places a value relative to its slot and `Parts::under(key, want)` puts it under the slot's
 key, so a phrase's places compose (`condition.left`). Words, `From`, `Otherwise` and a hand-written
-formula of more than one operation have no place. A Count's `whose` comparison wants a property on
+formula of more than one operation have no place, and the card gives such a value
+`FORMULA_PART_TOOLTIP`. A Count's `whose` comparison wants a property on
 its left and, while that is empty or a States property, a state on its right, and an empty Calculate
 line shows a number blank, the operation select and a number blank ("Result = … … …" as text),
 both values and the select placed. Agent lines place

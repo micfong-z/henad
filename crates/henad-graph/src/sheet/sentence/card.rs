@@ -707,6 +707,11 @@ pub fn phrase_lead_name(prefix: &str, words: &str) -> String {
 /// Tooltip of the words that open a value a picker put in a slot whole, such as "a random number between".
 pub const PHRASE_LEAD_TOOLTIP: &str = "Press to choose another value, such as a typed number.";
 
+/// Tooltip of a value inside a formula of a line, which the card cannot change: a value of a formula of more than one
+/// operation, or of a formula inside a slot.
+pub const FORMULA_PART_TOOLTIP: &str =
+    "The card cannot change a value inside a formula. Delete the line, then work the value out with Calculate lines.";
+
 /// Kind of a condition that is not always: a test, a chance or a rate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
