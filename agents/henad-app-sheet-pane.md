@@ -123,7 +123,8 @@ property, or with no rule the first States property of the cells or the agents, 
 `COLOR_BY_NOTHING` ("None"). It offers None first, which takes the rule out, on the ground and on
 cells or agents with no States property, where no rule draws them black, white or not at all. The
 current item is the one shown, and choosing it changes nothing
-(`the_colours_selects_show_and_offer_none_where_no_property_colours`). Buttons act on
+(`the_colours_selects_show_and_offer_none_where_no_property_colours`,
+`the_colour_of_cells_with_no_rule_shows_what_the_world_draws`). Buttons act on
 `measured_thing`: Run once reads `run_once(thing_word)`, Start again offers the thing's properties
 with a start and the ground's, `button_edit` keeps a button's set everywhere steps and puts its
 start-again step in the old one's place, and `button_does` joins steps that set to one value

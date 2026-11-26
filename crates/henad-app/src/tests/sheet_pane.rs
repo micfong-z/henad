@@ -14,8 +14,8 @@ use henad_graph::sheet::edit::{PALETTE_COLORS, SheetEdit};
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_MEASURE, ADD_PARAMETER, ADD_PROPERTY, ADD_ROW, ADD_STATE, AVERAGE_MEASURE, BLANK_MODEL_CARD,
     BUTTON_CARD_EMPTY, BUTTON_NAME_FIELD, BUTTON_NAME_MISSING, Blank, CANCEL, CHANCE_LIMITS_OUTSIDE,
-    CHANCE_OUT_OF_RANGE, COLOR_CELLS_BY, CREATE_PARAMETER, DARKEST_NAME, DELETE_PROPERTY, DIALOG_NAME_MISSING, DONE,
-    DrawKind, EDIT, EVERY_PROPERTY, INTEGER_KIND, LIGHTEST_NAME, MEASURE_ALREADY_PLOTTED,
+    CHANCE_OUT_OF_RANGE, COLOR_BY_NOTHING, COLOR_CELLS_BY, CREATE_PARAMETER, DARKEST_NAME, DELETE_PROPERTY,
+    DIALOG_NAME_MISSING, DONE, DrawKind, EDIT, EVERY_PROPERTY, INTEGER_KIND, LIGHTEST_NAME, MEASURE_ALREADY_PLOTTED,
     MEASURE_NEEDS_NUMBER_PROPERTY, MEASURE_NEEDS_STATE, MODEL_ACTIONS, NEW_MEASURE, NEW_PARAMETER,
     NEW_PARAMETER_HEADING, NUMBER_KIND, PARAMETER_NAME_MISSING, PLOT, PLOT_EMPTY, PLOTTED, PROPERTY_NAME_MISSING, REDO,
     RESTART_NOTICE, SHADE, SHADE_ENDS_EQUAL, SHEET_EMPTY, START_AGAIN_FOR, START_AGAIN_TO_SEE, STATES_KIND,
@@ -1211,6 +1211,52 @@ fn a_number_property_shades_the_cells_in_a_hue_between_two_values() {
     assert_eq!(rule(&harness).rule, ColorRuleKind::ByState);
     choose(&mut harness, COLOR_CELLS_BY, "Food");
     assert_eq!(rule(&harness).hue, Some(ShadeHue::Blue), "a new shading starts blue");
+}
+
+/// "Colour cells by" shows what the world draws. With no rule the cells take the colours of their first States
+/// property, and with none they are black, which the select shows as None and offers. The Number property left is not
+/// shown in place of the colours the world lacks.
+#[test]
+fn the_colour_of_cells_with_no_rule_shows_what_the_world_draws() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetColorRule {
+            thing: "cells".to_owned(),
+            rule: None,
+        },
+    );
+    assert_eq!(field_value(&mut harness, COLOR_CELLS_BY), "Status");
+    click(&mut harness, COLOR_CELLS_BY);
+    assert!(
+        named(&mut harness, COLOR_BY_NOTHING).is_empty(),
+        "a States property colours the cells with no rule"
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // A Number in place of the states leaves the cells with no rule and black.
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetPropertyType {
+            property: "status".to_owned(),
+            property_type: PropertyType::Number,
+        },
+    );
+    assert!(!sheet(&harness).document().colors.contains_key("cells"));
+    assert_eq!(field_value(&mut harness, COLOR_CELLS_BY), COLOR_BY_NOTHING);
+    assert!(
+        !shows_or_notice(&mut harness, SHADE),
+        "no shading shows while none is drawn"
+    );
+    choose(&mut harness, COLOR_CELLS_BY, "Status");
+    assert_eq!(
+        sheet(&harness).document().colors.get("cells").map(|rule| rule.rule),
+        Some(ColorRuleKind::Shaded)
+    );
+    assert!(shows_or_notice(&mut harness, SHADE));
 }
 
 #[test]
