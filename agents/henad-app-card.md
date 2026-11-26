@@ -35,8 +35,9 @@ sit in `widgets::overlay_items`, a scroll area as tall as the window leaves unde
 24 items of a card over agents stay in reach of the wheel in a short window.
 
 **Rows.** `line_ui` lays a row out as columns, each a child `Ui`: the kind bar (`KIND_BAR_WIDTH` 3,
-`kind_bar_ui` over `widgets::kind_bar`, the group's word as the hover text of the bar
-and the gutter), the gutter (`GUTTER_WIDTH` 30, `number_ui` right-aligned as a `small_label`,
+`kind_bar_ui` over `widgets::kind_bar`, the bar and the gutter the handle that drags the line,
+`drag_line_tooltip` of the group's word as their hover text, `agents/henad-app-card-drag.md`), the
+gutter (`GUTTER_WIDTH` 30, `number_ui` right-aligned as a `small_label`,
 `NUMBER_GAP` 9 before the body), the body (from the gutter plus `INDENT` 20 per block, to the tail),
 and the tail (`fire_count_ui` in `COUNT_WIDTH` on a line of `CardDrawing::counted` on a card that
 runs each tick, then the line menu in `MENU_WIDTH` 28, both at the row's top). A line without a

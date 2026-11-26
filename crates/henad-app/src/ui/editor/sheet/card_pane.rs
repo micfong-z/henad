@@ -67,10 +67,11 @@ use henad_graph::sheet::sentence::{
 use henad_graph::sheet::sentence::{
     CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP,
     REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
-    comparison_words, fire_count, fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note,
-    rate_grow_prompt, tick_set_notice,
+    comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
+    long_tick_note, rate_grow_prompt, tick_set_notice,
 };
 
+use super::card_drag::{DragFrame, DrawnCard, DrawnRow, LineDrag, RowOf, faded, handle_ui};
 #[cfg(test)]
 use super::card_lines::LineControl;
 pub use super::card_lines::{CardLine, LineNote, NoteColor, card_lines, draws_diagnostic};
@@ -150,6 +151,9 @@ const FOCUS_MARK_LENGTH: f32 = 14.0;
 
 /// Size in points of a note under a line.
 const NOTE_SIZE: f32 = 11.5;
+
+/// Distance in points from the kind bar to the centre of the grip that shows in the gutter of a row under the pointer.
+const GRIP_OFFSET: f32 = 5.0;
 
 // State between frames
 
@@ -545,6 +549,7 @@ fn cards_ui(
         MadeOf::Agents => document.agents.first().map(|kind| kind.id.as_str()),
         _ => Some(CELLS_ID),
     };
+    let mut drag_frame = DragFrame::new(ui, document, state.widgets);
     let has_tick_card = |every: &str| {
         document
             .cards
@@ -584,8 +589,9 @@ fn cards_ui(
             fires: shown.fires.filter(|_| card.runs == CardRuns::EachTick),
             counted: shown.counted,
         };
-        card_ui(ui, &drawing, &lines, state, &mut hovered, pending);
+        card_ui(ui, &drawing, &lines, state, &mut hovered, &mut drag_frame, pending);
     }
+    drag_frame.finish(ui);
     explain_otherwise(ui.ctx(), state, overridden);
     if hovered != highlight {
         ui.data_mut(|data| data.insert_temp(highlight_id, hovered));
@@ -648,13 +654,15 @@ struct CardDrawing<'a> {
 /// Draws the card of `drawing` in its frame: the title bar, the law under a card that runs every tick, a row for each
 /// of the numbered `lines` and the footer of add buttons.
 ///
-/// The ids of the lines that a hovered or focused control names are added to `hovered`.
+/// The ids of the lines that a hovered or focused control names are added to `hovered`. While a line of the card is
+/// dragged, its rows fade, and `drag_frame` marks the place under the pointer and drops the line there.
 fn card_ui(
     ui: &mut Ui,
     drawing: &CardDrawing<'_>,
     lines: &[CardLine],
     state: &mut CardState,
     hovered: &mut Vec<String>,
+    drag_frame: &mut DragFrame,
     pending: &mut Vec<CardEdit>,
 ) {
     let card = drawing.card;
@@ -675,26 +683,42 @@ fn card_ui(
         if lines.is_empty() {
             empty_card_ui(ui, if each_tick { BLANK_MODEL_CARD } else { BUTTON_CARD_EMPTY });
         }
+        let body_left = |rect: Rect, depth: usize| rect.left() + KIND_BAR_WIDTH + GUTTER_WIDTH + INDENT * depth as f32;
         let list = ui.scope(|ui| {
             let mut rows = Vec::with_capacity(lines.len());
+            let mut rows_drawn = Vec::with_capacity(lines.len());
             for (index, line) in lines.iter().enumerate() {
                 let row = RowPlace {
                     first: index == 0,
                     depth: line.depth,
                 };
-                rows.push(line_ui(
-                    ui, drawing, &relations, &notes, line, &row, state, hovered, pending,
-                ));
+                let rect = faded(ui, drag_frame.moves(&relations, &line.id), |ui| {
+                    line_ui(ui, drawing, &relations, &notes, line, &row, state, hovered, pending)
+                });
+                rows.push(rect);
+                rows_drawn.push(DrawnRow {
+                    rect,
+                    row: RowOf::Line(line.id.clone()),
+                    body_left: body_left(rect, line.depth),
+                });
                 for block in closing.get(&index).into_iter().flatten() {
-                    add_inside_ui(ui, drawing, block, state, pending);
+                    let rect = faded(ui, drag_frame.moves(&relations, &block.id), |ui| {
+                        add_inside_ui(ui, drawing, block, state, pending)
+                    });
+                    rows_drawn.push(DrawnRow {
+                        rect,
+                        row: RowOf::BlockEnd(block.id.clone()),
+                        body_left: body_left(rect, block.depth),
+                    });
                 }
             }
             for bracket in brackets(&relations, lines) {
                 bracket_ui(ui, &rows, &bracket);
             }
-            ui.unique_id()
+            (ui.unique_id(), rows_drawn)
         });
-        accessible_group(ui.ctx(), list.inner, Role::List, &list_name, list.response.rect);
+        let (list_id, rows_drawn) = list.inner;
+        accessible_group(ui.ctx(), list_id, Role::List, &list_name, list.response.rect);
         let note = card
             .line_tables
             .values()
@@ -703,6 +727,23 @@ fn card_ui(
         footer_ui(ui, note, |ui| {
             add_buttons_ui(ui, drawing.document, state, Some(card), &card.every, pending);
         });
+        let drawn_card = DrawnCard {
+            relations: &relations,
+            lines,
+            rows: &rows_drawn,
+            rect: ui.min_rect(),
+            top_body_left: body_left(ui.min_rect(), 0),
+        };
+        if let Some(drop) = drag_frame.place_ui(ui, &drawn_card) {
+            pending.push(CardEdit {
+                run: Box::new(move |builder| {
+                    drop.run(builder)?;
+                    Ok((Vec::new(), None))
+                }),
+                after: After::Stay,
+                rename: false,
+            });
+        }
     });
 }
 
@@ -893,14 +934,14 @@ fn closing_blocks(relations: &CardRelations<'_>, lines: &[CardLine]) -> BTreeMap
 /// inside line 4", lists every kind of line in groups, and an item adds its line at the end of the block.
 ///
 /// On a card that runs once the menu holds the Change group alone, as the card's own add buttons offer "+ Change"
-/// alone.
+/// alone. Returns the row.
 fn add_inside_ui(
     ui: &mut Ui,
     drawing: &CardDrawing<'_>,
     block: &ClosingBlock,
     state: &CardState,
     pending: &mut Vec<CardEdit>,
-) {
+) -> Rect {
     let states = pattern_states(drawing.document, &drawing.card.every);
     let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
     let label = add_inside_label(block.number);
@@ -972,6 +1013,7 @@ fn add_inside_ui(
             &drawing.card.every,
         ));
     }
+    rect
 }
 
 /// Where a row sits on its card.
@@ -1227,7 +1269,7 @@ fn add_items_ui(
 
 /// Returns whether a line of `kind` looks at the cells or agents around its place, which a Repeat cannot hold: a Count,
 /// a Look around or a Pick a cell.
-fn looks_in_place(kind: LineKind) -> bool {
+pub(super) fn looks_in_place(kind: LineKind) -> bool {
     matches!(kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell)
 }
 
@@ -1680,7 +1722,12 @@ fn line_ui(
             highlight: drawing.highlight.contains(&line.id),
         },
     );
-    kind_bar_ui(ui, line_data.kind, rect);
+    let handle = state.widgets.with((&line.id, "drag"));
+    let payload = LineDrag {
+        card: drawing.card.id.clone(),
+        line: line.id.clone(),
+    };
+    kind_bar_ui(ui, line_data.kind, rect, handle, payload);
     let focused = gathered.focused || menu.has_focus();
     if focused {
         focus_mark(ui, rect);
@@ -1797,20 +1844,21 @@ fn number_ui(ui: &mut Ui, number: usize, rect: Rect) {
 }
 
 /// Paints the bar in the hue of the kind of a line of `kind` at the left edge of its row `rect`. The bar and the
-/// gutter beside it show the kind's word as their hover text.
-fn kind_bar_ui(ui: &Ui, kind: LineKind, rect: Rect) {
+/// gutter beside it are the handle, under the id `handle`, that drags the line `payload` names, and show the kind's
+/// word with how to drag the line as their hover text.
+fn kind_bar_ui(ui: &Ui, kind: LineKind, rect: Rect, handle: Id, payload: LineDrag) {
     let group = AddButton::for_kind(kind);
     kind_bar(ui.painter(), rect, group);
     let gutter = Rect::from_min_size(
         rect.min,
         vec2(KIND_BAR_WIDTH + GUTTER_WIDTH - NUMBER_GAP, rect.height()),
     );
-    ui.interact(
-        gutter,
-        ui.id().with(("henad_kind_bar", rect.top().to_bits())),
-        Sense::hover(),
-    )
-    .on_hover_text(group.group());
+    // The grip sits left of the number, level with the row's first line of words.
+    let grip = pos2(
+        rect.left() + KIND_BAR_WIDTH + GRIP_OFFSET,
+        rect.top() + ROW_PADDING + SENTENCE_ROW / 2.0,
+    );
+    handle_ui(ui, gutter, rect, handle, payload, grip).on_hover_text(drag_line_tooltip(group.group()));
 }
 
 /// Draws the fire count of `line` in grey, right-aligned in `place`, the column of [`COUNT_WIDTH`] at the row's top,

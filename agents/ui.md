@@ -61,7 +61,7 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   | Tinted fill with text on it (chip, badge) | hue 900, text hue 200 |
   | Faint row tint (the highlighted line only) | hue 950 |
   | Solid fill (primary action, progress) | hue 700, text gray 50 |
-  | Line, bar, outline or icon in a hue (kind bar, a row's focus mark, notice icon) | hue 500 |
+  | Line, bar, outline or icon in a hue (kind bar, a row's focus mark, notice icon, a drag's mark) | hue 500 |
   | Status text straight on a panel | orange 500, red 500 (the theme's warn and error) |
   | Neutral chip | gray 800 fill, gray 100 text, gray 400 lead word or glyph |
   | Neutral outline (a swatch) | gray 700 |
@@ -149,6 +149,12 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     is not interactable, as egui's own tooltip of plain text, so a click under it reaches the
     control there. A label, a hover-only mark and an item inside an open overlay keep
     `on_hover_text`.
+  - Drag of a line (`card_drag.rs`, `agents/henad-app-card-drag.md`): the row's gutter is the
+    handle, a weak `MDI_DRAG_VERTICAL` grip left of the number while the row is under the pointer,
+    the text colour over the gutter. The dragged rows draw at the theme's disabled opacity, the copy
+    under the pointer is in egui's popup frame with its shadow, and the place is a 2 point line with
+    a 6 point square at its left end, blue 500 where the line can go and red 500 where it cannot,
+    with the reason in the copy in the theme's error colour.
   - "?" help of a heading (`help::help_mark`): a label that takes no click and no keyboard focus.
     The weak `MDI_HELP_CIRCLE_OUTLINE` sits inside the theme's horizontal button padding and senses
     hover alone, with no frame or fill under the pointer and the default cursor. Its tooltip

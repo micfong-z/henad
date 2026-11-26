@@ -79,6 +79,7 @@ characters, and a file that grows past that splits by subsystem, as henad-app's 
 | henad-app's sheet editor: opening a sheet, Apply of a sheet, its preview, the New model dialog | `agents/henad-app-sheet-open.md` |
 | henad-app's Sheet pane layout: sections, form rows, tables and their column order, a world of agents | `agents/henad-app-sheet-pane.md` |
 | henad-app's Card pane: lines written with blanks, pickers and chips, When blocks, moves, rates, agent lines, Repeat blocks and fire counts | `agents/henad-app-card.md` |
+| henad-app's Card pane: dragging lines, their slots, the drop's moves and the copy under the pointer | `agents/henad-app-card-drag.md` |
 | henad-app's Sweep and Results tabs | `agents/henad-app-sweep.md` |
 | UI text, corners and colours | `agents/ui.md` |
 | henad-cli | `agents/henad-cli.md` |

@@ -109,6 +109,32 @@ pub const MOVE_UP_FIRST: &str = "The first line of a card cannot move up.";
 /// Tooltip of the disabled Move down on the last line of a card.
 pub const MOVE_DOWN_LAST: &str = "The last line of a card cannot move down.";
 
+/// Returns the tooltip of the gutter of a line, which the line is dragged by, such as "Change. Drag to move the
+/// line.", where `group` is the group word of the line's kind.
+pub fn drag_line_tooltip(group: &str) -> String {
+    format!("{group}. Drag to move the line.")
+}
+
+/// Returns the words under the copy of a dragged When or Repeat that stand for the `count` lines inside it the copy
+/// leaves out, such as "2 more lines".
+pub fn more_lines(count: usize) -> String {
+    if count == 1 {
+        "1 more line".to_owned()
+    } else {
+        format!("{count} more lines")
+    }
+}
+
+/// Reason a dragged line cannot be dropped on another card.
+pub const DROP_ON_OTHER_CARD: &str = "A line can move only within its own card.";
+
+/// Reason a dragged When or Repeat cannot be dropped inside another When or Repeat.
+pub const DROP_INTO_BLOCK: &str = "A When or Repeat cannot move into another When or Repeat.";
+
+/// Refusal of a drop whose moves left the line elsewhere than where it was dropped, as after a change of the sheet
+/// during the drag.
+pub const DROP_MISSED: &str = "the sheet changed during the drag. Drag the line again";
+
 /// Returns the tool that deletes a line, such as "Delete line 2", where `word` is the line word.
 pub fn delete_line(word: &str) -> String {
     format!("Delete {word}")

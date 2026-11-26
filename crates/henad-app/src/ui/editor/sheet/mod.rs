@@ -16,6 +16,7 @@
 //! name turns it into a field. Undo keeps the canonical text of the sheet before each edit, and an undo or a redo reads
 //! that text back as one more edit of the world.
 
+pub mod card_drag;
 pub mod card_lines;
 pub mod card_pane;
 pub mod delete_question;
