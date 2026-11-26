@@ -144,7 +144,7 @@ A number takes a typed number, a result of a line above, one of the cell's prope
 A chance takes a number from 0 to 1 or a percent such as 30%, and rejects anything else as you type it.
 "is one of the numbers" takes a list, such as 2, 3, typed in one go.
 
-![The card of a forest fire with a When block at line 6, its value chip open on the Choose a value picker, which lists Burning neighbours from line 1, my Cover and three parameters, with Burning neighbours and the parameters greyed](../assets/app/editor-picker.png){ width="536" }
+![The card of a forest fire with the chip 1 on line 2 open on the Choose a number picker, which shows the 1 in its number box beside Use, then Burning neighbours from line 1, three parameters and New parameter…](../assets/app/editor-picker.png){ width="536" }
 
 After a choice the keyboard moves to the next blank of the line.
 An empty state blank opens by itself, as does the upper number of "is less than … or more than …" after the lower one.
