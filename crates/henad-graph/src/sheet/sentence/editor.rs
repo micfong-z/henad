@@ -462,6 +462,35 @@ pub const PLOT_EMPTY: &str = "Turn on Plot beside a state under Measures to plot
 /// Text of the world while the sheet holds no property.
 pub const WORLD_EMPTY: &str = "Add a property on the sheet to see the world.";
 
+// The list under the panes
+
+/// Line of the list under the panes, in place of the line that says to press Apply, while the model holds a problem
+/// that Apply refuses and the list names it.
+pub const FIX_THEN_APPLY: &str = "Fix the problems below, then press Apply.";
+
+/// Line of the list under the panes, in place of the line that says to press Apply, while every problem of the sheet
+/// that Apply refuses sits under its line on the card.
+pub const FIX_CARD_THEN_APPLY: &str = "Fix the problems on the card, then press Apply.";
+
+/// Line of the list under the panes after Apply refused a sheet whose every problem sits under its line on the card.
+pub const NOT_APPLIED_FIX_CARD: &str = "Model not applied. Fix the problems on the card.";
+
+/// Returns the line after Apply's outcome that names the lines `lines`, which do not run in the applied model.
+///
+/// For example "Line 3 and Clear line 1 are not run yet. The model runs without them.". The lines are worded as
+/// [`lost_question`] words them, and each is distinct.
+pub fn lines_not_run(lines: &[(Option<&str>, usize)]) -> String {
+    let (verb, pronoun) = if lines.len() == 1 {
+        ("is", "it")
+    } else {
+        ("are", "them")
+    };
+    format!(
+        "{} {verb} not run yet. The model runs without {pronoun}.",
+        upper_first(&word_list(&line_groups(lines)))
+    )
+}
+
 // The Diagram
 
 /// Note above the Diagram.

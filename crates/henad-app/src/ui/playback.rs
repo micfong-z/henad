@@ -118,8 +118,13 @@ pub(crate) fn tick_counter(app: &AppState) -> Option<String> {
     Some(counter_text(snapshot.tick, app.loaded_time()))
 }
 
-/// Hover text of the preview line while the Editor holds the previewed graph.
+/// Hover text of the preview line while the Editor holds the previewed graph or sheet and the preview runs smaller than
+/// the model's own size.
 pub const PREVIEW_APPLY: &str = "Press Apply in the Editor to run the model at its own size.";
+
+/// Hover text of the preview line while the Editor holds the previewed graph or sheet and the preview runs at the
+/// model's own size.
+pub const PREVIEW_APPLY_FULL_SIZE: &str = "Press Apply in the Editor to run the model.";
 
 /// Hover text of the preview line once the Editor holds a grid rule or nothing.
 pub const PREVIEW_ORPHANED: &str = "Another model is open in the Editor. Press Offload to stop the preview.";
@@ -144,12 +149,15 @@ fn preview_line(ui: &mut egui::Ui, app: &AppState) {
     }
 }
 
-/// Returns the hover text of the preview line. Apply runs the graph or the sheet only while the Editor holds one.
+/// Returns the hover text of the preview line. Apply runs the graph or the sheet only while the Editor holds one, at
+/// its own size where the preview runs smaller.
 pub fn preview_hover(app: &AppState) -> &'static str {
-    if app.editor.model.holds_preview_model() {
-        PREVIEW_APPLY
-    } else {
+    if !app.editor.model.holds_preview_model() {
         PREVIEW_ORPHANED
+    } else if app.preview().is_some_and(|run| !run.is_scaled()) {
+        PREVIEW_APPLY_FULL_SIZE
+    } else {
+        PREVIEW_APPLY
     }
 }
 

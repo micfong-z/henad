@@ -25,6 +25,9 @@ const REPLAYS_EXACTLY: &str = "Two runs with the same seed match.";
 /// Hover text of the Exact replay row for a model that does not replay exactly.
 const DOES_NOT_REPLAY: &str = "Two runs with the same seed can differ.";
 
+/// Hover text of the model list while it names the preview of the Editor's sheet.
+const PREVIEW_SELECTED: &str = "Select a model to build it in place of the preview.";
+
 /// Draws the opening that the app rejected and the reason, then `next_step`.
 fn opening_refusal(ui: &mut egui::Ui, refusal: &OpeningRefusal, next_step: &str) {
     ui.colored_label(ui.visuals().warn_fg_color, refusal.lead);
@@ -70,6 +73,11 @@ pub fn model_label(app: &AppState, id: &str, name: &str) -> String {
     label_among(&offered_names(app), id, name)
 }
 
+/// Draws the Model panel: the model list, New model and Edit model, then the declarations of the model the panel shows.
+///
+/// While Build replays the preview of the Editor's sheet, the panel shows the preview's model: the list reads "Preview
+/// of" and its name, and the declarations are the preview's. A model picked from the list, the selected one included,
+/// ends that, as Build, the Parameters tab and the panel follow the selection again.
 pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     let offered = offered_names(app);
     if offered.is_empty() {
@@ -86,35 +94,57 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         return;
     }
     let labels = list_labels(&offered);
-    let selected_name = offered
-        .iter()
-        .zip(&labels)
-        .find(|((id, _), _)| app.selected_model.as_deref() == Some(id.as_str()))
-        .map_or_else(
-            || app.selected_entry().map_or("None", ModelEntry::name).to_owned(),
-            |(_, label)| label.clone(),
-        );
+    let preview = app
+        .build_replays_preview()
+        .then(|| app.loaded_entry())
+        .flatten()
+        .map(|entry| format!("Preview of {}", entry.name()));
+    let selected_name = preview.clone().unwrap_or_else(|| {
+        offered
+            .iter()
+            .zip(&labels)
+            .find(|((id, _), _)| app.selected_model.as_deref() == Some(id.as_str()))
+            .map_or_else(
+                || app.selected_entry().map_or("None", ModelEntry::name).to_owned(),
+                |(_, label)| label.clone(),
+            )
+    });
     let mut picked = None;
 
-    egui::ComboBox::from_label("Select model")
+    let list = egui::ComboBox::from_label("Select model")
         .selected_text(selected_name)
         // As tall as the window allows. The model list outgrows egui's default of 200 points.
         .height(ui.ctx().content_rect().height())
         .show_ui(ui, |ui| {
             for ((id, _), label) in offered.iter().zip(&labels) {
-                let selected = app.selected_model.as_deref() == Some(id.as_str());
+                // Behind the preview no model of the list is the one shown, and the selected one can be picked again.
+                let selected = preview.is_none() && app.selected_model.as_deref() == Some(id.as_str());
                 if ui.selectable_label(selected, label).clicked() && !selected {
                     picked = Some(id.clone());
                 }
             }
         });
+    if preview.is_some() {
+        list.response.on_hover_text(PREVIEW_SELECTED);
+    }
 
     let changed_model = picked.is_some();
     if let Some(id) = picked {
-        app.select_model(&id);
+        if app.selected_model.as_deref() == Some(id.as_str()) {
+            app.release_preview_selection();
+        } else {
+            app.select_model(&id);
+        }
     }
     editor_buttons(ui, app);
 
+    if app.build_replays_preview() {
+        if let Some(entry) = app.loaded_entry().cloned() {
+            let values = app.loaded_values.clone();
+            declarations_ui(ui, app, &entry, &values, changed_model);
+        }
+        return;
+    }
     let Some(entry) = app.selected_entry() else {
         if let Some(refusal) = &app.opening_refusal {
             ui.separator();
@@ -122,13 +152,29 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
         }
         return;
     };
+    let entry = entry.clone();
+    let values = app.param_values.clone();
+    declarations_ui(ui, app, &entry, &values, changed_model);
+}
 
+/// Draws the description and the declarations of `entry`, its footprint at `values`. `changed_model` is whether the
+/// panel shows another model than on the frame before.
+fn declarations_ui(
+    ui: &mut egui::Ui,
+    app: &AppState,
+    entry: &ModelEntry,
+    values: &[henad_core::params::ParamValue],
+    changed_model: bool,
+) {
     ui.separator();
-    ui.label(entry.description());
-    ui.separator();
+    // A model applied or previewed from the Editor can have no description.
+    if !entry.description().is_empty() {
+        ui.label(entry.description());
+        ui.separator();
+    }
 
     // Recomputed as the sliders move, so the footprint tracks the panel next door.
-    let demand = entry.demand(&app.param_values, &app.runtime.granted);
+    let demand = entry.demand(values, &app.runtime.granted);
     let storage_limit = app.runtime.granted.max_storage_buffers_per_shader_stage;
 
     let mut scroll = egui::ScrollArea::vertical();
@@ -170,9 +216,10 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
 }
 
 /// Draws New model, and Edit model for a selected model whose code the Editor can show. New model opens its dialog, and
-/// Edit model opens the Editor.
+/// Edit model opens the Editor. Behind the preview of the Editor's sheet, whose model the Editor holds, Edit model is
+/// left out.
 fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
-    let editable = app.selected_entry().is_some_and(editor::can_edit);
+    let editable = !app.build_replays_preview() && app.selected_entry().is_some_and(editor::can_edit);
     ui.horizontal_wrapped(|ui| {
         let model = add_button(
             ui,

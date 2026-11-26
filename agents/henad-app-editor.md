@@ -38,7 +38,11 @@ cursor there (`move_cursor_to`). Every line of the status area under the panes i
 severity): the last open or save (`file_status`, a `FileStatus` that is a note or a failure,
 `file_status_ui`), `NO_COMPUTE` as a warning, the preview's line, the outcome (`outcome_line`, an
 error for a refusal or a fault), "Press Apply to check and install the model." (`PRESS_APPLY`)
-and each problem.
+and each problem. While a graph holds an error, which Apply refuses, `sentence::FIX_THEN_APPLY`
+("Fix the problems below, then press Apply.") stands in place of `PRESS_APPLY`, and a sheet's list
+does the same (`henad-app-sheet-open.md`). A grid rule has no check before Apply and keeps
+`PRESS_APPLY`. `ApplyOutcome::installed` holds for `Applied`, `AwaitingRebuild`, `Installed` and
+`Unchanged`.
 `code_view.rs` draws one `TextEdit::multiline(..).code_editor()` with a layouter
 that never wraps, in one `ScrollArea::both`, beside a gutter outside it. The gutter's numbers come
 from the galley's rows (`gutter_numbers`) and follow them up and down, and stay in place while a
@@ -306,12 +310,15 @@ and leaves the running preview alone, and the status area then reads `STALE_PREV
 edit (Build, Apply) drops the preview to `Idle`, `preview_can_load` false leaves it `Waiting`
 (`PREVIEW_WAITS`, "Preview waits for the running model."), and otherwise `build_preview` compiles
 `preview_program`, takes `preview_values` (defaults, `grid_width` and `grid_height` at most
-`PREVIEW_SIDE`, 256, `num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`)
+`PREVIEW_SIDE`, 256, `num_agents` at most `PREVIEW_AGENTS`, 16384, `PreviewRun::Grid` or `Agents`,
+`scaled` when a default was above its limit)
 with the Parameters tab's tried values in place (`with_tried`, `agents/henad-app.md`), refuses a
 shortfall (`AppState::entry_shortfalls`) or a `SetupError` as `Refused`, and calls
 `AppState::load_preview` with `EditorModel::preview_plays`: a graph's preview plays, and a sheet's
 waits at tick 0 for Play.
-`AppState::preview` (`PreviewRun`, the size) marks a loaded preview, and `load` clears it.
+`AppState::preview` (`PreviewRun`, the size, `is_scaled`) marks a loaded preview, and `load` clears
+it. `preview_running_text` names Apply "to run the model at its own size" only for a scaled preview,
+and a preview at the model's own size, such as the ants' 2000 agents, leaves Apply out.
 `load_preview` plays the run only when asked and the preview is still loaded after `load_setup`: a
 build that fails inline (a browser, or a test with `AppState::inline_builds`) or whose thread does
 not start has already offloaded it. `EditorPanel::load`, `load_graph` and `load_sheet` reset
@@ -324,8 +331,9 @@ Build to run it." behind a graph's preview, and is dropped behind a sheet's prev
 replays. A code fault of a preview (any tick) goes to `Preview::show_problem` (`Faulted`, placed by
 `EditorModel::place`) through `show_fault` while `holds_preview_model` holds, and the modal keeps
 the rest, the fault of a preview that outlived its graph included. Playback's `preview_line` names
-the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY`, or `PREVIEW_ORPHANED`
-once the Editor holds no graph or sheet.
+the preview and its size, with the hover `preview_hover`: `PREVIEW_APPLY` for a scaled preview,
+`PREVIEW_APPLY_FULL_SIZE` ("Press Apply in the Editor to run the model.") for one at the model's
+own size, or `PREVIEW_ORPHANED` once the Editor holds no graph or sheet.
 
 `src/tests/graph_editor.rs` holds the state tests (starters, open by kind, Apply installs at full
 size, the Rebuild model modal past tick 0, refused edits, undo, coalescing, dropped wires, pass

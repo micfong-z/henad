@@ -30,16 +30,19 @@ use egui::{
 use henad_compute::entry::{ModelEntry, ModelSet};
 use henad_compute::fault::{Fault, FaultKind};
 use henad_compute::gpu::runtime_grid::GridRule;
-use henad_core::diagnostic::CodeDiagnostic;
+use henad_core::diagnostic::{CodeDiagnostic, DiagnosticSeverity};
 use henad_core::explore::fingerprint::fnv1a64;
 use henad_core::provenance::{CodeOrigin, ModelCode, ModelSource};
 use henad_explore::model_file::ModelFile;
 use henad_graph::model_text::read_header;
+use henad_graph::sheet::check::SheetReport;
 use henad_graph::sheet::document::SheetDocument;
 use henad_graph::sheet::edit::{IdSpace, mint_id};
+use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
-    CANCEL, DISCARD_CHANGES, PREVIEW_WAITS as SHEET_PREVIEW_WAITS, REPLACE, REPLACE_APPLIED_HEADING, SAVE_MODEL,
-    SHEET_EMPTY, STALE_WORLD_NOTICE, UNSAVED_HEADING, WORLD_EMPTY, replace_applied, unsaved_changes,
+    CANCEL, DISCARD_CHANGES, FIX_CARD_THEN_APPLY, FIX_THEN_APPLY, NOT_APPLIED_FIX_CARD,
+    PREVIEW_WAITS as SHEET_PREVIEW_WAITS, REPLACE, REPLACE_APPLIED_HEADING, SAVE_MODEL, SHEET_EMPTY,
+    STALE_WORLD_NOTICE, UNSAVED_HEADING, WORLD_EMPTY, lines_not_run, replace_applied, unsaved_changes,
 };
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
 use henad_graph::{GraphFile, KIND_GRAPH};
@@ -391,6 +394,15 @@ impl ApplyOutcome {
             // A refused build reads as a failed one, and names its reason below.
             Self::Faulted(_) | Self::BuildRefused(_) => ("Model build failed. Fix the problem below.", true),
         }
+    }
+
+    /// Returns whether the outcome installed the model and reports no error: applied, waiting for Rebuild or Build, or
+    /// unchanged.
+    pub fn installed(&self) -> bool {
+        matches!(
+            self,
+            Self::Applied | Self::AwaitingRebuild | Self::Installed | Self::Unchanged
+        )
     }
 
     /// Problems the outcome lists, empty for an outcome without any.
@@ -1180,10 +1192,11 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
         return;
     };
     let live: Vec<CodeDiagnostic> = graph.diagnostics().cloned().collect();
+    let has_errors = graph.has_errors();
     let shown = PreviewShown {
         plays: true,
         past_start: false,
-        stale: graph.has_errors(),
+        stale: has_errors,
     };
     preview_ui(ui, &panel.preview.state, shown);
     match &panel.outcome {
@@ -1197,6 +1210,10 @@ fn graph_outcome_ui(ui: &mut egui::Ui, panel: &mut EditorPanel) {
             {
                 Notice::new(NoticeKind::Error, &diagnostic_text(diagnostic)).show(ui);
             }
+        }
+        // Apply refuses a graph with an error, which the list below names.
+        None if has_errors => {
+            Notice::new(NoticeKind::Info, FIX_THEN_APPLY).show(ui);
         }
         None => {
             Notice::new(NoticeKind::Info, PRESS_APPLY).show(ui);
@@ -1287,16 +1304,42 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel, past_start: bool) {
             live.push(problem);
         }
     }
+    let errors_below = live
+        .iter()
+        .any(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error);
+    let errors_on_card = sheet
+        .report()
+        .errors()
+        .any(|diagnostic| sheet::card_pane::draws_diagnostic(sheet.document(), diagnostic));
     match &panel.outcome {
         Some(outcome) => {
-            outcome_line(ui, outcome);
-            for diagnostic in outcome
+            let unknown: Vec<&CodeDiagnostic> = outcome
                 .diagnostics()
                 .iter()
                 .filter(|diagnostic| !known.iter().any(|known| known.message == diagnostic.message))
-            {
+                .collect();
+            if matches!(outcome, ApplyOutcome::Refused(_)) && unknown.is_empty() && !errors_below && errors_on_card {
+                Notice::new(NoticeKind::Error, NOT_APPLIED_FIX_CARD).show(ui);
+            } else {
+                outcome_line(ui, outcome);
+            }
+            for diagnostic in unknown {
                 Notice::new(NoticeKind::Error, &diagnostic.message).show(ui);
             }
+            if outcome.installed() {
+                let lines = lines_left_out(sheet.document(), sheet.report());
+                if !lines.is_empty() {
+                    Notice::new(NoticeKind::Warning, &lines_not_run(&lines)).show(ui);
+                }
+            }
+        }
+        // The world's line says how to start a sheet that shows nothing, which Apply refuses.
+        None if sheet.shows_nothing() => {}
+        None if sheet.has_errors() && !errors_below && errors_on_card => {
+            Notice::new(NoticeKind::Info, FIX_CARD_THEN_APPLY).show(ui);
+        }
+        None if sheet.has_errors() => {
+            Notice::new(NoticeKind::Info, FIX_THEN_APPLY).show(ui);
         }
         None => {
             Notice::new(NoticeKind::Info, PRESS_APPLY).show(ui);
@@ -1306,6 +1349,28 @@ fn sheet_outcome_ui(ui: &mut egui::Ui, panel: &EditorPanel, past_start: bool) {
     for diagnostic in live {
         Notice::new(NoticeKind::of(diagnostic.severity), &diagnostic.message).show(ui);
     }
+}
+
+/// Returns the lines of `document` that `report` skips, each as the button of its card, `None` for a card that runs each
+/// tick, and its number on that card, in the order of the report.
+fn lines_left_out<'a>(document: &'a SheetDocument, report: &SheetReport) -> Vec<(Option<&'a str>, usize)> {
+    let mut lines = Vec::new();
+    for diagnostic in report.diagnostics.iter().filter(|diagnostic| diagnostic.skips_line) {
+        let (Some(index), Some(id)) = (diagnostic.card, diagnostic.line.as_deref()) else {
+            continue;
+        };
+        let Some(card) = document.cards.get(index) else {
+            continue;
+        };
+        let relations = CardRelations::new(document, card);
+        if let Some(number) = relations.number(id) {
+            let place = (relations.button(), number);
+            if !lines.contains(&place) {
+                lines.push(place);
+            }
+        }
+    }
+    lines
 }
 
 /// State of the model a preview line describes, beside the state of the preview.
@@ -1362,15 +1427,19 @@ fn preview_ui(ui: &mut egui::Ui, state: &PreviewState, shown: PreviewShown) {
 /// built, and `past_start` whether the preview of a sheet has passed tick 0 or a button was pressed in it.
 ///
 /// A graph's preview reads "Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own
-/// size." A sheet's preview waits at tick 0, and its line names Play until the world has left its start.
+/// size." A sheet's preview waits at tick 0, and its line names Play until the world has left its start. A preview
+/// that runs at the model's own size leaves Apply out.
 pub fn preview_running_text(run: PreviewRun, plays: bool, past_start: bool) -> String {
     let size = run.size_text();
-    if plays {
-        format!("Preview runs at {size} from tick 0. Press Apply to run the model at its own size.")
-    } else if past_start {
-        format!("Preview runs at {size}. Press Apply to run the model at its own size.")
-    } else {
-        format!("Preview at {size} starts at tick 0. Press Play to run it, or Apply to run the model at its own size.")
+    match (plays, past_start, run.is_scaled()) {
+        (true, _, true) => format!("Preview runs at {size} from tick 0. Press Apply to run the model at its own size."),
+        (true, _, false) => format!("Preview runs at {size} from tick 0."),
+        (false, true, true) => format!("Preview runs at {size}. Press Apply to run the model at its own size."),
+        (false, true, false) => format!("Preview runs at {size}."),
+        (false, false, true) => format!(
+            "Preview at {size} starts at tick 0. Press Play to run it, or Apply to run the model at its own size."
+        ),
+        (false, false, false) => format!("Preview at {size} starts at tick 0. Press Play to run it."),
     }
 }
 

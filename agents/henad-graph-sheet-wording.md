@@ -11,8 +11,10 @@ pickers, their messages, typed numbers and result names, and the reasons of a gr
 "otherwise", `rates.rs` the words and notes of rates and chances, competing rates, the long tick and
 rate conversion, `errors.rs` the errors and refusals with the cost words and fire counts, `sheet.rs`
 the sheet's sections and forms, `editor.rs` the New model, unsaved changes, replace, delete and New
-parameter dialogs, the top bar, the world tabs and the Diagram, `convert.rs` the conversion words,
-`grammar.rs` lists, articles, capitals, possessives, plurals and `thing_word`, `parts.rs` the part
+parameter dialogs, the top bar, the world tabs, the list under the panes (`FIX_THEN_APPLY`,
+`FIX_CARD_THEN_APPLY`, `NOT_APPLIED_FIX_CARD`, `lines_not_run`) and the Diagram, `convert.rs` the
+conversion words, `grammar.rs` lists, articles, capitals, possessives, plurals and `thing_word`,
+`parts.rs` the part
 types and `sentences.rs` the `Parts` builder, `Sentences` and `competing_parts`.
 `agents/henad-graph-sheet.md` holds the rest of the sheet module, and `agents/henad-app-card.md` the
 card that draws the parts. The drag of a line takes `drag_line_tooltip`, `more_lines`,
@@ -38,7 +40,8 @@ property form and its checks, Starts as with `StartsField` and the `starts_*_pla
 Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and the Agents, Ground and Events
 words), the New model and New parameter dialogs (`STARTER_CHOICES` with every starter's
 description, the dialog's headings `SHEET_STARTERS_HEADING`, `ADVANCED_HEADING`, `GRID_RULE_HEADING`
-and `NODE_GRAPH_HEADING`, the grid rule starter `GRID_RULE_STARTER` and `CHOOSE_A_STARTER`), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
+and `NODE_GRAPH_HEADING`, the grid rule starter `GRID_RULE_STARTER` and `CHOOSE_A_STARTER`), the
+Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
 (`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (the tried-value words,
 `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. A value's type is named "Boolean" for

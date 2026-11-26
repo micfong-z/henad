@@ -363,11 +363,10 @@ Cancel and Escape), `the_new_model_dialog_is_modal_and_headed_by_its_title`,
 `enter_in_the_name_field_creates_the_model`, `the_header_and_the_file_menu_hold_new_model_alone`,
 `the_new_model_dialog_holds_the_grid_rule_and_the_six_graph_starters_under_advanced` (each level's
 headings closing each other, Create disabled with no heading of starters open, the graph and the
-rule created) and
-`the_new_model_dialog_opens_on_sheet_and_enter_on_a_heading_creates_nothing`. `the_empty_editor_names_every_way_in` holds
-`EMPTY_EDITOR`. The `Harness` (`Node` with its `disabled` flag and enclosing `dialog`, `top`,
-`accessible_texts`, `accessible_texts_outside`, `open_sheet`, `window_focused`, `click_in`,
-`click_heading`, `create_under`), `forbidden_words`,
+rule created) and `the_new_model_dialog_opens_on_sheet_and_enter_on_a_heading_creates_nothing`.
+`the_empty_editor_names_every_way_in` holds `EMPTY_EDITOR`. The `Harness` (`Node` with its
+`disabled` flag and enclosing `dialog`, `top`, `accessible_texts`, `accessible_texts_outside`,
+`open_sheet`, `window_focused`, `click_in`, `click_heading`, `create_under`), `forbidden_words`,
 `tick_zero_stat` and `wait_for_snapshot` sit in `src/tests/support.rs` for both files.
 `src/tests/sheet_pane.rs` holds `a_blank_model_builds_the_life_start_by_accessible_names` (New
 model, Blank, Status with Dead and Alive, By chance, "Use a parameter", New parameter Initial

@@ -1103,6 +1103,7 @@ Press Play in the Playback tab to run it, <span class="ui" markdown>:material-fa
 Once you select another model in the Model tab, Build builds that model instead.
 Once **One tick is** has a unit, the tick counter adds the elapsed time, as in "Tick 60 (2.5 days)" for ticks of an hour, and the Charts tab plots the measures over that time.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
+While the preview runs, the Model tab names it, as in **Preview of Ant foraging**, and shows its model.
 A sheet that holds a problem still opens, with the problem under its line on the card, or listed under the panes when no line holds it.
 
 ### Grid rules

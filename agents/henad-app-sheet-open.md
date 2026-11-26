@@ -20,13 +20,29 @@ not list, then every diagnostic of the report the card does not draw and every l
 report lacks, each an error or a warning notice (`NoticeKind::of`) of the message alone. Its line
 and column point into the sheet's text, which sheet mode never shows. A waiting preview reads the
 sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows sits under it on
-the card. `save_name` suggests `<sheet id>.toml` for a sheet with no file name,
-errors or not. Apply's `ModelFile::parse(...).and_then(|file| file.entry())` installs
-the lowered graph's entry, whose source records the sheet's canonical text as its author text, and
-`edit_model` reopens an applied sheet's entry as that sheet unless the Editor applied it. A note
-edit leaves the source equal: Apply reads `Unchanged`, rebuilds nothing, and replaces the set's
-entry through `install_models` when `same_author` fails, so a sweep started next records the new
-text (`a_note_edit_does_not_reinstall_the_model`).
+the card. With no outcome, the list says to press Apply only while Apply would take the sheet: a
+sheet that shows nothing reads `WORLD_EMPTY` alone, and a sheet with an error reads
+`FIX_THEN_APPLY`, or `FIX_CARD_THEN_APPLY` when no error is listed below and one sits on the card. A
+refusal whose every error sits on the card reads `NOT_APPLIED_FIX_CARD` in place of the refused
+line. After an `installed` outcome, `lines_left_out` gives the lines the report skips, each with its
+card's button and its number there, and `sentence::lines_not_run` names them as a warning ("Line 2
+is not run yet. The model runs without it.").
+(`the_apply_line_asks_for_fixes_while_apply_would_refuse`,
+`applying_a_sheet_with_a_line_not_run_names_the_line`,
+`a_preview_at_the_model_s_own_size_names_no_size_for_apply`.) While `build_replays_preview` holds,
+the Model tab (`model.rs`) names the preview ("Preview of Ant foraging", with `PREVIEW_SELECTED` on
+hover) and draws the loaded entry's declarations at `loaded_values` (`declarations_ui`), marks no
+model of its list and leaves Edit model out. A pick of the selected model runs
+`AppState::release_preview_selection`, and of another `select_model`, after which Build, the
+Parameters tab and the Model tab follow the selection
+(`the_model_tab_names_the_sheet_s_preview_while_build_replays_it`). `save_name` suggests
+`<sheet id>.toml` for a sheet with no file name, errors or not. Apply's
+`ModelFile::parse(...).and_then(|file| file.entry())` installs the lowered graph's entry, whose
+source records the sheet's canonical text as its author text, and `edit_model` reopens an applied
+sheet's entry as that sheet unless the Editor applied it. A note edit leaves the source equal: Apply
+reads `Unchanged`, rebuilds nothing, and replaces the set's entry through `install_models` when
+`same_author` fails, so a sweep started next records the new text
+(`a_note_edit_does_not_reinstall_the_model`).
 
 **The preview**. A sheet's preview takes the graph editor's path (`preview.rs`,
 `henad-app-editor.md`) with one difference: `EditorModel::preview_plays` is false, so
@@ -85,11 +101,12 @@ Create opens, by the open heading (`NewModelKind`): a sheet as below, `new_grid_
 model asked before the dialog opened. With no such heading open, Create is disabled with
 `CHOOSE_A_STARTER`. Grid rule and Node graph take no name, as their starters keep their own. Enter
 creates, as Create does, except on the frame a heading was pressed, so Enter on a focused heading
-opens or closes it alone. Cancel, Escape or a click on the backdrop closes it. `create_model(app, file_name, name)` reads the
-starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
-and a refused one keeps the starter's name with the reason as the file status), loads the sheet
-under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the
-Editor to the front. The world question of the dialog shows only
+opens or closes it alone. Cancel, Escape or a click on the backdrop closes it.
+`create_model(app, file_name, name)` reads the starter, runs `SheetEdit::SetSheetName` when the name
+differs (an empty name is `UNTITLED_MODEL`, and a refused one keeps the starter's name with the
+reason as the file status), loads the sheet under the id `new_model_id` gives
+(`agents/henad-app-editor.md`) with no file name and brings the Editor to the front. The world
+question of the dialog shows only
 under Blank, and Blank is offered first. `starter_choices` puts Blank first (`file_name`
 `None`, "Blank" as its name), and the world question (`WORLD_QUESTION`, `CELLS_ON_A_GRID`
 or `AGENTS_IN_OPEN_SPACE` into `made_of`) shows under Blank while it is chosen. `create_blank_model`

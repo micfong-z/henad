@@ -1533,6 +1533,27 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
             "Open a heading and choose a starter.",
             fixed(sentence::CHOOSE_A_STARTER),
         ),
+        // The list under the panes.
+        (
+            "Fix the problems below, then press Apply.",
+            fixed(sentence::FIX_THEN_APPLY),
+        ),
+        (
+            "Fix the problems on the card, then press Apply.",
+            fixed(sentence::FIX_CARD_THEN_APPLY),
+        ),
+        (
+            "Model not applied. Fix the problems on the card.",
+            fixed(sentence::NOT_APPLIED_FIX_CARD),
+        ),
+        (
+            "Line 3 is not run yet. The model runs without it.",
+            sentence::lines_not_run(&[(None, 3)]),
+        ),
+        (
+            "Lines 2 and 3 and Clear line 1 are not run yet. The model runs without them.",
+            sentence::lines_not_run(&[(None, 2), (None, 3), (Some("Clear"), 1)]),
+        ),
         (
             "Game of Life has unsaved changes.",
             sentence::unsaved_changes(&["Game of Life".to_owned()]),
@@ -2055,6 +2076,9 @@ const FIXED_WORDING: &[&str] = &[
     sentence::GRID_RULE_HEADING,
     sentence::GRID_RULE_STARTER.1,
     sentence::CHOOSE_A_STARTER,
+    sentence::FIX_THEN_APPLY,
+    sentence::FIX_CARD_THEN_APPLY,
+    sentence::NOT_APPLIED_FIX_CARD,
 ];
 
 #[test]

@@ -73,6 +73,7 @@ fn a_new_graph_model_previews_at_the_preview_size() {
     let run = PreviewRun::Grid {
         width: side,
         height: side,
+        scaled: PREVIEW_SIDE < 1024,
     };
     assert_eq!(app.preview(), Some(run));
     assert_eq!(app.editor.preview.state, PreviewState::Running(run));
@@ -367,7 +368,13 @@ fn an_agents_graph_previews_at_the_preview_count_and_applies_at_its_own() {
     };
     new_graph_model(&mut app, "boids.toml");
     settle_preview(&mut app);
-    assert_eq!(app.preview(), Some(PreviewRun::Agents { count: PREVIEW_AGENTS }));
+    assert_eq!(
+        app.preview(),
+        Some(PreviewRun::Agents {
+            count: PREVIEW_AGENTS,
+            scaled: true
+        })
+    );
     assert_eq!(app.loaded_id(), Some("node_boids"));
     assert_eq!(app.loaded_values[0], ParamValue::U32(PREVIEW_AGENTS));
     app.wait_for_build();
@@ -427,7 +434,8 @@ fn a_preview_keeps_a_side_below_the_limit() {
         app.preview(),
         Some(PreviewRun::Grid {
             width: 100,
-            height: PREVIEW_SIDE.min(1024)
+            height: PREVIEW_SIDE.min(1024),
+            scaled: PREVIEW_SIDE < 1024
         })
     );
 }

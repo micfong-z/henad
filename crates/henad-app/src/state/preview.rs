@@ -16,11 +16,15 @@ pub enum PreviewRun {
         width: u32,
         /// Height of the preview's grid in cells.
         height: u32,
+        /// Whether the grid is smaller than the model's own.
+        scaled: bool,
     },
     /// An agent model.
     Agents {
         /// Number of the preview's agents.
         count: u32,
+        /// Whether the preview runs fewer agents than the model's own number.
+        scaled: bool,
     },
 }
 
@@ -28,9 +32,16 @@ impl PreviewRun {
     /// Returns the size as the app shows it, such as `256 × 256 cells` or `4096 agents`.
     pub fn size_text(self) -> String {
         match self {
-            Self::Grid { width, height } => format!("{width} × {height} cells"),
-            Self::Agents { count: 1 } => "1 agent".to_owned(),
-            Self::Agents { count } => format!("{count} agents"),
+            Self::Grid { width, height, .. } => format!("{width} × {height} cells"),
+            Self::Agents { count: 1, .. } => "1 agent".to_owned(),
+            Self::Agents { count, .. } => format!("{count} agents"),
+        }
+    }
+
+    /// Returns whether the preview runs smaller than the model's own size. Apply then runs the model at its own size.
+    pub fn is_scaled(self) -> bool {
+        match self {
+            Self::Grid { scaled, .. } | Self::Agents { scaled, .. } => scaled,
         }
     }
 }
@@ -95,6 +106,14 @@ impl AppState {
     /// Once another model is selected, Build builds that model as it does behind any preview.
     pub fn build_replays_preview(&self) -> bool {
         self.previews_editor_sheet() && self.preview_selection == self.selected_model
+    }
+
+    /// Ends the hold of the running preview over the selected model, as a selection of another model does: Build, the
+    /// Parameters tab and the Model tab follow the selected model again, while the preview runs on.
+    ///
+    /// Note that with no model selected the preview keeps its hold.
+    pub fn release_preview_selection(&mut self) {
+        self.preview_selection = None;
     }
 
     /// Returns whether the Parameters tab draws the preview's parameters and sends a change to it: a preview runs or

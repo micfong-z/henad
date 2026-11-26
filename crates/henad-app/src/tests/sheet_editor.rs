@@ -24,8 +24,9 @@ use henad_graph::sheet::document::{
     StartsAs,
 };
 use henad_graph::sheet::sentence::{
-    A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, ADVANCED_HEADING, BY_CHANCE, CANCEL, CREATE, GRID_RULE_HEADING,
-    GRID_RULE_STARTER, NEW_MODEL, NODE_GRAPH_HEADING, SHEET_STARTERS_HEADING, STALE_WORLD_NOTICE, STARTER_CHOICES,
+    A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, ADVANCED_HEADING, BY_CHANCE, CANCEL, CREATE, FIX_CARD_THEN_APPLY,
+    FIX_THEN_APPLY, GRID_RULE_HEADING, GRID_RULE_STARTER, NEW_MODEL, NODE_GRAPH_HEADING, NOT_APPLIED_FIX_CARD,
+    SHEET_STARTERS_HEADING, STALE_WORLD_NOTICE, STARTER_CHOICES, WORLD_EMPTY, lines_not_run,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 
@@ -46,7 +47,9 @@ use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{
     ApplyOutcome, EditorModel, apply, edit_model, new_grid_rule, open_text, preview_running_text, save_name,
 };
-use crate::ui::playback::{press_build, run_refusal, tick_counter};
+use crate::ui::playback::{
+    PREVIEW_APPLY, PREVIEW_APPLY_FULL_SIZE, press_build, preview_hover, run_refusal, tick_counter,
+};
 use crate::ui::results::store::{ResultsSource, ResultsStore};
 use crate::ui::results::{open_folder, open_in_editor, poll};
 
@@ -87,10 +90,12 @@ fn every_sheet_starter_opens_as_a_sheet_previews_at_tick_zero_plays_and_applies(
         let run = match document.world.made_of {
             MadeOf::Agents => PreviewRun::Agents {
                 count: document.agents[0].count.min(PREVIEW_AGENTS),
+                scaled: document.agents[0].count > PREVIEW_AGENTS,
             },
             _ => PreviewRun::Grid {
                 width: side(document.world.width),
                 height: side(document.world.height),
+                scaled: document.world.width.max(document.world.height) > PREVIEW_SIDE,
             },
         };
         assert_eq!(app.preview(), Some(run), "{}", starter.file_name);
@@ -296,11 +301,14 @@ fn a_sheet_preview_waits_at_tick_zero_until_play() {
     assert!(!app.runs_editor_sheet());
 }
 
+/// A preview smaller than the model names Apply to run the model at its own size, and a preview at the model's own
+/// size does not.
 #[test]
 fn the_sheet_preview_line_names_play_and_the_graph_line_is_unchanged() {
     let run = PreviewRun::Grid {
         width: 256,
         height: 256,
+        scaled: true,
     };
     assert_eq!(
         preview_running_text(run, false, false),
@@ -314,6 +322,171 @@ fn the_sheet_preview_line_names_play_and_the_graph_line_is_unchanged() {
         preview_running_text(run, true, false),
         "Preview runs at 256 × 256 cells from tick 0. Press Apply to run the model at its own size."
     );
+    let full = PreviewRun::Agents {
+        count: 2000,
+        scaled: false,
+    };
+    assert_eq!(
+        preview_running_text(full, false, false),
+        "Preview at 2000 agents starts at tick 0. Press Play to run it."
+    );
+    assert_eq!(preview_running_text(full, false, true), "Preview runs at 2000 agents.");
+    assert_eq!(
+        preview_running_text(full, true, false),
+        "Preview runs at 2000 agents from tick 0."
+    );
+}
+
+/// Line of the list under the panes that says to press Apply.
+const PRESS_APPLY: &str = "Press Apply to check and install the model.";
+
+/// While Apply would refuse the sheet, the list says to fix its problems first and where they are: below for a problem
+/// the list holds, on the card for one under its line, and Apply's refusal says the same. A sheet that shows nothing
+/// reads the world's line alone, and a sheet Apply takes reads the line that says to press Apply.
+#[test]
+fn the_apply_line_asks_for_fixes_while_apply_would_refuse() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    assert!(shows_or_notice(&mut harness, PRESS_APPLY));
+
+    // Walls around walkers that move by an arrow stop the sheet lowering, and the list names the problem.
+    let walls = edited(
+        starter_text("random_walk.toml"),
+        "edges = \"wrap\"",
+        "edges = \"walls\"",
+    );
+    harness.open_sheet(&walls);
+    assert!(sheet(&harness.app).has_errors());
+    assert!(shows_or_notice(&mut harness, FIX_THEN_APPLY));
+    assert!(!shows_or_notice(&mut harness, PRESS_APPLY));
+
+    // A checker error under line 2 of the card.
+    harness.open_sheet(&life_with_an_error_at_line_two());
+    assert!(shows_or_notice(&mut harness, FIX_CARD_THEN_APPLY));
+    assert!(!shows_or_notice(&mut harness, PRESS_APPLY));
+    apply(&mut harness.app);
+    assert!(matches!(harness.app.editor.outcome, Some(ApplyOutcome::Refused(_))));
+    assert!(shows_or_notice(&mut harness, NOT_APPLIED_FIX_CARD));
+    assert!(!shows_or_notice(
+        &mut harness,
+        "Model not applied. Fix the problems below."
+    ));
+
+    harness.click(NEW_MODEL);
+    harness.click_in(NEW_MODEL, CREATE);
+    assert!(sheet(&harness.app).shows_nothing(), "Blank of cells shows nothing");
+    assert!(shows_or_notice(&mut harness, WORLD_EMPTY));
+    assert!(!shows_or_notice(&mut harness, PRESS_APPLY));
+}
+
+/// After Apply of a sheet with a line that does not run, the list names the line under the outcome.
+#[test]
+fn applying_a_sheet_with_a_line_not_run_names_the_line() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(&life_with_a_skipped_line());
+    apply(&mut harness.app);
+    harness.app.wait_for_build();
+    assert!(
+        harness.app.editor.outcome.as_ref().is_some_and(ApplyOutcome::installed),
+        "{:?}",
+        harness.app.editor.outcome
+    );
+    let named = lines_not_run(&[(None, 2)]);
+    assert_eq!(named, "Line 2 is not run yet. The model runs without it.");
+    assert!(shows_or_notice(&mut harness, &named));
+
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    apply(&mut harness.app);
+    harness.app.wait_for_build();
+    assert!(
+        !harness
+            .accessible_texts()
+            .iter()
+            .any(|text| text.contains("not run yet")),
+        "a sheet whose lines all run names none"
+    );
+}
+
+/// The previews of random walk and of ants run at the model's own size, and neither the list under the panes nor
+/// Playback's hover says that Apply runs the model at its own size. Game of Life's preview is smaller, and both say it.
+#[test]
+fn a_preview_at_the_model_s_own_size_names_no_size_for_apply() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    for (file, scaled) in [
+        ("random_walk.toml", false),
+        ("ants.toml", false),
+        ("game_of_life.toml", true),
+    ] {
+        harness.open_sheet(starter_text(file));
+        settle_preview(&mut harness.app);
+        harness.app.wait_for_build();
+        let run = harness.app.preview().expect("the preview runs");
+        assert_eq!(run.is_scaled(), scaled, "{file}");
+        let own_size = harness
+            .accessible_texts()
+            .iter()
+            .any(|text| text.contains("at its own size"));
+        assert_eq!(own_size, scaled, "{file}");
+        let hover = if scaled { PREVIEW_APPLY } else { PREVIEW_APPLY_FULL_SIZE };
+        assert_eq!(preview_hover(&harness.app), hover, "{file}");
+    }
+}
+
+/// Returns the label and the value of every node the Model tab draws over `app`, with AccessKit on.
+fn model_tab_texts(app: &mut AppState) -> Vec<String> {
+    let context = egui::Context::default();
+    context.enable_accesskit();
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 1000.0))),
+            ..egui::RawInput::default()
+        };
+        let mut output = context.run_ui(input, |ui| crate::ui::model::model_ui(ui, app));
+        output.textures_delta.clear();
+        let update = output.platform_output.accesskit_update.expect("an AccessKit update");
+        texts = update
+            .nodes
+            .iter()
+            .flat_map(|(_, node)| [node.label(), node.value()])
+            .flatten()
+            .map(str::to_owned)
+            .collect();
+    }
+    texts
+}
+
+/// While Build replays the preview of the Editor's sheet, the Model tab names the preview and shows its model, as the
+/// Parameters tab and Playback do. A model picked in the list, the one selected before included, ends that.
+#[test]
+fn the_model_tab_names_the_sheet_s_preview_while_build_replays_it() {
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    let selected = app.selected_model.clone().expect("a model is selected");
+    open_text(&mut app.editor, starter_text("ants.toml").to_owned(), None);
+    settle_preview(&mut app);
+    app.wait_for_build();
+    assert!(app.build_replays_preview());
+    let texts = model_tab_texts(&mut app);
+    assert!(texts.iter().any(|text| text == "Preview of Ant foraging"), "{texts:?}");
+    let id = app.loaded_entry().expect("the preview").id().to_owned();
+    assert!(texts.contains(&id), "the Identity rows are the preview's: {texts:?}");
+    assert!(!texts.contains(&selected), "{texts:?}");
+
+    app.release_preview_selection();
+    assert!(!app.build_replays_preview());
+    assert!(!app.params_drive_preview());
+    assert_eq!(app.selected_model.as_deref(), Some(selected.as_str()));
+    let texts = model_tab_texts(&mut app);
+    assert!(!texts.iter().any(|text| text.starts_with("Preview of")), "{texts:?}");
+    assert!(texts.contains(&selected), "{texts:?}");
 }
 
 #[test]

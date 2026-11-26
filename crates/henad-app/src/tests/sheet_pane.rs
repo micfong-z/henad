@@ -168,7 +168,8 @@ fn a_blank_model_builds_the_life_start_by_accessible_names() {
         harness.app.preview(),
         Some(PreviewRun::Grid {
             width: 100,
-            height: 100
+            height: 100,
+            scaled: false
         })
     );
     let share = tick_zero_stat(&mut harness.app, "Alive") / 10_000.0;
@@ -257,7 +258,8 @@ fn after_play_a_start_edit_waits_and_a_size_edit_restarts_with_the_notice() {
         harness.app.preview(),
         Some(PreviewRun::Grid {
             width: 200,
-            height: 256
+            height: 256,
+            scaled: true
         })
     );
     assert!(!harness.app.sheet_preview_past_start(), "the world is back at tick 0");

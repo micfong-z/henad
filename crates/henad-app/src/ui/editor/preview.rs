@@ -264,9 +264,10 @@ fn build_preview(app: &mut AppState) {
 }
 
 /// Returns the values a preview of `entry` builds with, each parameter's default with each side of a grid at most
-/// [`PREVIEW_SIDE`] and the number of agents at most [`PREVIEW_AGENTS`], and the preview's size.
+/// [`PREVIEW_SIDE`] and the number of agents at most [`PREVIEW_AGENTS`], and the preview's size, scaled when a default
+/// was above its limit.
 pub fn preview_values(entry: &ModelEntry) -> (Vec<ParamValue>, PreviewRun) {
-    let (mut width, mut height, mut agents) = (0, 0, None);
+    let (mut width, mut height, mut agents, mut scaled) = (0, 0, None, false);
     let values = entry
         .param_descriptors()
         .iter()
@@ -281,6 +282,7 @@ pub fn preview_values(entry: &ModelEntry) -> (Vec<ParamValue>, PreviewRun) {
             match value {
                 ParamValue::U32(default) => {
                     *size = default.min(limit);
+                    scaled |= default > limit;
                     ParamValue::U32(*size)
                 }
                 other => other,
@@ -288,8 +290,8 @@ pub fn preview_values(entry: &ModelEntry) -> (Vec<ParamValue>, PreviewRun) {
         })
         .collect();
     let run = match agents {
-        Some(count) => PreviewRun::Agents { count },
-        None => PreviewRun::Grid { width, height },
+        Some(count) => PreviewRun::Agents { count, scaled },
+        None => PreviewRun::Grid { width, height, scaled },
     };
     (values, run)
 }

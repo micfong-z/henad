@@ -403,6 +403,7 @@ A tick behind the current one starts the preview again from the same start first
 Until the first tick, a change redraws the start.
 After it, a change that builds starts the world again from tick 0, and a notice says so.
 Once the world has left tick 0, the line under the panes reads **Preview runs at 256 × 256 cells. Press Apply to run the model at its own size.**
+A preview that already runs at the model's own size, such as the 2000 ants of ant foraging, leaves out the part about Apply.
 A change that stops the sheet building leaves the world running the sheet as it was, and the line reads **The world shows the model before the last change. Fix the problems in red to update it.**
 After the first tick, a change of **Starts as** waits, and reads "Press Build in the Playback tab to see the change." under its property.
 The sheet's buttons sit under the sliders in the Parameters tab, each with a tooltip that says what it does, such as "Run once, every cell", as its row under **Buttons** shows.
@@ -411,6 +412,10 @@ Moving a slider tries the value in the preview and leaves the sheet as it is, an
 A note under the slider then reads "Trying this value. The model keeps 0.3.", and the parameter's row on the sheet reads "The world is trying 0.5. The model keeps 0.3."
 <span class="ui">Reset</span> under the slider returns to the value the sheet keeps, and <span class="ui">Keep</span> makes the tried value the sheet's own, widening its range to hold it, as one step of Undo.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
+While Apply would refuse the sheet, the line under the panes reads **Fix the problems below, then press Apply.**, or **Fix the problems on the card, then press Apply.** when each problem sits under its line.
+After Apply, a line that does not run yet is named under the outcome, as in **Line 2 is not run yet. The model runs without it.**
+While the preview runs, the Model tab names it, as in **Preview of Ant foraging**, and shows its model, as the Parameters tab does.
+Select a model in its list, the one selected before included, to make Build build that model again.
 A model made from a starter keeps the starter's id, and a blank model takes the id its name gives, such as `harbour_seals` for Harbour seals.
 Where a model built into the app already holds that id, such as the example model Game of Life holds `game_of_life`, the new model takes `sheet_` before it.
 The Game of Life starter's id is `sheet_game_of_life`, and so is the id of a blank model named Game of Life, so either model joins the model list beside the example, and the list shows the id after each of the two names.
