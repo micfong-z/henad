@@ -589,12 +589,17 @@ mod tests {
 
     /// Returns run `run_id` of `plan`, whose Infected count is `infected` at ticks 0 and 10.
     fn run(plan: &Plan, run_id: u64, infected: f64) -> RunOutcome {
+        run_to(plan, run_id, infected, 10)
+    }
+
+    /// Returns run `run_id` of `plan`, whose Infected count is `infected` at ticks 0 and `last`.
+    fn run_to(plan: &Plan, run_id: u64, infected: f64, last: u64) -> RunOutcome {
         let run = plan.run(run_id).expect("a planned run");
         let mut series = SeriesBuffer::new(3);
         series.push(0, &[0.0, infected, 0.0]);
-        series.push(10, &[0.0, infected, 0.0]);
+        series.push(last, &[0.0, infected, 0.0]);
         RunOutcome {
-            ticks: 10,
+            ticks: last,
             population: 256,
             wall_ms: 2.0,
             series,
@@ -603,7 +608,7 @@ mod tests {
     }
 
     /// The runs of a sweep over the tick length draw at the time of each tick in their own config, on one axis in the
-    /// unit of the longest time: 100 days read in months.
+    /// unit of the longest time: 1000 days read in years.
     #[test]
     fn a_timed_model_s_series_sits_at_the_time_of_each_tick() {
         let entry = sir_rates();
@@ -616,17 +621,17 @@ mod tests {
         let mut draft = SweepDraft::new(&schema);
         draft.factors[index].vary = true;
         "0.5, 10".clone_into(&mut draft.factors[index].levels_text);
-        draft.steps = 10;
-        draft.series_every = 10;
+        draft.steps = 100;
+        draft.series_every = 100;
         let mut spec = draft
             .to_spec(&schema, &default_values(&entry))
             .unwrap_or_else(|issues| panic!("the draft does not plan: {issues:?}"));
-        spec.measure.stats_every = 10;
+        spec.measure.stats_every = 100;
         let plan = Arc::new(spec.plan(&schema).expect("a valid spec"));
         let mut store = ResultsStore::for_sweep(Arc::clone(&plan), &entry, None, usize::MAX);
         store.set_columns(&["Susceptible", "Infected", "Recovered"].map(str::to_owned), &[]);
-        store.push_run(run(&plan, 0, 2.0), false);
-        store.push_run(run(&plan, 1, 4.0), false);
+        store.push_run(run_to(&plan, 0, 2.0, 100), false);
+        store.push_run(run_to(&plan, 1, 4.0, 100), false);
         assert_eq!(store.time_unit(), Some(TimeUnit::Day));
 
         let mut view = SeriesView {
@@ -636,13 +641,13 @@ mod tests {
         };
         let plotted = view.cached_plot(&egui::Context::default(), &store, vec![0, 1]);
         assert_eq!(plotted.time_unit, Some(TimeUnit::Day));
-        assert_eq!(plotted.axis_unit, Some(TimeUnit::Month));
-        let months = |days: f64| days / 30.44;
+        assert_eq!(plotted.axis_unit, Some(TimeUnit::Year));
+        let years = |days: f64| days / 365.25;
         let mut ends = Vec::new();
         for (position, config_id) in [0, 1].into_iter().enumerate() {
             let length = store.config_time(config_id).expect("a timed config").tick_length;
             let ticks = &plotted.bands[position].as_ref().expect("a band").band.ticks;
-            assert_eq!(ticks, &[0.0, months(10.0 * f64::from(length))], "config {config_id}");
+            assert_eq!(ticks, &[0.0, years(100.0 * f64::from(length))], "config {config_id}");
             let line = plotted
                 .run_lines
                 .iter()
@@ -650,12 +655,12 @@ mod tests {
                 .expect("a run line");
             assert_eq!(
                 line.points.last().map(|point| point.x),
-                Some(months(10.0 * f64::from(length)))
+                Some(years(100.0 * f64::from(length)))
             );
-            ends.push(10.0 * f64::from(length));
+            ends.push(100.0 * f64::from(length));
         }
         ends.sort_by(f64::total_cmp);
-        assert_eq!(ends, [5.0, 100.0], "the two tick lengths, in days");
+        assert_eq!(ends, [50.0, 1000.0], "the two tick lengths, in days");
         let labels = ["Configuration 0".to_owned(), "Configuration 1".to_owned()];
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
@@ -670,7 +675,7 @@ mod tests {
             collect_texts(&clipped.shape, &mut texts);
         }
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text == "Month"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "Year"), "{texts:?}");
         assert!(!texts.iter().any(|text| text == "Tick" || text == "Day"), "{texts:?}");
 
         let untimed = sir();

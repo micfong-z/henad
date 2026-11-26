@@ -2,7 +2,7 @@
 //!
 //! A model with a time scale names a unit and a hidden parameter holding the length of one tick. The time at a tick
 //! is the tick times that length, as the `time` column of a stats export writes it. The app shows a time in the unit
-//! that reads most naturally for it ([`natural_unit`]), such as "3.29 months" for 100 ticks of a day, and the export
+//! that reads most naturally for it ([`natural_unit`]), such as "2.5 days" for 60 ticks of an hour, and the export
 //! keeps the unit of the tick.
 
 use henad_core::metadata::{TimeScale, TimeUnit};
@@ -55,23 +55,25 @@ pub fn convert(time: f64, unit: TimeUnit, target: TimeUnit) -> f64 {
 
 /// Returns the unit that `time`, a length of time in `unit`s, reads in.
 ///
-/// That is the longest unit of [`TimeUnit::ALL`] in which the time, rounded to three significant digits, is at least 1.
-/// A tenth of a day then reads as "2.4 hours", 6 days as "6 days", 24 days as "3.43 weeks" and 100 days as "3.29
-/// months". A time of 0 reads in `unit`, and a time under a second in seconds.
+/// That is the longest unit in which the time, rounded to three significant digits, is at least 1, among `unit` itself
+/// and the seconds, minutes, hours, days and years no shorter than `unit`. Ticks of a day then read in days until a
+/// year, as in "100 days" and "1.1 years", ticks of an hour in hours and then days, as in "2.5 days", and ticks of a
+/// week or a month in weeks or months and then years. A time shorter than one `unit`, 0 included, reads in `unit`.
 pub fn natural_unit(time: f64, unit: TimeUnit) -> TimeUnit {
     unit_reaching(time, unit, 1.0)
 }
 
 /// Returns the unit that an axis from 0 to `time`, a length of time in `unit`s, reads in.
 ///
-/// That is the longest unit in which the time is at least 2, so the axis spans whole units. 10 days then read in days,
-/// 60 days in weeks and 400 days in months.
+/// That is the unit [`natural_unit`] chooses with a least time of 2 in place of 1, so the axis spans whole units. 400
+/// days then read in days and 800 days in years.
 pub fn axis_unit(time: f64, unit: TimeUnit) -> TimeUnit {
     unit_reaching(time, unit, 2.0)
 }
 
 /// Returns the longest unit in which `time`, a length of time in `unit`s, rounded to three significant digits, is at
-/// least `least`. A time of 0 takes `unit`, and a time too short for any unit seconds.
+/// least `least`, among `unit` and the seconds, minutes, hours, days and years no shorter than `unit`. A time that
+/// reaches `least` in no longer unit takes `unit`.
 fn unit_reaching(time: f64, unit: TimeUnit, least: f64) -> TimeUnit {
     if time.is_nan() || time <= 0.0 {
         return unit;
@@ -79,8 +81,12 @@ fn unit_reaching(time: f64, unit: TimeUnit, least: f64) -> TimeUnit {
     TimeUnit::ALL
         .into_iter()
         .rev()
+        .filter(|candidate| {
+            let shown = *candidate == unit || !matches!(candidate, TimeUnit::Week | TimeUnit::Month);
+            shown && candidate.days() >= unit.days()
+        })
         .find(|candidate| rounded(convert(time, unit, *candidate)) >= least)
-        .unwrap_or(TimeUnit::Second)
+        .unwrap_or(unit)
 }
 
 /// Returns the number of decimals that keep three significant digits of `value`, and none from 1000 up.
@@ -99,7 +105,7 @@ fn rounded(value: f64) -> f64 {
     (value * scale).round() / scale
 }
 
-/// Returns `time`, a length of time in `unit`s, with the unit it reads in, such as "3.29 months", or "1 day" at exactly
+/// Returns `time`, a length of time in `unit`s, with the unit it reads in, such as "2.5 days", or "1 day" at exactly
 /// one unit.
 pub fn time_text(time: f64, unit: TimeUnit) -> String {
     let shown = natural_unit(time, unit);
@@ -151,49 +157,51 @@ mod tests {
     fn the_counter_names_the_time_only_for_a_model_with_a_time_scale() {
         let half_day = run(0.5, TimeUnit::Day);
         assert_eq!(counter_text(24, None), "Tick 24");
-        assert_eq!(counter_text(24, Some(half_day)), "Tick 24 (1.71 weeks)");
-        assert_eq!(counter_text(12, Some(half_day)), "Tick 12 (6 days)");
+        assert_eq!(counter_text(24, Some(half_day)), "Tick 24 (12 days)");
         assert_eq!(counter_text(10, Some(half_day)), "Tick 10 (5 days)");
         assert_eq!(counter_text(2, Some(half_day)), "Tick 2 (1 day)");
-        assert_eq!(counter_text(1, Some(half_day)), "Tick 1 (12 hours)");
+        assert_eq!(counter_text(1, Some(half_day)), "Tick 1 (0.5 days)");
         assert_eq!(counter_text(0, Some(half_day)), "Tick 0 (0 days)");
-        assert_eq!(counter_text(3, Some(run(0.1, TimeUnit::Hour))), "Tick 3 (18 minutes)");
+        assert_eq!(counter_text(3, Some(run(0.1, TimeUnit::Hour))), "Tick 3 (0.3 hours)");
     }
 
-    /// Each time reads in the longest unit it reaches 1 of, rounded to three significant digits.
+    /// Each time reads in the longest unit it reaches 1 of, rounded to three significant digits, among the tick's own
+    /// unit and the seconds, minutes, hours, days and years no shorter than it.
     #[test]
     fn a_time_reads_in_the_unit_that_fits_it() {
-        let table: [(f32, TimeUnit, u64, &str); 36] = [
+        let table: [(f32, TimeUnit, u64, &str); 38] = [
             (1.0, TimeUnit::Day, 0, "0 days"),
             (1.0, TimeUnit::Day, 1, "1 day"),
             (1.0, TimeUnit::Day, 6, "6 days"),
-            (1.0, TimeUnit::Day, 7, "1 week"),
-            (1.0, TimeUnit::Day, 10, "1.43 weeks"),
-            (1.0, TimeUnit::Day, 24, "3.43 weeks"),
-            (1.0, TimeUnit::Day, 30, "4.29 weeks"),
-            (1.0, TimeUnit::Day, 31, "1.02 months"),
-            (1.0, TimeUnit::Day, 60, "1.97 months"),
-            (1.0, TimeUnit::Day, 100, "3.29 months"),
-            (1.0, TimeUnit::Day, 365, "12 months"),
+            (1.0, TimeUnit::Day, 7, "7 days"),
+            (1.0, TimeUnit::Day, 24, "24 days"),
+            (1.0, TimeUnit::Day, 31, "31 days"),
+            (1.0, TimeUnit::Day, 100, "100 days"),
+            (1.0, TimeUnit::Day, 365, "365 days"),
             (1.0, TimeUnit::Day, 366, "1 year"),
             (1.0, TimeUnit::Day, 400, "1.1 years"),
             (1.0, TimeUnit::Day, 730, "2 years"),
             (1.0, TimeUnit::Day, 36_525, "100 years"),
+            (0.5, TimeUnit::Day, 1, "0.5 days"),
+            (0.25, TimeUnit::Day, 3, "0.75 days"),
             (1.0, TimeUnit::Hour, 23, "23 hours"),
             (1.0, TimeUnit::Hour, 24, "1 day"),
             (1.0, TimeUnit::Hour, 36, "1.5 days"),
             (1.0, TimeUnit::Hour, 60, "2.5 days"),
-            (1.0, TimeUnit::Hour, 168, "1 week"),
+            (1.0, TimeUnit::Hour, 168, "7 days"),
             (6.0, TimeUnit::Hour, 2, "12 hours"),
+            (0.1, TimeUnit::Hour, 3, "0.3 hours"),
+            (1.0, TimeUnit::Minute, 59, "59 minutes"),
             (1.0, TimeUnit::Minute, 90, "1.5 hours"),
             (1.0, TimeUnit::Second, 45, "45 seconds"),
             (1.0, TimeUnit::Second, 90, "1.5 minutes"),
             (1.0, TimeUnit::Second, 3600, "1 hour"),
             (0.001, TimeUnit::Second, 1, "0.001 seconds"),
             (1.0, TimeUnit::Week, 1, "1 week"),
-            (1.0, TimeUnit::Week, 4, "4 weeks"),
-            (1.0, TimeUnit::Week, 5, "1.15 months"),
-            (0.5, TimeUnit::Week, 1, "3.5 days"),
+            (1.0, TimeUnit::Week, 5, "5 weeks"),
+            (1.0, TimeUnit::Week, 52, "52 weeks"),
+            (1.0, TimeUnit::Week, 53, "1.02 years"),
+            (0.5, TimeUnit::Week, 1, "0.5 weeks"),
             (1.0, TimeUnit::Month, 6, "6 months"),
             (1.0, TimeUnit::Month, 12, "1 year"),
             (1.0, TimeUnit::Month, 18, "1.5 years"),
@@ -215,29 +223,29 @@ mod tests {
     fn the_axis_reads_in_ticks_or_in_the_unit_of_its_last_time() {
         assert_eq!(axis_label(None), "Tick");
         assert_eq!(axis_label(Some(TimeUnit::Day)), "Day");
-        assert_eq!(axis_label(Some(TimeUnit::Month)), "Month");
+        assert_eq!(axis_label(Some(TimeUnit::Year)), "Year");
         let quarter_day = run(0.25, TimeUnit::Day);
         assert_eq!(plot_x(10, None), 10.0);
         let days = PlotTime::up_to(quarter_day, 40);
         assert_eq!(days.unit, TimeUnit::Day, "10 days");
         assert_eq!(plot_x(10, Some(days)), 2.5);
-        let hours = PlotTime::up_to(quarter_day, 6);
+        let hours = PlotTime::up_to(run(1.0, TimeUnit::Hour), 36);
         assert_eq!(hours.unit, TimeUnit::Hour, "a day and a half");
-        assert!((plot_x(1, Some(hours)) - 6.0).abs() < 1e-12);
-        let months = PlotTime::up_to(run(1.0, TimeUnit::Day), 100);
-        assert_eq!(months.unit, TimeUnit::Month);
-        assert!((plot_x(100, Some(months)) - 100.0 / 30.44).abs() < 1e-12);
+        assert_eq!(plot_x(6, Some(hours)), 6.0);
+        let years = PlotTime::up_to(run(1.0, TimeUnit::Day), 800);
+        assert_eq!(years.unit, TimeUnit::Year);
+        assert!((plot_x(800, Some(years)) - 800.0 / 365.25).abs() < 1e-12);
         assert_eq!(PlotTime::up_to(quarter_day, 0).unit, TimeUnit::Day, "an axis at tick 0");
         // An axis spans at least 2 of its unit, where a single time reads in the longest unit it reaches 1 of.
-        for (days, axis, text) in [
-            (1.5, TimeUnit::Hour, "1.5 days"),
-            (10.0, TimeUnit::Day, "1.43 weeks"),
-            (60.0, TimeUnit::Week, "1.97 months"),
-            (400.0, TimeUnit::Month, "1.1 years"),
-            (800.0, TimeUnit::Year, "2.19 years"),
+        for (time, unit, axis, text) in [
+            (36.0, TimeUnit::Hour, TimeUnit::Hour, "1.5 days"),
+            (60.0, TimeUnit::Hour, TimeUnit::Day, "2.5 days"),
+            (400.0, TimeUnit::Day, TimeUnit::Day, "1.1 years"),
+            (800.0, TimeUnit::Day, TimeUnit::Year, "2.19 years"),
+            (60.0, TimeUnit::Week, TimeUnit::Week, "1.15 years"),
         ] {
-            assert_eq!(axis_unit(days, TimeUnit::Day), axis, "{days} days");
-            assert_eq!(time_text(days, TimeUnit::Day), text);
+            assert_eq!(axis_unit(time, unit), axis, "{time} {unit:?}");
+            assert_eq!(time_text(time, unit), text);
         }
     }
 }

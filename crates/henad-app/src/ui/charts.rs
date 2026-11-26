@@ -354,15 +354,15 @@ mod tests {
             stat_points(&history, 0, Some(PlotTime::up_to(HALF_DAY, 20))),
             [[0.0, 120.0], [5.0, 150.0], [10.0, 180.0]]
         );
-        // 200 days read in months, a month being 30.44 days.
-        let long = history_of(&[(0, 120.0), (100, 150.0), (200, 180.0)]);
-        let xs: Vec<f64> = stat_points(&long, 0, Some(PlotTime::up_to(DAY, 200)))
+        // 1000 days read in years, a year being 365.25 days.
+        let long = history_of(&[(0, 120.0), (500, 150.0), (1000, 180.0)]);
+        let xs: Vec<f64> = stat_points(&long, 0, Some(PlotTime::up_to(DAY, 1000)))
             .iter()
             .map(|[x, _]| *x)
             .collect();
         assert_eq!(xs.len(), 3);
-        for (x, days) in xs.iter().zip([0.0, 100.0, 200.0]) {
-            assert!((x - days / 30.44).abs() < 1e-9, "{x} for {days} days");
+        for (x, days) in xs.iter().zip([0.0, 500.0, 1000.0]) {
+            assert!((x - days / 365.25).abs() < 1e-9, "{x} for {days} days");
         }
     }
 
@@ -394,15 +394,22 @@ mod tests {
             timed.texts
         );
 
-        // 15 days reach 2 weeks, and the axis reads in weeks.
-        let weeks = draw(&history, Some(HALF_DAY));
-        assert!(weeks.texts.iter().any(|text| text == "Week"), "{:?}", weeks.texts);
+        // 60 ticks of an hour reach 2 days, and the axis reads in days.
+        let hour = RunTime {
+            unit: TimeUnit::Hour,
+            tick_length: 1.0,
+        };
+        let days = draw(&history_of(&[(10, 120.0), (30, 150.0), (60, 180.0)]), Some(hour));
+        assert!(days.texts.iter().any(|text| text == "Day"), "{:?}", days.texts);
+        assert!(!days.texts.iter().any(|text| text == "Hour"), "{:?}", days.texts);
 
-        // An axis of 400 days reads in months, and its last sample sits past 13 on the axis.
-        let long = draw(&history_of(&[(0, 120.0), (200, 150.0), (400, 180.0)]), Some(DAY));
-        assert!(long.texts.iter().any(|text| text == "Month"), "{:?}", long.texts);
+        // An axis of 400 days stays in days, and one of 800 days reads in years, its last sample past 2.
+        let year = draw(&history_of(&[(0, 120.0), (200, 150.0), (400, 180.0)]), Some(DAY));
+        assert!(year.texts.iter().any(|text| text == "Day"), "{:?}", year.texts);
+        let long = draw(&history_of(&[(0, 120.0), (400, 150.0), (800, 180.0)]), Some(DAY));
+        assert!(long.texts.iter().any(|text| text == "Year"), "{:?}", long.texts);
         assert!(!long.texts.iter().any(|text| text == "Day"), "{:?}", long.texts);
-        assert!((13.1..14.0).contains(&long.x_range[1]), "x up to {}", long.x_range[1]);
+        assert!((2.19..2.5).contains(&long.x_range[1]), "x up to {}", long.x_range[1]);
     }
 
     #[test]

@@ -312,20 +312,22 @@ parameter, hidden ones included, so a
 sweep varies a tick length (`a_hidden_tick_length_stays_a_sweep_factor`). The time axis:
 `AppState::loaded_time` returns a `time_axis::RunTime`, the unit of the loaded entry's
 `ModelMetadata::time` and the tick length among `loaded_values`, `None` for a model with no time
-scale. A time shows in `natural_unit`: the longest unit of `TimeUnit::ALL`, seconds to years, in
-which it is at least 1 at three significant digits (`time_text`: "6 days", "3.43 weeks", "3.29
-months", "1.1 years", 0 in the tick's unit, singular when the number reads 1;
-`a_time_reads_in_the_unit_that_fits_it` holds the table). `time_axis::counter_text` is Playback's
-tick counter beside Play and Step ("Tick 48", or "Tick 48 (2 days)"), the same for a sheet,
-`axis_label` the x label ("Tick", or the unit capitalised, "Month"), and `plot_x` a sample's x,
-`TimeScale::time_at` of its tick converted to the unit of a `PlotTime`. `PlotTime::up_to` takes
-`axis_unit` of the time of the last tick drawn, the longest unit it reaches 2 of, so an axis spans
-whole units (10 days in days, 60 in weeks, 400 in months). The export's `time` column keeps the
-tick's unit. The Charts tab plots every stat at `plot_x`, includes 0 in the y range, and draws a
-series of one sample as `Points` of radius 3, since a `Line` of one point draws nothing. Its x
-range then spans the sample's tick to the next (`single_sample_x_range`). Otherwise egui_plot
-widens the zero-width range to the height of the y range. The plot is keyed by the axis unit, so
-the zoom and the series hidden in the legend start again when the unit changes as the run grows.
+scale. A time shows in `natural_unit`: the longest unit in which it is at least 1 at three
+significant digits, among the tick's own unit and the seconds, minutes, hours, days and years no
+shorter than it, so weeks and months show only as a tick's own unit (`time_text`: "100 days" and
+"1.1 years" for ticks of a day, "2.5 days" for ticks of an hour, a time under one tick unit in that
+unit, singular when the number reads 1; `a_time_reads_in_the_unit_that_fits_it` holds the table).
+`time_axis::counter_text` is Playback's tick counter beside Play and Step ("Tick 48", or "Tick 48
+(2 days)"), the same for a sheet, `axis_label` the x label ("Tick", or the unit capitalised,
+"Year"), and `plot_x` a sample's x, `TimeScale::time_at` of its tick converted to the unit of a
+`PlotTime`. `PlotTime::up_to` takes `axis_unit` of the time of the last tick drawn, the same
+choice with a least time of 2, so an axis spans whole units (400 days in days, 800 in years). The
+export's `time` column keeps the tick's unit. The Charts tab plots every stat at `plot_x`, includes
+0 in the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one
+point draws nothing. Its x range then spans the sample's tick to the next
+(`single_sample_x_range`). Otherwise egui_plot widens the zero-width range to the height of the y
+range. The plot is keyed by the axis unit, so the zoom and the series hidden in the legend start
+again when the unit changes as the run grows.
 `tests/time_axis.rs` holds the app-level tests over henad-models' `sir_rates.toml` fixture
 (`support::sir_rates`). Above the plot, the Charts tab's History length slider draws its value box
 apart, `DragValue` beside a

@@ -246,7 +246,7 @@ Selecting the running model again brings back the parameters, seed and scheduled
 
 **Tick 24**
 : The tick the simulation has reached.
-  For a model with a [time scale](../reference/model-files.md#time-scale), the counter adds the time in the unit that fits it, as in **Tick 48 (2 days)** for a tick of an hour and **Tick 100 (3.29 months)** for a tick of a day.
+  For a model with a [time scale](../reference/model-files.md#time-scale), the counter adds the time in the unit that fits it, as in **Tick 60 (2.5 days)** for a tick of an hour and **Tick 400 (1.1 years)** for a tick of a day.
 
 **Run to tick** and <span class="ui" markdown>:material-fast-forward: Run</span>
 : Step as fast as possible to a tick, then pause.
@@ -405,7 +405,7 @@ There are three types of statistics available:
 </figure>
 
 Every stat contributes a line to one time series, plotted against tick on an axis labelled **Tick**.
-For a model with a [time scale](../reference/model-files.md#time-scale), each sample sits at its tick times the length of one tick, and the axis reads in the longest unit the latest time reaches 2 of, such as **Day** for the first two weeks of ticks of a day, **Week** up to two months and **Month** after that.
+For a model with a [time scale](../reference/model-files.md#time-scale), each sample sits at its tick times the length of one tick, and the axis reads in the longest unit the latest time reaches 2 of, such as **Day** for the first two years of ticks of a day and **Year** after that.
 When the unit changes, the zoom and the series hidden in the legend start again.
 The left axis always includes 0.
 A stat with one sample so far, as at tick 0, shows as a dot, and the axis then runs from that tick to the next.
@@ -876,7 +876,7 @@ The first five configurations are drawn at the start, and at most ten are drawn 
 | Median, 10–90% | Median | The 10th to the 90th percentile         |
 
 Failed runs are left out, and a run that stopped early adds nothing past its last tick.
-For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in the longest unit the longest time drawn reaches 2 of, such as months for runs of 100 days, and the runs of each configuration sit at the times their own tick length gives.
+For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in the longest unit the longest time drawn reaches 2 of, such as years for runs of 1000 days, and the runs of each configuration sit at the times their own tick length gives.
 The `time` column of `series.csv` holds the same times in the unit of one tick.
 Select **Show runs** to draw every replicate as a thin line, and click a line to select its run.
 
