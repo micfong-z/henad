@@ -340,8 +340,25 @@ pub const TOO_FEW_STATES: &str = "Give the property at least two states.";
 pub const STATE_NAMES_REPEATED: &str = "Two states have the same name. Give each state its own name.";
 
 /// Returns the heading of the form that edits the property `property`, such as "Edit property Status".
+///
+/// The words also name the Edit button of the property's row in a table of properties, and the Edit item of the
+/// row's menu.
 pub fn edit_property_heading(property: &str) -> String {
     format!("Edit property {property}")
+}
+
+/// Returns the accessible name of the button that deletes the property `property` from its row in a table of
+/// properties, such as "Delete property Status".
+///
+/// The words are also the Delete item of the row's menu.
+pub fn delete_property_name(property: &str) -> String {
+    format!("Delete property {property}")
+}
+
+/// Returns the accessible name of the menu of the row of the property `property` in a table of properties too narrow
+/// for its Edit and delete buttons, such as "Property Status actions".
+pub fn property_actions_name(property: &str) -> String {
+    format!("Property {property} actions")
 }
 
 /// Button that deletes the property being edited.

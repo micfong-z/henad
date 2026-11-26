@@ -2,36 +2,38 @@
 //! properties, the property form or "+ Add property" under it, each property's start with its select, its chance rows
 //! and its number fields, a number field that takes a parameter, and the New parameter dialog it opens.
 
-use egui::{Button, Id, Label, Response, RichText, Ui};
+use egui::{Frame, Id, Label, Popup, RichText, Ui};
 use henad_graph::sheet::document::{
     CELLS_ID, GROUND_ID, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty,
     SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
 };
-use henad_graph::sheet::edit::{SheetEdit, SheetEditError};
+use henad_graph::sheet::edit::{SheetEdit, SheetEditError, SheetItem};
 use henad_graph::sheet::sentence::{
     A_RANDOM_NUMBER, A_VALUE, ADD_PROPERTY, ADD_ROW, BY_CHANCE, Blank, CELLS_COLUMNS, CHOOSE_A_PARAMETER, ChipKind,
-    INTEGER_KIND, INTEGER_KIND_TOOLTIP, NUMBER_KIND, OTHERWISE, RANDOM_NUMBER_AND, RANDOM_NUMBER_BETWEEN,
-    REMOVE_ROW_LABEL, SHEET_EMPTY, START_AGAIN_TO_SEE, STATES_KIND, SentenceChip, Sentences, StartsField,
-    TYPE_A_CHANCE, TYPE_ONE_NUMBER, USE_A_PARAMETER, WITH_CHANCE, add_row_name, changed_by, edit_property_heading,
-    literal_words, remove_row_name, starts_all, starts_field_name, starts_high_place, starts_low_place,
-    starts_otherwise_name, starts_place, starts_row_place,
+    DELETE_PROPERTY_HEADING, EDIT, INTEGER_KIND, INTEGER_KIND_TOOLTIP, NUMBER_KIND, OTHERWISE, RANDOM_NUMBER_AND,
+    RANDOM_NUMBER_BETWEEN, REMOVE_ROW_LABEL, SHEET_EMPTY, START_AGAIN_TO_SEE, STATES_KIND, SentenceChip, Sentences,
+    StartsField, TYPE_A_CHANCE, TYPE_ONE_NUMBER, USE_A_PARAMETER, WITH_CHANCE, add_row_name, changed_by,
+    delete_property_name, edit_property_heading, literal_words, property_actions_name, remove_row_name, starts_all,
+    starts_field_name, starts_high_place, starts_low_place, starts_otherwise_name, starts_place, starts_row_place,
 };
 use henad_graph::sheet::sentence::{
     ANYWHERE_AT_RANDOM, ARROW_KIND, HEADING_KIND, HEADING_START, NO, PAINTED, POSITION_KIND, YES, YES_NO_KIND,
     every_starts_at, on_ground_start, painted_shapes,
 };
 
-use super::layout::{Column, ITEM_GAP, Table, delete_button, line, text_cell, text_width, wrapped_line};
+use super::layout::{
+    Column, ITEM_GAP, LINE, Table, TableRow, delete_button, line, text_cell, text_width, wrapped_line,
+};
 use super::property_form::{changing_lines, property_form};
 use super::{
-    FIELD_WIDTH, NumberField, NumberTarget, PaneState, Pending, PropertyForm, StartSlot, select, select_width,
+    DELETE_WIDTH, FIELD_WIDTH, FormKind, NumberField, NumberTarget, PaneState, Pending, PropertyForm, StartSlot,
+    delete_or_ask, select, select_width,
 };
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
-use crate::ui::editor::sheet::widgets::FocusTooltip as _;
 use crate::ui::editor::sheet::widgets::{
     CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, caption_width, chip_within, color32,
-    commit_number, field_message, forget_field, message_ui, new_parameter_modal, parameter_names, swatch_ui,
-    text_control, text_control_width,
+    commit_number, escape_to_anchor, field_message, forget_field, menu_button, menu_group, menu_item, message_ui,
+    new_parameter_modal, overlay, parameter_names, placed, swatch_ui, text_control, text_control_width,
 };
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::{add_button, filled_button};
@@ -66,14 +68,18 @@ pub(super) fn cells(
     }
 }
 
-/// Draws the table of the properties of `thing`: each property's name, which opens the property form, its kind, its
-/// start as controls, and the lines that change it. `stale` holds the properties whose start waits for Start again.
+/// Draws the table of the properties of `thing`: each property's name, its kind, its start as controls, the lines that
+/// change it, and its Edit button, which opens the property form, and delete button. `stale` holds the properties whose
+/// start waits for Start again.
 ///
-/// Starts as takes the room left over. Short of room, Starts as gives up width down to 150 points, then Changed by,
-/// Kind and Name down to their longest words, wrapping at them, then Starts as down to the width of "Use a parameter",
-/// its selects and chips ending in an ellipsis, then Kind down to the longest word of a state's name without its
-/// swatch, the names wrapping under their swatches, and last Kind and Name down to their least widths, a word too long
-/// for them ending in an ellipsis.
+/// A delete that empties a formula the card cannot write again asks first, as the form's Delete property does, and a
+/// delete of the property the open form edits closes the form.
+///
+/// Starts as takes the room left over, and the Edit and delete buttons keep their width. Short of room, Starts as gives
+/// up width down to 150 points, then Changed by, Kind and Name down to their longest words, wrapping at them, then
+/// Starts as down to the width of "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the
+/// longest word of a state's name without its swatch, the names wrapping under their swatches, and last Kind and Name
+/// down to their least widths, a word too long for them ending in an ellipsis.
 pub(super) fn property_table(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -131,15 +137,28 @@ pub(super) fn property_table(
         (1, 0.0),
         (0, 0.0),
     ];
+    // The Edit and delete buttons show while the table holds them with no word cut short, and a menu of both
+    // otherwise.
+    let edit_width = text_width(ui, EDIT) + 6.0;
+    let with_buttons = |columns: &[Column]| {
+        let mut columns = columns.to_vec();
+        columns.extend([Column::fixed(edit_width), Column::fixed(DELETE_WIDTH)]);
+        columns
+    };
+    let whole_words = &give_up[..give_up.len() - 2];
+    let buttons = Table::new(id, with_buttons(&columns), 2, whole_words).fits(ui.available_width());
+    let columns = if buttons {
+        with_buttons(&columns)
+    } else {
+        let mut columns = columns;
+        columns.push(Column::fixed(ACTIONS_WIDTH));
+        columns
+    };
     Table::new(id, columns, 2, &give_up).show(ui, |ui, rows| {
         for property in properties {
             rows.row(ui, &property.id, |row| {
                 row.cell(0, |ui| {
-                    line(ui, |ui| {
-                        if property_name_ui(ui, property).clicked() {
-                            pane.property_form = Some(PropertyForm::edit(property, thing));
-                        }
-                    });
+                    text_cell(ui, fitted_label(ui, &property.name));
                 });
                 row.cell(1, |ui| kind_ui(ui, property));
                 row.cell(2, |ui| {
@@ -151,9 +170,113 @@ pub(super) fn property_table(
                 row.cell(3, |ui| {
                     text_cell(ui, Label::new(changed(property)));
                 });
+                let action = row_actions(row, buttons, &property.name);
+                if let Some(action) = action {
+                    run_row_action(action, document, thing, property, pane, pending);
+                }
             });
         }
     });
+}
+
+/// Width in points of the column of a property's menu of actions.
+const ACTIONS_WIDTH: f32 = 24.0;
+
+/// Action of a row of a table of properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowAction {
+    /// Opens the property form.
+    Edit,
+    /// Deletes the property.
+    Delete,
+}
+
+/// Draws the Edit and delete buttons of the row of the property named `name` in its last two cells while `buttons`
+/// holds, and the row's menu in its last cell otherwise, and returns the action chosen.
+fn row_actions(row: &mut TableRow<'_>, buttons: bool, name: &str) -> Option<RowAction> {
+    if !buttons {
+        let mut chosen = None;
+        row.cell(4, |ui| chosen = row_actions_menu(ui, name));
+        return chosen;
+    }
+    let mut edit = false;
+    row.cell(4, |ui| {
+        line(ui, |ui| {
+            edit = text_control(ui, None, EDIT, &edit_property_heading(name), CHIP_HEIGHT).clicked();
+        });
+    });
+    let delete = row.delete_cell(5, &delete_property_name(name));
+    match (edit, delete) {
+        (true, _) => Some(RowAction::Edit),
+        (_, true) => Some(RowAction::Delete),
+        _ => None,
+    }
+}
+
+/// Runs `action` of the row of `property`, a property of `thing` in `document`: opens the property form, or deletes
+/// the property through [`delete_or_ask`].
+///
+/// The open form of the property goes with its delete.
+fn run_row_action(
+    action: RowAction,
+    document: &SheetDocument,
+    thing: &str,
+    property: &SheetProperty,
+    pane: &mut PaneState,
+    pending: &mut Vec<Pending>,
+) {
+    match action {
+        RowAction::Edit => pane.property_form = Some(PropertyForm::edit(property, thing)),
+        RowAction::Delete => {
+            let edit = SheetEdit::Delete {
+                item: SheetItem::Property(property.id.clone()),
+            };
+            let editing = pane
+                .property_form
+                .as_ref()
+                .is_some_and(|form| form.editing.as_deref() == Some(property.id.as_str()));
+            let form = editing.then_some(FormKind::Property);
+            let asked = (DELETE_PROPERTY_HEADING, property.name.as_str());
+            delete_or_ask(document, edit, asked, form, &mut pane.delete_question, pending);
+        }
+    }
+}
+
+/// Draws the menu button of the row of the property named `name`, named `property_actions_name`, and returns the
+/// action chosen in its menu: "Edit property …" or "Delete property …".
+fn row_actions_menu(ui: &mut Ui, name: &str) -> Option<RowAction> {
+    let (id, rect) = ui.allocate_space(egui::vec2(ui.available_width(), LINE));
+    let popup_id = id.with("popup");
+    let response = menu_button(ui, id, popup_id, &property_actions_name(name), rect);
+    let button = response.id;
+    let was_open = Popup::is_id_open(ui.ctx(), popup_id);
+    let (popup, _) = placed(ui.ctx(), Popup::menu(&response).id(popup_id).frame(Frame::NONE));
+    let chosen = popup
+        .show(|ui| {
+            overlay(ui, |ui| {
+                menu_group(ui, button, |ui| {
+                    let edit = edit_property_heading(name);
+                    let delete = delete_property_name(name);
+                    let mut item = |words: &str| {
+                        let row = OverlayItem {
+                            label: words,
+                            ..OverlayItem::default()
+                        };
+                        menu_item(ui, &row).clicked()
+                    };
+                    if item(&edit) {
+                        Some(RowAction::Edit)
+                    } else if item(&delete) {
+                        Some(RowAction::Delete)
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+        .and_then(|popup| popup.inner);
+    escape_to_anchor(ui, &response, popup_id, was_open);
+    chosen
 }
 
 /// Returns the width in points of the longest word of `text` in the body font.
@@ -161,22 +284,6 @@ fn longest_word(ui: &Ui, text: &str) -> f32 {
     text.split_whitespace()
         .map(|word| text_width(ui, word))
         .fold(0.0, f32::max)
-}
-
-/// Adds the name of `property` as a frameless button named `edit_property_heading`. A click opens the property form.
-/// A name too long for its column wraps, and a word too long for it ends in an ellipsis, whole in the tooltip.
-fn property_name_ui(ui: &mut Ui, property: &SheetProperty) -> Response {
-    // With no padding, the name starts on the column's edge, under its header.
-    ui.spacing_mut().button_padding.x = 0.0;
-    let elided = longest_word(ui, &property.name) > ui.available_width();
-    let button = Button::new(&property.name).frame(false);
-    let button = if elided { button.truncate() } else { button.wrap() };
-    let response = add_button(ui, true, button, &edit_property_heading(&property.name));
-    if elided {
-        response.on_hover_or_focus_text(&property.name)
-    } else {
-        response
-    }
 }
 
 /// Returns a label of `text` that wraps at the right edge of `ui`, or ends in an ellipsis, whole in its tooltip, where
@@ -249,7 +356,11 @@ pub(super) fn property_form_or_add(
 ) {
     if let Some(form) = pane.property_form.as_mut().filter(|form| form.thing == thing) {
         let mut close = false;
-        property_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
+        let drawn = ui.scope(|ui| property_form(ui, document, form, &mut close, &mut pane.delete_question, pending));
+        // A form opened by Edit or "+ Add property" scrolls into view, since it can open below the pane's edge.
+        if std::mem::take(&mut form.reveal) {
+            pane.reveal = Some(drawn.response.rect);
+        }
         if close {
             pane.property_form = None;
         }

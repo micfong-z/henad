@@ -233,6 +233,11 @@ impl<'a> Table<'a> {
         }
     }
 
+    /// Returns whether the columns fit in `available` points once the give-up steps run.
+    pub(super) fn fits(&self, available: f32) -> bool {
+        self.widths(available).1
+    }
+
     /// Returns the width of each column in `available` points, and whether they fit.
     fn widths(&self, available: f32) -> (Vec<f32>, bool) {
         let gaps = COLUMN_GAP * self.columns.len().saturating_sub(1) as f32;

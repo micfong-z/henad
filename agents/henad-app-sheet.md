@@ -92,25 +92,33 @@ unit)", which writes no `[time]`). An edit that gives the tick a new length or u
 of `rates::chance_line_numbers`, read from the sheet each frame so that a card edit renumbers or
 removes the lines it names, and left out while no line draws a chance. The next edit of the pane or
 `close_forms` clears the flag. The same edit drops the Card pane's tick notice
-(`CardState::drop_tick_notice`). The Cells table (`CELLS_COLUMNS`, `property_table`): the name as a
-frameless button named `edit_property_heading` that opens the property form, the kind (`STATES_KIND`
-with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND` with `INTEGER_KIND_TOOLTIP`), Starts as (a
-select named `starts_place` showing `starts_text`: `starts_all` per state and `BY_CHANCE`, or
-`A_VALUE` and `A_RANDOM_NUMBER`, the latter for Number only, since the lowering refuses a random
-whole number), and `changed_by` over the Become and Set lines of the cards that run each tick. By
-chance draws each row on a line of its own (state select, `WITH_CHANCE`, the number, × named
-`remove_row_name`), "+ Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE`
-with its select. A new by-chance start draws the second state with an empty chance, otherwise the
-first. A Number start shows `every_starts_at` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0
-and 1 to start). Each Starts as number (`start_number`) is a `commit_number` named
-`starts_field_name(place, ...)` showing `literal_words` (a percent as typed), with "Use a parameter"
-(a text control) beside it opening `CHOOSE_A_PARAMETER`. A parameter chip replaces the field and
-reopens `Blank::picker_title` with the Number box. A row's empty field empties the chance, text that
-does not read keeps the old value with `TYPE_A_CHANCE` or `TYPE_ONE_NUMBER`, and a chance outside 0
-to 1 `CHANCE_OUT_OF_RANGE`. `start_edit` changes the start as the builder holds it when the edit
-runs. "New parameter…" opens the New parameter dialog for that `NumberTarget`, and Create runs
-`AddParameter` and the start's change as one edit, marked `starts_only` since only the start uses
-the parameter. Past the start it waits for Start again, as a chosen parameter does.
+(`CardState::drop_tick_notice`). The Cells table (`CELLS_COLUMNS`, `property_table`): the name, the
+kind (`STATES_KIND` with a swatch per state, `NUMBER_KIND`, or `INTEGER_KIND` with
+`INTEGER_KIND_TOOLTIP`), Starts as (a select named `starts_place` showing `starts_text`:
+`starts_all` per state and `BY_CHANCE`, or `A_VALUE` and `A_RANDOM_NUMBER`, the latter for Number
+only, since the lowering refuses a random whole number), `changed_by` over the Become and Set lines
+of the cards that run each tick, then `EDIT` named `edit_property_heading`, which opens the property
+form, and × named `delete_property_name`, or where the table cannot hold both with no word cut short
+(`Table::fits` without the last two give-up steps) a menu button named `property_actions_name` with
+both as its items (`row_actions_menu`). Delete goes through `delete_or_ask`, as Delete property, and
+closes the open form of the property it deletes
+(`each_property_row_edits_and_deletes_its_property`). The name is a label. The form scrolls into
+view as it opens (`PropertyForm::reveal`), since it can open below the pane's edge, through
+`PaneState::reveal` once every section is drawn: a table drawn later that scrolls sideways would
+take an earlier scroll target, which egui hands to the next scroll area to close. By chance draws
+each row on a line of its own (state select, `WITH_CHANCE`, the number, × named `remove_row_name`),
+"+ Add row" named `add_row_name` (the first state no row draws), and `OTHERWISE` with its select. A
+new by-chance start draws the second state with an empty chance, otherwise the first. A Number start
+shows `every_starts_at` or `RANDOM_NUMBER_BETWEEN` .. `RANDOM_NUMBER_AND` (0 and 1 to start). Each
+Starts as number (`start_number`) is a `commit_number` named `starts_field_name(place, ...)` showing
+`literal_words` (a percent as typed), with "Use a parameter" (a text control) beside it opening
+`CHOOSE_A_PARAMETER`. A parameter chip replaces the field and reopens `Blank::picker_title` with the
+Number box. A row's empty field empties the chance, text that does not read keeps the old value with
+`TYPE_A_CHANCE` or `TYPE_ONE_NUMBER`, and a chance outside 0 to 1 `CHANCE_OUT_OF_RANGE`.
+`start_edit` changes the start as the builder holds it when the edit runs. "New parameter…" opens
+the New parameter dialog for that `NumberTarget`, and Create runs `AddParameter` and the start's
+change as one edit, marked `starts_only` since only the start uses the parameter. Past the start it
+waits for Start again, as a chosen parameter does.
 
 The property form (`PropertyForm`, under the table, one at a time): `NEW_PROPERTY` or
 `edit_property_heading`, Name (`PROPERTY_NAME_FIELD`, `PROPERTY_NAME_PLACEHOLDER`), Kind radios

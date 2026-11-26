@@ -1862,3 +1862,103 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
     assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
     assert!(!has_parameter(&harness, "infection_rate"));
 }
+
+/// Each row of a table of properties holds an Edit button, which opens the property form and scrolls it into view, and
+/// a delete button, or a menu of both in a pane too narrow for them. A delete that empties a formula asks first, any
+/// other runs at once, and the delete of the property the open form edits closes the form.
+#[test]
+fn each_property_row_edits_and_deletes_its_property() {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::{
+        DELETE_PROPERTY_HEADING, PROPERTY_NAME_FIELD, delete_property_name, edit_property_heading,
+        property_actions_name,
+    };
+
+    use crate::tests::panes::{bounds_of, is_open, press_in_dialog, shows};
+
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = egui::vec2(1280.0, 800.0);
+    open_starter(&mut harness, "ants.toml");
+    let starter = text(&harness);
+    // Names of the properties of the ground, and of the ants.
+    let names = |harness: &Harness, ground: bool| -> Vec<String> {
+        let document = sheet(harness).document();
+        let properties = if ground {
+            document.ground.as_ref().map(|ground| &ground.properties)
+        } else {
+            document.agents.first().map(|ants| &ants.properties)
+        };
+        properties
+            .into_iter()
+            .flatten()
+            .map(|property| property.name.clone())
+            .collect()
+    };
+
+    // The pane scrolls in an animation, which ends well within a second.
+    let in_pane = |harness: &mut Harness, name: &str| {
+        for _ in 0..60 {
+            harness.frame(Vec::new());
+        }
+        let nodes = harness.settle();
+        let pane = bounds_of(&nodes, Role::Group, "Sheet");
+        nodes
+            .iter()
+            .filter(|node| node.label == name)
+            .filter_map(|node| node.bounds)
+            .any(|rect| pane.y_range().contains(rect.top()) && pane.y_range().contains(rect.bottom()))
+    };
+
+    // Lines 3 and 4 read Reward held, so its delete asks first.
+    click(&mut harness, &delete_property_name("Reward held"));
+    assert!(is_open(&mut harness, DELETE_PROPERTY_HEADING), "no dialog asks");
+    press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, CANCEL);
+    assert_eq!(text(&harness), starter, "Cancel keeps the property");
+
+    // The form opens under the table, below the pane's edge, and scrolls into view.
+    assert!(
+        !in_pane(&mut harness, ADD_PROPERTY),
+        "the form's place starts out of view"
+    );
+    click(&mut harness, &edit_property_heading("Heading"));
+    assert!(shows(&mut harness, DONE), "Edit opens the property form");
+    assert!(in_pane(&mut harness, PROPERTY_NAME_FIELD), "the form scrolls into view");
+    // The delete of the property the form edits goes at once, as no formula reads it, and closes the form.
+    click(&mut harness, &delete_property_name("Heading"));
+    assert!(!is_open(&mut harness, DELETE_PROPERTY_HEADING), "a dialog asks");
+    assert!(!names(&harness, false).contains(&"Heading".to_owned()));
+    assert!(!shows(&mut harness, DONE), "the property form closes with its property");
+    click(&mut harness, UNDO);
+    assert_eq!(text(&harness), starter);
+
+    // The delete of another property leaves the open form alone.
+    click(&mut harness, &edit_property_heading("Heading"));
+    click(&mut harness, &delete_property_name("Cargo"));
+    assert!(!names(&harness, false).contains(&"Cargo".to_owned()));
+    assert!(shows(&mut harness, DONE), "the form of Heading stays open");
+    assert!(names(&harness, true).contains(&"To food".to_owned()));
+    assert!(
+        named(&mut harness, &property_actions_name("Cargo")).is_empty(),
+        "a table with room for the buttons has no menu"
+    );
+
+    // A pane too narrow for the buttons holds a menu of both on each row.
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.screen = egui::vec2(800.0, 800.0);
+    open_starter(&mut harness, "ants.toml");
+    assert!(named(&mut harness, &edit_property_heading("Heading")).is_empty());
+    click(&mut harness, &property_actions_name("Heading"));
+    click(&mut harness, &edit_property_heading("Heading"));
+    assert!(shows(&mut harness, DONE), "the menu's Edit opens the property form");
+    assert!(in_pane(&mut harness, PROPERTY_NAME_FIELD), "the form scrolls into view");
+    click(&mut harness, &property_actions_name("Cargo"));
+    click(&mut harness, &delete_property_name("Cargo"));
+    assert!(
+        !names(&harness, false).contains(&"Cargo".to_owned()),
+        "the menu's Delete deletes"
+    );
+}

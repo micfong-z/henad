@@ -1174,6 +1174,8 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
             fixed(sentence::STATE_NAMES_REPEATED),
         ),
         ("Edit property Status", sentence::edit_property_heading("Status")),
+        ("Delete property Status", sentence::delete_property_name("Status")),
+        ("Property Status actions", sentence::property_actions_name("Status")),
         ("Delete property", fixed(sentence::DELETE_PROPERTY)),
         // Starts as.
         ("All [state]", sentence::starts_all("[state]")),

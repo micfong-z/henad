@@ -36,9 +36,9 @@ header, running over the columns after it that have none, then a hairline) and t
 column to the right edge (the trying line, a refused field's message). A row ends in a gray 800
 hairline and takes the theme's hover fill under the pointer. `TableRow::message` reads a field's
 refusal. A delete button is `delete_button`, a "×" `text_control`, right-aligned in the last
-column by `TableRow::delete_cell`, which returns the click. The × of a parameter and the property
-form's Delete go through `delete_or_ask`: a delete that `DeleteQuestion::before` finds emptying a
-formula the editor cannot write again (henad-graph's `lines_losing_formulas` and
+column by `TableRow::delete_cell`, which returns the click. The × of a parameter or a property and
+the property form's Delete go through `delete_or_ask`: a delete that `DeleteQuestion::before` finds
+emptying a formula the editor cannot write again (henad-graph's `lines_losing_formulas` and
 `measures_losing_formulas`) waits in `PaneState::delete_question` (a `PendingDelete` with its form),
 and `delete_question_ui` draws the dialog from the next frame on, past the click
 (`delete_question.rs`: `DELETE_PARAMETER_HEADING` or `DELETE_PROPERTY_HEADING`, `sentence::used_by`
@@ -49,13 +49,14 @@ The deletes of an event, a measure or a button name nothing a formula reads
 (`a_delete_of_an_item_that_formulas_use_asks_first`, which also holds the ants' To food, read by
 the measure Total trail, and Undo after each delete). The tables and their orders:
 
-- Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
-  gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed
-  by to the word "Changed" of its header), wrapping at them, then Starts as down to
-  `text_control_width` of "Use a parameter", its selects and chips ending in an ellipsis, then Kind
-  down to the longest word of a state's name without its swatch (`kind_under`, the name wrapping
-  under its swatch in a `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too
-  long ending in an ellipsis with the tooltip.
+- Properties (`property_table`, of any thing): Starts as takes the room left over, and the Edit and
+  × columns are fixed, or the menu that holds both where they do not fit. Short of room it gives up
+  width down to 150, then Changed by, Kind and Name down to their longest words (Changed by to the
+  word "Changed" of its header), wrapping at them, then Starts as down to `text_control_width` of
+  "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the longest word
+  of a state's name without its swatch (`kind_under`, the name wrapping under its swatch in a
+  `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too long ending in an ellipsis
+  with the tooltip.
 - Parameters: one line per parameter (name, value as slider and field, Min, Max, Unit, ×) when the
   section holds every column at its comfortable width, Value taking the room left over and Unit,
   Value, Name, Min and Max giving up width in that order. Otherwise name, value and × on the first

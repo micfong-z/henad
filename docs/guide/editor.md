@@ -92,6 +92,9 @@ Press **+ Add property** for a property of a few named states, such as Dead and 
 Each state takes a colour, and a few usual names take their usual colour as you type them, such as green for Tree and orange for Burning.
 **Starts as** sets every cell to one state, or draws the states by chance, each row a state with its chance and a last row for the cells no chance picks.
 **Changed by** lists the lines of the card that change the property.
+Press **Edit** at the end of a row to change the property's name, kind or states, and **×** to delete it.
+Where the Sheet pane is too narrow for both, a menu at the end of each row holds them.
+A delete that would empty a formula the card cannot write again asks first.
 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.

@@ -138,6 +138,12 @@ pub struct PaneState {
     /// Delete that waits on the dialog that asks before it empties formulas the card cannot write again, `None` while
     /// the dialog is closed.
     delete_question: Option<PendingDelete>,
+    /// Rectangle of a form opened in this frame, which the pane scrolls into view once every section is drawn, `None`
+    /// in any other frame.
+    ///
+    /// Note that the scroll waits for the end of the pane. A table drawn after the form that scrolls sideways would
+    /// take a scroll asked for earlier.
+    reveal: Option<egui::Rect>,
 }
 
 /// A delete of the Sheet pane that waits on the dialog that asks first, with the form it comes from.
@@ -163,6 +169,7 @@ impl PaneState {
             parameter_message: None,
             time_changed: false,
             delete_question: None,
+            reveal: None,
         }
     }
 
@@ -295,6 +302,8 @@ struct PropertyForm {
     focus_state: Option<usize>,
     /// Whether the Name field takes the focus on the next frame.
     focus_name: bool,
+    /// Whether the pane scrolls the form into view on the next frame, as it opens.
+    reveal: bool,
 }
 
 /// One row of states in the property form.
@@ -335,6 +344,7 @@ impl PropertyForm {
             message: None,
             focus_state: None,
             focus_name: true,
+            reveal: true,
         }
     }
 
@@ -365,6 +375,7 @@ impl PropertyForm {
             message: None,
             focus_state: None,
             focus_name: true,
+            reveal: true,
         }
     }
 }
@@ -582,6 +593,9 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
             }
             ui.add_space(REGION_GAP);
             new_parameter(ui, document, pane, &mut pending);
+            if let Some(rect) = pane.reveal.take() {
+                ui.scroll_to_rect(rect, None);
+            }
         });
     }
     if pending.is_empty() {
