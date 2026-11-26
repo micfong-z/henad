@@ -128,6 +128,8 @@ Models without Rust: write a sheet, a node graph or a WGSL grid rule in the app'
 - New Henad icon for the app and the web app, and as the docs site's favicon (was: Zensical's default icon); the template's `assets/icon-256.png` is the same icon.
 - Messages, CLI help and app text reworded: "rejects" for "refuses", "failed" for "faulted", "expected …" and "got …" for limits and mismatches, "invalid …" and "unknown …" for bad input; a value out of bounds reads "is outside the range 0 to 1" (was "is outside 0..=1"); a rejected action's `runs.csv` note reads `model rejected action 'ID' at tick TICK` (was `refused`); `ExploreError::Resume` reads "cannot resume the runs in the directory" (was "cannot resume the sweep", for a search too).
 - Deprecation policy (Stability in `docs/developing/releasing.md`): a replacement that can sit beside the old item still gets a deprecated release first; a change that cannot keep the old form, or the removal of an item no public function takes or returns, breaks in one release with its "Breaking:" line and migration note, as the descriptor fields and `GpuCommand` do in 0.4.0.
+- App: a number typed into a slider's value box in the Parameters tab, or into Minimum, Maximum or Step of the Sweep tab's range editor, applies on Enter or when the box loses focus (was: on every key).
+- Docs: benchmarks measured again on a Ryzen 9 9950X3D with an RTX 4090.
 
 ### Removed
 
