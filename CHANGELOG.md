@@ -7,79 +7,92 @@ Henad uses [semantic versioning](https://semver.org/spec/v2.0.0.html) for its re
 
 ## [0.4.0] - 2026-11-26
 
-Models without Rust: write a sheet, a node graph or a WGSL grid rule in the app's new Editor tab, then run and sweep it on the GPU, in the app or with henad-cli.
+The app has a new Editor tab for writing models as sheets, node graphs or WGSL grid rules, and running and sweeping them on the GPU without Rust.
+henad-cli runs the same model files.
 
 ### Added
 
-- Editor tab in the app for sheets, node graphs and WGSL grid rules: Apply, live preview, undo, Open and Save model (Cmd+S), an unsaved-changes question, and an Editor layout in the View menu.
-- Sheets (`kind = "sheet"` model files, `henad::graph::sheet`): models written as numbered sentences on cards, over cells or agents, with rates per unit of time, ground, events, buttons, measures and colours; eight starters; conversion to a node graph copy.
-- Card editor: pickers that grey a value its place cannot take, with the reason; drag and drop of lines; a line menu to add, duplicate, move and annotate lines; a question before an edit that loses work; fire counts beside change lines; a Diagram view.
-- henad-graph crate (`henad::graph`): graph models as model files, with a checker, a host evaluator, a WGSL compiler for grid and agent graphs, edit commands and starters.
-- Grid rules (`henad::rules`): a WGSL `step_cell` composed and checked at run time (`compose_wgsl`).
-- Model files (`ModelFile`, facade feature `model-files`) and `henad-cli --model-file`, with `--print-lowered`; problems reported at `path:line:column`.
-- GPU models built at run time from a spec (`GpuGridSpec`, `GpuAgentSpec`, `ModelEntry::from_gpu_grid_spec`, `from_gpu_agent_spec`), and `ModelSet::replace`.
-- Code identity (`CodeOrigin`, `ModelCode`, `code_hash`): manifests record a runtime model's code, and the app carries values and scheduled actions to new code with a Rebuild model dialog.
-- Time scales: hidden parameters, a `time` column in exported stats and `series.csv`, and time in natural units in the app.
-- Whole-number `f32` parameters (`ParamDescriptor::integer`) and percent values (`2.5%`) in `--set`, `--vary`, specs and the Sweep tab.
+- Editor tab in the app, for sheets, node graphs and WGSL grid rules. Apply installs the model, and a preview runs while you edit.
+- Sheets, a new kind of model file (`kind = "sheet"`, `henad::graph::sheet`). A sheet describes a model in numbered sentences on cards, over cells or agents. Eight starters are included.
+- Converting a sheet to a node graph copy.
+- Pickers in the card editor grey out values that a line cannot take, and show the reason on hover.
+- Card lines can be dragged to a new place, duplicated, and given a note.
+- The editor asks before an edit that would also remove lines, measures or other parts of the model.
+- henad-graph, a new crate (`henad::graph`) for graph models, with a checker, a host evaluator, a WGSL compiler, edit commands and starters.
+- Grid rules (`henad::rules`): a WGSL `step_cell` function, checked and composed at run time.
+- `ModelFile` and `henad-cli --model-file`, for running grid rules, graphs and sheets from a file. Errors point at `path:line:column`.
+- `GpuGridSpec` and `GpuAgentSpec` for GPU models built at run time, with `ModelEntry::from_gpu_grid_spec`, `from_gpu_agent_spec` and `ModelSet::replace`.
+- `ModelCode` and `code_hash`. Manifests record the code of a model built at run time.
+- Time scales. A model can declare how long one tick is, and exported stats and `series.csv` get a `time` column.
+- Whole-number `f32` parameters (`ParamDescriptor::integer`).
+- Percent values such as `2.5%` in `--set`, `--vary`, spec files and the Sweep tab.
 - Live parameters and fire counts (`FireCounts`) on the GPU engines.
-- Work budget: `Demand` rejects a configuration whose submission or host work is too heavy, naming the pass.
-- App builds a model on its own thread with Cancel, and detaches a run that does not stop within 2 s.
-- App: New model dialog with grid rule and node graph starters under Advanced; Exact replay row in the Model tab; a run pauses while a modal dialog is open.
-- `CodeDiagnostic`, `pcg4d` in Rust and WGSL, the shared WGSL module `henad::hash`, `action::parse_entry`.
-- Docs: Editor guide and model files reference.
-- `SECURITY.md`; the template's own files dedicated to the public domain under CC0 1.0.
+- A work budget in `Demand`. A configuration whose GPU submission or host work is over the budget is rejected, naming the pass.
+- The app builds a model on its own thread, with a Cancel button, and detaches a run that does not stop within 2 s.
+- New model dialog, unsaved changes prompt, and Cmd+S (Ctrl+S) to save.
+- Exact replay row in the Model tab.
+- `CodeDiagnostic`, `pcg4d` in Rust and WGSL, the WGSL module `henad::hash` and `action::parse_entry`.
+- Editor guide and model files reference in the docs.
+- `SECURITY.md`.
 
 ### Changed
 
-- Breaking: descriptor fields private behind accessors (`id()`, `label()`, `kind()`, ...); `ActionDescriptor` no longer `Copy`; choice options are `ChoiceOptions`, and `known` lists are `Vec<String>`.
-- Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes; `ModelMetadata` (built through `new`) and `Structure` are `#[non_exhaustive]`, with `Cow` buffer and pass lists.
-- Breaking: GPU agent builds panic on a position or colour buffer not `drawable`, a double-buffered buffer no step pass writes, or one buffer side bound both read-only and writable.
-- Breaking: `PassBindings` and `Demand` gain kind, work, host and binding-size fields; `Demand::push_pass` takes the kind and work.
-- Breaking: resume and merge reject changed runtime code and another time scale (`ResumeError::CodeChanged`, `TimeScaleChanged`, `MergeError::CodeChanged`); `RecordedBuild` is `#[non_exhaustive]`; `ManifestModel` gains `code` and `author`.
-- Breaking: the output writers and `ResumeScan::read` take the time scale, tick length or `ModelSource`.
-- Breaking: `ValueError`, `LevelSpec`, `LevelSpecError` and `FactorDomain` gain variants.
-- Breaking: `choice_param` panics on an option holding `,` or `:` or named `all`; debug builds panic on a stat named `run_id` or `tick`, or `time` beside a `time` column.
-- Breaking: `SweepOptions` no longer `UnwindSafe`.
-- Breaking: `GpuSimThread::new` takes a `FaultSink`; dropping a runner waits at most 2 s, then detaches it; `stop(timeout)` and `runner::Driver::shutdown(timeout)` return `RunnerShutdown`.
-- Breaking: `Snapshot` gains `fire_counts` and `run_to_samples`.
-- GPU engines non-generic, built from one spec per entry; `GpuGridState<M>` and `GpuAgentState<M>` unchanged.
-- GPU runner keeps to Target TPS, and publishes a snapshot once its stats readback lands.
-- Typed slider and Sweep range values apply on Enter or when the box loses focus (was: on every key).
-- Messages reworded: "rejects", "failed", "expected … got …", "is outside the range 0 to 1".
-- Minimum egui 0.36.2 and wgpu 30.0.2; on macOS the window is colour-managed as sRGB.
+- Breaking: descriptor fields are private and read through accessors such as `id()`, `label()` and `kind()`. `ActionDescriptor` is no longer `Copy`, choice options are `ChoiceOptions`, and the `known` lists in errors are `Vec<String>`.
+- Breaking: `GridView`, `PointView` and `EdgeView` borrow their palettes.
+- Breaking: `ModelMetadata` and `Structure` are `#[non_exhaustive]`, and `ModelMetadata` is built with `new`.
+- Breaking: GPU agent builds panic on a position or colour buffer that is not `drawable`, a double-buffered buffer that no step pass writes, or a buffer side bound as both read-only and writable.
+- Breaking: `PassBindings` and `Demand` have new fields, and `Demand::push_pass` takes the pass kind and work.
+- Breaking: resume and merge reject runtime code that has changed, and a different time scale (`ResumeError::CodeChanged`, `TimeScaleChanged`, `MergeError::CodeChanged`).
+- Breaking: `RecordedBuild` is `#[non_exhaustive]`, and `ManifestModel` has new `code` and `author` fields.
+- Breaking: the output writers and `ResumeScan::read` take the time scale, the position of the tick length or the `ModelSource`.
+- Breaking: `ValueError`, `LevelSpec`, `LevelSpecError` and `FactorDomain` have new variants.
+- Breaking: `choice_param` panics on an option that contains `,` or `:` or is named `all`. Debug builds panic on a stat named `run_id` or `tick`, or `time` next to a `time` column.
+- Breaking: `SweepOptions` is no longer `UnwindSafe`.
+- Breaking: `GpuSimThread::new` takes a `FaultSink`. Dropping a runner waits at most 2 s and then detaches it, and `stop(timeout)` and `runner::Driver::shutdown(timeout)` return `RunnerShutdown`.
+- Breaking: `Snapshot` has new `fire_counts` and `run_to_samples` fields.
+- The GPU engines are no longer generic. `GpuGridState<M>` and `GpuAgentState<M>` work as before.
+- The GPU runner follows Target TPS, and publishes a snapshot once its stats have been read back.
+- A number typed into a slider or into the Sweep tab's range fields applies on Enter or when the field loses focus, not on every key.
+- Reworded error messages and CLI help.
+- Requires egui 0.36.2 and wgpu 30.0.2 or later. On macOS the window is now colour-managed as sRGB.
 - New Henad icon for the app, the web app and the docs site.
-- Deprecation policy amended (Stability in the releasing guide).
-- Benchmarks measured again on a Ryzen 9 9950X3D with an RTX 4090.
+- The template's own files are dedicated to the public domain under CC0 1.0.
+- Amended deprecation policy (Stability in the releasing guide).
+- Benchmarks re-run on a Ryzen 9 9950X3D with an RTX 4090.
 
 ### Removed
 
-- Breaking: `GpuCommand`; use `GpuSimThread::set_batch_size`, `set_adaptive` or `set_target_ms`.
+- Breaking: `GpuCommand`. Use `GpuSimThread::set_batch_size`, `set_adaptive` or `set_target_ms` instead.
 
 ### Fixed
 
-- Panic sites lost when several rayon workers panicked at once.
-- App: Charts legend order, a slider snapping past its maximum or on "NaN", a whole-number slider wrapping above 2147483647, a Viewport Density panic with no agents, Tab stopping on panel dividers.
+- Panic locations lost when several rayon workers panicked at once.
+- Typing 10000 into a slider with a step of 50 giving 10001, and "NaN" setting a slider to its minimum or maximum.
+- Whole-number sliders wrapping to negative values above 2147483647.
+- Charts legend sorted alphabetically instead of in the order of the stats.
+- Viewport Density mode panicking when there are no agents.
+- Tab stopping on resizable panel dividers.
 - `write_grid` panicking on a width of 0.
-- Export tab's Save recording naming the loaded model and tick.
-- GPU search building a candidate the device cannot hold.
-- GPU runner publishing the previous readback's stats after a pause, step or action.
-- Template: LF line ends on Windows, and `git init -b main` so pushes run its CI.
+- Save recording in the Export tab naming the loaded model and the current tick instead of the recorded ones.
+- GPU searches building candidates that the device cannot hold.
+- The GPU runner publishing the previous stats after a pause, step or action.
+- Template checkouts on Windows using CRLF line endings, and its fetch commands creating a branch that its CI does not run on.
 
 ### Security
 
-- `url` 2.5.9 for RUSTSEC-2026-0592.
+- Updated `url` to 2.5.9 (RUSTSEC-2026-0592).
 
 ### Migrating to 0.4
 
-- Requirements: `henad` and `henad-build` to `"0.4"`.
-- Descriptors: read fields through accessors, build them through the helpers or `ParamDescriptor::new`, `StatDescriptor::owned` and `ActionDescriptor::owned`, clone an `ActionDescriptor` where it was copied, and pass `&[StatDescriptor]` to `stat_entries`.
-- Metadata: `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`; a wildcard arm on `Structure`; its lists through `.iter()`.
-- GPU agent models: mark position and colour buffers `drawable`, write each double-buffered buffer's next side in a step pass, and bind one side of a buffer per pass.
-- Capacity: pass the kind and work to `Demand::push_pass`; add the new fields to `PassBindings` and `Demand` literals, or start from `Demand::default()`.
-- Results: add the new error and value variants to exhaustive matches; build a `RecordedBuild` through `From`; pass `entry.source()` to `ResumeScan::read` and the time scale to `OutputDir::open_writer` and `append_writer`; a `ManifestModel` literal adds `code: None` and `author: None`.
-- Sweeps: wrap a closure that captures a `SweepOptions` in `AssertUnwindSafe` before `catch_unwind`.
-- Runners: pass `ctx.faults.clone()` as `GpuSimThread::new`'s last argument; call `stop(timeout)` where the thread has to be gone; a `Snapshot` literal adds `fire_counts` and `run_to_samples`.
-- Models: rename a choice option holding `,` or `:` or named `all`, and a stat named `run_id`, `tick` or `time`.
+- Update `henad` and `henad-build` to `"0.4"`.
+- Read descriptor fields through their accessors. Build descriptors with the helpers, or with `ParamDescriptor::new`, `StatDescriptor::owned` and `ActionDescriptor::owned`. Clone an `ActionDescriptor` where it was copied, and pass `&[StatDescriptor]` to `stat_entries`.
+- Build metadata with `ModelMetadata::new(backend, structure).palette(..).replays_exactly(..)`, add a wildcard arm to matches on `Structure`, and read its lists with `.iter()`.
+- In GPU agent models, mark position and colour buffers `drawable`, write the next side of each double-buffered buffer in a step pass, and bind only one side of a buffer in each pass.
+- Pass the kind and work to `Demand::push_pass`. Add the new fields to `PassBindings` and `Demand` literals, or start from `Demand::default()`.
+- Add the new error and value variants to exhaustive matches. Build a `RecordedBuild` with `From`, pass `entry.source()` to `ResumeScan::read` and the time scale to `OutputDir::open_writer` and `append_writer`, and add `code: None` and `author: None` to `ManifestModel` literals.
+- Wrap a closure that captures a `SweepOptions` in `AssertUnwindSafe` before passing it to `catch_unwind`.
+- Pass `ctx.faults.clone()` as the last argument of `GpuSimThread::new`. Call `stop(timeout)` where the thread has to be gone, and add `fire_counts` and `run_to_samples` to `Snapshot` literals.
+- Rename choice options that contain `,` or `:` or are named `all`, and stats named `run_id`, `tick` or `time`.
 
 ## [0.3.0] - 2026-10-10
 

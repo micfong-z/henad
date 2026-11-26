@@ -6,7 +6,7 @@ icon: material/tag
 status: ai-generated
 model: "Claude Code. Agents made the review, the fixes, the dependency upgrade, the editor changes and the screenshots, and the session wrote this record"
 issue: "release 0.4.0"
-state: "master holds the release's 58 commits after ae5d5fad, this record included, and the full local check passed on 113c0b9c. The tag, the full CI tier and the publish follow the release checklist"
+state: "master holds the release's 59 commits after ae5d5fad, this record included, and the full local check passed on 113c0b9c. The tag, the full CI tier and the publish follow the release checklist"
 baseline_commit: ae5d5fad
 delta_state: "committed on `master` after `ae5d5fad`, signed before the push of `release-0.4.0`"
 ---
@@ -163,7 +163,7 @@ zensical.toml                                the favicon, this record's entry
 
 ## State after
 
-`master` holds 58 commits after `ae5d5fad`, this record included.
+`master` holds 59 commits after `ae5d5fad`, this record included.
 The full local check passed on `113c0b9c` with 2,584 tests, as did both packaging passes, the pinned nightly's check, the params page and a publish dry run.
 The release then follows the checklist in `releasing.md`: the `release-0.4.0` branch, its issue, the full tier on the branch, the signed tag, the publish and the GitHub release.
 
