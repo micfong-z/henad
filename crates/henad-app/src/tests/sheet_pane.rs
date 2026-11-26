@@ -1962,3 +1962,40 @@ fn each_property_row_edits_and_deletes_its_property() {
         "the menu's Delete deletes"
     );
 }
+
+/// A table of properties with room for every word whole shows the symbol of each property's type and its Edit and
+/// delete buttons. Short of room it gives up the buttons for a menu first, and then the symbols, which its Kind column
+/// names too, while the parameters keep theirs.
+#[test]
+fn a_property_table_short_of_room_leaves_out_its_symbols_after_its_buttons() {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::{edit_property_heading, property_actions_name, type_symbol_name};
+
+    // Numbers of the symbols of Heading and of Number the frame shows, and whether the row of Heading shows buttons.
+    let shown = |width: f32| -> Option<(usize, usize, bool)> {
+        let mut harness = Harness::new()?;
+        harness.screen = egui::vec2(width, 2700.0);
+        open_starter(&mut harness, "ants.toml");
+        let nodes = harness.settle();
+        let symbols = |kind: &str| {
+            nodes
+                .iter()
+                .filter(|node| node.role == Role::Image && node.label == type_symbol_name(kind))
+                .count()
+        };
+        let buttons = nodes.iter().any(|node| node.label == edit_property_heading("Heading"));
+        let menu = nodes.iter().any(|node| node.label == property_actions_name("Heading"));
+        assert!(buttons != menu, "a row has its buttons or its menu");
+        Some((symbols("Heading"), symbols("Number"), buttons))
+    };
+    let Some(wide) = shown(1900.0) else {
+        return;
+    };
+    assert_eq!((wide.0, wide.2), (1, true), "symbols and buttons");
+    let Some(narrow) = shown(640.0) else {
+        return;
+    };
+    assert_eq!(narrow.0, 0, "the table leaves out its symbols");
+    assert!(narrow.1 > 0 && narrow.1 < wide.1, "the parameters keep their symbols");
+    assert!(!narrow.2, "the rows hold a menu");
+}

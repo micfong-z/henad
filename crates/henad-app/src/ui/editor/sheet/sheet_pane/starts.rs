@@ -31,9 +31,10 @@ use super::{
 };
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
 use crate::ui::editor::sheet::widgets::{
-    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, caption_width, chip_within, color32,
-    commit_number, escape_to_anchor, field_message, forget_field, menu_button, menu_group, menu_item, message_ui,
-    new_parameter_modal, overlay, parameter_names, placed, swatch_ui, text_control, text_control_width,
+    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, TypeSymbol, caption_width, chip_within,
+    color32, commit_number, escape_to_anchor, field_message, forget_field, menu_button, menu_group, menu_item,
+    message_ui, new_parameter_modal, overlay, parameter_names, placed, swatch_ui, text_control, text_control_width,
+    type_symbol_ui, type_symbol_width,
 };
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::{add_button, filled_button};
@@ -75,11 +76,17 @@ pub(super) fn cells(
 /// A delete that empties a formula the card cannot write again asks first, as the form's Delete property does, and a
 /// delete of the property the open form edits closes the form.
 ///
+/// A symbol of its type comes before each name while [`type_symbols_shown`] holds. A table that cannot hold every
+/// word whole draws a menu of Edit and Delete in place of the two buttons, and one that still cannot leaves the symbols
+/// out.
+///
 /// Starts as takes the room left over, and the Edit and delete buttons keep their width. Short of room, Starts as gives
 /// up width down to 150 points, then Changed by, Kind and Name down to their longest words, wrapping at them, then
 /// Starts as down to the width of "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the
 /// longest word of a state's name without its swatch, the names wrapping under their swatches, and last Kind and Name
 /// down to their least widths, a word too long for them ending in an ellipsis.
+///
+/// [`type_symbols_shown`]: crate::ui::editor::sheet::widgets::type_symbols_shown
 pub(super) fn property_table(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -89,76 +96,33 @@ pub(super) fn property_table(
     pending: &mut Vec<Pending>,
 ) {
     let properties = properties_of(document, thing);
-    let widest = |width: &dyn Fn(&SheetProperty) -> f32| properties.iter().map(width).fold(0.0, f32::max);
     let changed = |property: &SheetProperty| changed_by(&changing_lines(document, &property.id));
-    let names = widest(&|property| text_width(ui, &property.name));
-    let name_words = widest(&|property| longest_word(ui, &property.name));
-    let kinds = widest(&|property| kind_width(ui, property, text_width, STATE_SWATCH_WIDTH));
-    let kind_words = widest(&|property| kind_width(ui, property, longest_word, STATE_SWATCH_WIDTH));
-    // A state's name that wraps under its swatch needs no room beside the swatch.
-    let kind_under = widest(&|property| kind_width(ui, property, longest_word, 0.0));
-    let starts = widest(&|property| starts_width(ui, document, thing, property));
-    let changes = widest(&|property| text_width(ui, &changed(property)));
-    let change_words = widest(&|property| longest_word(ui, &changed(property)));
-    // "Use a parameter" is the widest control of Starts as that neither wraps nor ends in an ellipsis.
-    let starts_least = text_control_width(ui, USE_A_PARAMETER);
-    let header_word = |index: usize| {
-        CELLS_COLUMNS[index]
-            .split_whitespace()
-            .map(|word| caption_width(ui, word))
-            .fold(0.0, f32::max)
-    };
-    let columns = vec![
-        Column::new(
-            CELLS_COLUMNS[0],
-            names.max(caption_width(ui, CELLS_COLUMNS[0])),
-            header_word(0).max(40.0),
-        ),
-        Column::new(
-            CELLS_COLUMNS[1],
-            kinds.max(caption_width(ui, CELLS_COLUMNS[1])),
-            header_word(1).max(56.0),
-        ),
-        Column::new(CELLS_COLUMNS[2], starts, starts_least),
-        Column::new(
-            CELLS_COLUMNS[3],
-            changes.max(caption_width(ui, CELLS_COLUMNS[3])),
-            change_words.max(header_word(3)),
-        ),
-    ];
     let id = ui.make_persistent_id(("henad_sheet_properties", thing));
-    let give_up = [
-        (2, 150.0),
-        (3, 0.0),
-        (1, kind_words),
-        (0, name_words),
-        (2, starts_least),
-        (1, kind_under),
-        (1, 0.0),
-        (0, 0.0),
-    ];
-    // The Edit and delete buttons show while the table holds them with no word cut short, and a menu of both
-    // otherwise.
-    let edit_width = text_width(ui, EDIT) + 6.0;
-    let with_buttons = |columns: &[Column]| {
-        let mut columns = columns.to_vec();
-        columns.extend([Column::fixed(edit_width), Column::fixed(DELETE_WIDTH)]);
-        columns
+    // The table drops what it cannot hold with every word whole: first the Edit and delete buttons, for a menu of
+    // both, then the symbols of the types, which the Kind column names too.
+    let symbol_width = type_symbol_width(ui.ctx());
+    let available = ui.available_width();
+    let fits = |symbol: f32, buttons: bool| {
+        let (columns, give_up) = property_columns(ui, document, thing, symbol, buttons);
+        Table::new(id, columns, 2, &give_up[..give_up.len() - 2]).fits(available)
     };
-    let whole_words = &give_up[..give_up.len() - 2];
-    let buttons = Table::new(id, with_buttons(&columns), 2, whole_words).fits(ui.available_width());
-    let columns = if buttons {
-        with_buttons(&columns)
-    } else {
-        let mut columns = columns;
-        columns.push(Column::fixed(ACTIONS_WIDTH));
-        columns
-    };
+    let (symbol, buttons) = [(symbol_width, true), (symbol_width, false), (0.0, false)]
+        .into_iter()
+        .find(|&(symbol, buttons)| fits(symbol, buttons))
+        .unwrap_or((0.0, false));
+    let (columns, give_up) = property_columns(ui, document, thing, symbol, buttons);
     Table::new(id, columns, 2, &give_up).show(ui, |ui, rows| {
         for property in properties {
             rows.row(ui, &property.id, |row| {
                 row.cell(0, |ui| {
-                    text_cell(ui, fitted_label(ui, &property.name));
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if symbol > 0.0 {
+                            type_symbol_ui(ui, TypeSymbol::of_property(property.property_type));
+                        }
+                        // The name wraps under its own first line, to the right of the symbol.
+                        ui.vertical(|ui| text_cell(ui, fitted_label(ui, &property.name)));
+                    });
                 });
                 row.cell(1, |ui| kind_ui(ui, property));
                 row.cell(2, |ui| {
@@ -177,6 +141,74 @@ pub(super) fn property_table(
             });
         }
     });
+}
+
+/// Returns the columns of the table of the properties of `thing` and the steps they give up width in, as
+/// [`property_table`] orders them, where `symbol` is the width of the symbol before each name and `buttons` whether the
+/// last columns hold the Edit and delete buttons, or else the menu of both.
+///
+/// The last two steps cut a word short. The steps before them keep every word whole.
+fn property_columns(
+    ui: &Ui,
+    document: &SheetDocument,
+    thing: &str,
+    symbol: f32,
+    buttons: bool,
+) -> (Vec<Column>, [(usize, f32); 8]) {
+    let properties = properties_of(document, thing);
+    let widest = |width: &dyn Fn(&SheetProperty) -> f32| properties.iter().map(width).fold(0.0, f32::max);
+    let changed = |property: &SheetProperty| changed_by(&changing_lines(document, &property.id));
+    let names = widest(&|property| text_width(ui, &property.name)) + symbol;
+    let name_words = widest(&|property| longest_word(ui, &property.name)) + symbol;
+    let kinds = widest(&|property| kind_width(ui, property, text_width, STATE_SWATCH_WIDTH));
+    let kind_words = widest(&|property| kind_width(ui, property, longest_word, STATE_SWATCH_WIDTH));
+    // A state's name that wraps under its swatch needs no room beside the swatch.
+    let kind_under = widest(&|property| kind_width(ui, property, longest_word, 0.0));
+    let starts = widest(&|property| starts_width(ui, document, thing, property));
+    let changes = widest(&|property| text_width(ui, &changed(property)));
+    let change_words = widest(&|property| longest_word(ui, &changed(property)));
+    // "Use a parameter" is the widest control of Starts as that neither wraps nor ends in an ellipsis.
+    let starts_least = text_control_width(ui, USE_A_PARAMETER);
+    let header_word = |index: usize| {
+        CELLS_COLUMNS[index]
+            .split_whitespace()
+            .map(|word| caption_width(ui, word))
+            .fold(0.0, f32::max)
+    };
+    let mut columns = vec![
+        Column::new(
+            CELLS_COLUMNS[0],
+            names.max(caption_width(ui, CELLS_COLUMNS[0])),
+            header_word(0).max(40.0),
+        ),
+        Column::new(
+            CELLS_COLUMNS[1],
+            kinds.max(caption_width(ui, CELLS_COLUMNS[1])),
+            header_word(1).max(56.0),
+        ),
+        Column::new(CELLS_COLUMNS[2], starts, starts_least),
+        Column::new(
+            CELLS_COLUMNS[3],
+            changes.max(caption_width(ui, CELLS_COLUMNS[3])),
+            change_words.max(header_word(3)),
+        ),
+    ];
+    if buttons {
+        columns.extend([Column::fixed(text_width(ui, EDIT) + 6.0), Column::fixed(DELETE_WIDTH)]);
+    } else {
+        columns.push(Column::fixed(ACTIONS_WIDTH));
+    }
+    let give_up = [
+        (2, 150.0),
+        (3, 0.0),
+        (1, kind_words),
+        (0, name_words),
+        (2, starts_least),
+        (1, kind_under),
+        (1, 0.0),
+        (0, 0.0),
+    ];
+    (columns, give_up)
 }
 
 /// Width in points of the column of a property's menu of actions.

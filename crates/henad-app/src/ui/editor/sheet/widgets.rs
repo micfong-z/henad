@@ -11,9 +11,14 @@ use egui::{
     Rect, RectAlign, Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, TextStyle, Ui, Vec2, WidgetInfo,
     WidgetType, pos2, vec2,
 };
-use henad_graph::sheet::document::{ParameterType, SheetDocument, SheetLiteral};
+use henad_graph::sheet::check::ValueKind;
+use henad_graph::sheet::document::{ParameterType, PropertyType, SheetDocument, SheetLiteral};
 use henad_graph::sheet::edit::{IdSpace, PALETTE_COLORS, SheetEdit, SheetEditError, is_reserved_name};
 use henad_graph::sheet::format_number;
+use henad_graph::sheet::sentence::{
+    ARROW_KIND, CELL_KIND, HEADING_KIND, INTEGER_KIND, NUMBER_KIND, POSITION_KIND, STATES_KIND, YES_NO_KIND,
+    type_symbol_name,
+};
 use henad_graph::sheet::sentence::{
     AddButton, CANCEL, CHANCE_BOX_HINT, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, CHANCE_PARAMETER_PLACEHOLDER,
     CHOOSE_A_COLOR, COLOR_NAMES, CREATE_PARAMETER, ChipKind, DEFAULT_LABEL, DEFAULT_NAME, DEFAULT_OUTSIDE_LIMITS,
@@ -28,8 +33,9 @@ use henad_graph::value::Color;
 
 use super::{accessible_bounds, accessible_group};
 use crate::icons::material_design_icons::{
-    MDI_ALERT, MDI_ALERT_CIRCLE, MDI_CHECK, MDI_CHEVRON_DOWN, MDI_CIRCLE_MEDIUM, MDI_DOTS_HORIZONTAL, MDI_INFORMATION,
-    MDI_TUNE_VERTICAL,
+    MDI_ALERT, MDI_ALERT_CIRCLE, MDI_ARROW_TOP_RIGHT_THIN, MDI_CHECK, MDI_CHEVRON_DOWN, MDI_CIRCLE_MEDIUM,
+    MDI_CIRCLE_SMALL, MDI_COMPASS_OUTLINE, MDI_DOTS_HORIZONTAL, MDI_INFORMATION, MDI_LABEL_OUTLINE,
+    MDI_MAP_MARKER_OUTLINE, MDI_POUND, MDI_SQUARE_OUTLINE, MDI_TOGGLE_SWITCH_OUTLINE, MDI_TUNE_VERTICAL,
 };
 use crate::ui::mcs;
 use crate::ui::sweep::layout::{destructive_button, filled_button};
@@ -488,6 +494,147 @@ fn overlay_rule(ui: &mut Ui) {
         .hline(across, rect.center().y, Stroke::new(1.0, mcs::GRAY_800));
 }
 
+// The symbols of the types of values
+
+/// Id of the persisted setting that shows a symbol of its type before each value, property and parameter of a sheet.
+const SHOW_TYPE_SYMBOLS_ID: &str = "henad_show_type_symbols";
+
+/// Width in points of the column a type's symbol takes, with the gap after it.
+const SYMBOL_COLUMN: f32 = 18.0;
+
+/// Type of a value, a property or a parameter of a sheet, which a symbol before its name shows.
+///
+/// A number and a vector take the symbols the Statistics tab shows for a scalar and a vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeSymbol {
+    /// A number.
+    Number,
+    /// An integer.
+    Integer,
+    /// A Boolean, yes or no.
+    Boolean,
+    /// A vector.
+    Vector,
+    /// An agent's place in the world.
+    Position,
+    /// The direction an agent last moved in.
+    Heading,
+    /// One of a few named states.
+    States,
+    /// A cell of the grid or the ground.
+    Cell,
+}
+
+impl TypeSymbol {
+    /// Returns the symbol of a property of type `property_type`.
+    pub fn of_property(property_type: PropertyType) -> Self {
+        match property_type {
+            PropertyType::States => Self::States,
+            PropertyType::WholeNumber => Self::Integer,
+            PropertyType::YesNo => Self::Boolean,
+            PropertyType::Arrow => Self::Vector,
+            PropertyType::Position => Self::Position,
+            PropertyType::Heading => Self::Heading,
+            _ => Self::Number,
+        }
+    }
+
+    /// Returns the symbol of a parameter of type `parameter_type`.
+    pub fn of_parameter(parameter_type: ParameterType) -> Self {
+        if parameter_type == ParameterType::WholeNumber {
+            Self::Integer
+        } else {
+            Self::Number
+        }
+    }
+
+    /// Returns the symbol of a value of the kind `kind`, `None` for a kind no symbol shows, such as a list.
+    pub fn of_kind(kind: ValueKind) -> Option<Self> {
+        match kind {
+            ValueKind::YesNo => Some(Self::Boolean),
+            ValueKind::Number => Some(Self::Number),
+            ValueKind::Arrow => Some(Self::Vector),
+            ValueKind::Place => Some(Self::Cell),
+            ValueKind::State => Some(Self::States),
+            _ => None,
+        }
+    }
+
+    /// Glyph of the symbol in the icon font.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Number => MDI_CIRCLE_SMALL,
+            Self::Integer => MDI_POUND,
+            Self::Boolean => MDI_TOGGLE_SWITCH_OUTLINE,
+            Self::Vector => MDI_ARROW_TOP_RIGHT_THIN,
+            Self::Position => MDI_MAP_MARKER_OUTLINE,
+            Self::Heading => MDI_COMPASS_OUTLINE,
+            Self::States => MDI_LABEL_OUTLINE,
+            Self::Cell => MDI_SQUARE_OUTLINE,
+        }
+    }
+
+    /// Name of the type, the symbol's tooltip and accessible name, such as "Vector".
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Number => NUMBER_KIND,
+            Self::Integer => INTEGER_KIND,
+            Self::Boolean => YES_NO_KIND,
+            Self::Vector => ARROW_KIND,
+            Self::Position => POSITION_KIND,
+            Self::Heading => HEADING_KIND,
+            Self::States => STATES_KIND,
+            Self::Cell => CELL_KIND,
+        }
+    }
+}
+
+/// Returns whether the sheet editor shows the symbol of its type before each value, property and parameter, a setting
+/// the app keeps from one run to the next. It is on until turned off.
+pub fn type_symbols_shown(ctx: &egui::Context) -> bool {
+    ctx.data_mut(|data| *data.get_persisted_mut_or(Id::new(SHOW_TYPE_SYMBOLS_ID), true))
+}
+
+/// Returns the width in points a type's symbol takes before a name of the Sheet pane: none while the symbols are
+/// hidden.
+pub fn type_symbol_width(ctx: &egui::Context) -> f32 {
+    if type_symbols_shown(ctx) { SYMBOL_COLUMN } else { 0.0 }
+}
+
+/// Shows or hides the symbols of [`type_symbols_shown`], as `shown` says.
+pub fn show_type_symbols(ctx: &egui::Context, shown: bool) {
+    ctx.data_mut(|data| data.insert_persisted(Id::new(SHOW_TYPE_SYMBOLS_ID), shown));
+}
+
+/// Adds the weak symbol of `symbol` before a name in a row of the Sheet pane, with the type's name as its tooltip,
+/// named as `type_symbol_name` writes it, while [`type_symbols_shown`] holds.
+pub fn type_symbol_ui(ui: &mut Ui, symbol: TypeSymbol) {
+    if !type_symbols_shown(ui.ctx()) {
+        return;
+    }
+    let (rect, response) = ui.allocate_exact_size(vec2(SYMBOL_COLUMN, SYMBOL_LINE), Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Image, true, type_symbol_name(symbol.name())));
+    paint_symbol(ui.painter(), rect.left_center(), symbol, ui.visuals().weak_text_color());
+    response.on_hover_text(symbol.name());
+}
+
+/// Paints the glyph of `symbol` in `color` with its left edge at `left`, centred on its height.
+fn paint_symbol(painter: &Painter, left: Pos2, symbol: TypeSymbol, color: Color32) {
+    painter.text(
+        left,
+        egui::Align2::LEFT_CENTER,
+        symbol.glyph(),
+        FontId::proportional(SYMBOL_SIZE),
+        color,
+    );
+}
+
+/// Size in points of a type's symbol.
+const SYMBOL_SIZE: f32 = 14.0;
+
+/// Height in points of the line a type's symbol is centred on in the Sheet pane, the pane's line of a table row.
+const SYMBOL_LINE: f32 = 22.0;
+
 /// One item of an overlay.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OverlayItem<'a> {
@@ -503,6 +650,12 @@ pub struct OverlayItem<'a> {
     pub current: bool,
     /// Colour of a state's swatch before the words, `None` for an item that is no state.
     pub swatch: Option<Color32>,
+    /// Symbol of the type of the item's value before its words, `None` for an item with no type or while the symbols
+    /// are hidden. Its name is the tooltip of the symbol.
+    pub symbol: Option<TypeSymbol>,
+    /// Whether an item with no symbol leaves the symbol's column empty, to line up with items of the same list that
+    /// have one.
+    pub symbol_space: bool,
 }
 
 /// Adds `item` as a full-width row of an overlay and returns its response.
@@ -517,7 +670,12 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
     let enabled = ui.is_enabled();
     let body = TextStyle::Body.resolve(ui.style());
     let swatch_width = item.swatch.map_or(0.0, |_| CHIP_SWATCH + CHIP_GAP);
-    let indent = MARK_COLUMN + swatch_width;
+    let symbol_width = if item.symbol.is_some() || item.symbol_space {
+        SYMBOL_COLUMN
+    } else {
+        0.0
+    };
+    let indent = MARK_COLUMN + symbol_width + swatch_width;
     let label = ui
         .painter()
         .layout_no_wrap(item.label.to_owned(), body, Color32::PLACEHOLDER);
@@ -547,6 +705,19 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
             }
         });
     }
+    // The symbol of the item's type names the type under the pointer.
+    let symbol_rect = Rect::from_min_size(pos2(rect.left() + MARK_COLUMN, row.top()), vec2(symbol_width, height));
+    let response = match item.symbol {
+        Some(symbol)
+            if enabled
+                && response
+                    .hover_pos()
+                    .is_some_and(|pointer| symbol_rect.contains(pointer)) =>
+        {
+            response.on_hover_text(symbol.name())
+        }
+        _ => response,
+    };
     // Only a row its overlay's scroll area hides scrolls. A row in view would scroll the pane under the overlay.
     let clip = ui.clip_rect();
     if response.gained_focus() && (response.rect.top() < clip.top() || response.rect.bottom() > clip.bottom()) {
@@ -576,6 +747,10 @@ pub fn overlay_item(ui: &mut Ui, item: &OverlayItem<'_>) -> Response {
         paint_list_row_marks(ui, row, item.current, response.has_focus(), line_center);
         let painter = ui.painter();
         let mut x = rect.left() + MARK_COLUMN;
+        if let Some(symbol) = item.symbol {
+            paint_symbol(painter, pos2(x, line_center), symbol, weak);
+        }
+        x += symbol_width;
         if let Some(color) = item.swatch {
             swatch(painter, pos2(x + CHIP_SWATCH / 2.0, line_center), color);
             x += swatch_width;

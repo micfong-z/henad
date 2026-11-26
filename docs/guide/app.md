@@ -78,6 +78,7 @@ Henad switches to the Editor layout whenever a model opens in the Editor, whethe
 Uncheck **Open models in the Editor layout** under the two layouts to open the Editor in the layout that shows instead.
 In the default layout it then opens to the right of the Viewport.
 Henad never switches back by itself, so select **Default layout** when you turn to sweeps.
+Uncheck **Show type symbols on sheets** to hide the symbols of types in the [sheet editor](editor.md), a setting Henad keeps when it quits.
 
 Click <span class="ui" markdown>:material-restart: Reset layout</span> at the bottom to put the layout that shows back as it started, in case the workspace gets too messy.
 The other layout keeps your changes.

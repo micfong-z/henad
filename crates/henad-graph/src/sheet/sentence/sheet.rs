@@ -759,6 +759,15 @@ pub const ADD_GROUND_PROPERTY_NAME: &str = "Add property to the ground";
 /// Kind of an agent's place in the world.
 pub const POSITION_KIND: &str = "Position";
 
+/// Kind of a value that is a cell of the grid or the ground, as a Move to takes.
+pub const CELL_KIND: &str = "Cell";
+
+/// Returns the accessible name of the symbol of the type `kind` before a name, such as "Type: Vector", where `kind`
+/// is the type's name.
+pub fn type_symbol_name(kind: &str) -> String {
+    format!("Type: {kind}")
+}
+
 /// Kind of an agent's direction of travel.
 pub const HEADING_KIND: &str = "Heading";
 

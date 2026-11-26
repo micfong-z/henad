@@ -56,8 +56,12 @@ the measure Total trail, and Undo after each delete). The tables and their order
   "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the longest word
   of a state's name without its swatch (`kind_under`, the name wrapping under its swatch in a
   `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too long ending in an ellipsis
-  with the tooltip.
-- Parameters: one line per parameter (name, value as slider and field, Min, Max, Unit, ×) when the
+  with the tooltip. Each name follows the symbol of its type (`type_symbol_ui`,
+  `agents/henad-app-picker.md`) while the symbols show. `property_columns` builds the columns for a
+  symbol width and a choice of buttons or menu, and the table takes the first of buttons with
+  symbols, the menu with symbols and the menu alone that holds every word whole.
+- Parameters: the symbol of its type before each name (Number or Integer), its width in the Name
+  column. One line per parameter (name, value as slider and field, Min, Max, Unit, ×) when the
   section holds every column at its comfortable width, Value taking the room left over and Unit,
   Value, Name, Min and Max giving up width in that order. Otherwise name, value and × on the first
   line, Value giving up width before Name, and Min, Max and Unit on a second line after their

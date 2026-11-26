@@ -280,7 +280,8 @@ box is the card picker's (`number_box_ui`, its text kept under the picker's id),
 picker opens and afresh each time it opens, and ↓ from the empty box moves to the first item
 (`a_starts_chance_chip_opens_its_picker_with_the_number_box_focused`).
 
-`card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` describes.
+`card_pane.rs` and `picker.rs` draw and edit the cards, which `agents/henad-app-card.md` and
+`agents/henad-app-picker.md` describe.
 
 `help.rs` holds `Help` (`Section(SheetSection)`, `Lines`, and `AgentWorld` and `AgentLines` with the
 words of a world of agents) and `help_mark`: the weak `MDI_HELP_CIRCLE_OUTLINE` as a label, an

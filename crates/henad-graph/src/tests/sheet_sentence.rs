@@ -1176,6 +1176,8 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
         ("Number", fixed(sentence::NUMBER_KIND)),
         ("Boolean", fixed(sentence::YES_NO_KIND)),
         ("Vector", fixed(sentence::ARROW_KIND)),
+        ("Cell", fixed(sentence::CELL_KIND)),
+        ("Type: Vector", sentence::type_symbol_name("Vector")),
         (
             "A value that is yes or no, such as whether an agent is hungry.",
             fixed(sentence::YES_NO_KIND_DESCRIPTION),

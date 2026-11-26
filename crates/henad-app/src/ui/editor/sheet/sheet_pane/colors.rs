@@ -18,7 +18,9 @@ use super::parameters::typed_number;
 use super::starts::STATE_SWATCH_WIDTH;
 use super::{FIELD_WIDTH, GRADIENT_BANDS, GRADIENT_WIDTH, Pending, SWATCH_SIDE, measured_thing, select};
 use crate::ui::editor::sheet::properties_of;
-use crate::ui::editor::sheet::widgets::{OverlayItem, color32, commit_number, field_message, message_ui, swatch_ui};
+use crate::ui::editor::sheet::widgets::{
+    OverlayItem, TypeSymbol, color32, commit_number, field_message, message_ui, swatch_ui, type_symbols_shown,
+};
 
 /// Returns the colour a number shaded in `hue` takes at `share` of the way from its darkest value to its lightest.
 fn shade_color(hue: ShadeHue, share: f32) -> egui::Color32 {
@@ -148,11 +150,17 @@ fn colors_of(
         .chain(properties.iter().map(|property| Some(*property)))
         .collect();
     form.row(ui, label, |ui| {
+        // Each property follows the symbol of its type while the symbols show, and None lines up with them.
+        let symbols = type_symbols_shown(ui.ctx());
         let items: Vec<OverlayItem<'_>> = options
             .iter()
             .map(|option| OverlayItem {
                 label: option.map_or(COLOR_BY_NOTHING, |property| property.name.as_str()),
                 current: option.map(|property| &property.id) == chosen.map(|property| &property.id),
+                symbol: option
+                    .filter(|_| symbols)
+                    .map(|property| TypeSymbol::of_property(property.property_type)),
+                symbol_space: symbols,
                 ..OverlayItem::default()
             })
             .collect();

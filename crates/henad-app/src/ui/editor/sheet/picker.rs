@@ -43,8 +43,8 @@ use henad_graph::sheet::sentence::{
 };
 
 use super::widgets::{
-    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, color32, escape_to_anchor, mark_empty_box, menu_group,
-    menu_item, message_ui, overlay, overlay_group, overlay_title, placed, set_name,
+    NumberUse, OVERLAY_PADDING, OverlayItem, PICKER_WIDTH, TypeSymbol, color32, escape_to_anchor, mark_empty_box,
+    menu_group, menu_item, message_ui, overlay, overlay_group, overlay_title, placed, set_name, type_symbols_shown,
 };
 use super::{accessible_group, find_property, over_agents, properties_of};
 
@@ -115,6 +115,9 @@ pub struct PickerItem {
     /// Reason the place cannot take the item's value, `None` for an item it takes. An item with a reason shows greyed,
     /// with the reason as its tooltip, and takes no click.
     pub refusal: Option<String>,
+    /// Type of the item's value or property, whose symbol shows before its words, `None` for an item with none, such
+    /// as a state or a condition.
+    pub symbol: Option<TypeSymbol>,
 }
 
 impl PickerItem {
@@ -127,7 +130,14 @@ impl PickerItem {
             swatch: None,
             choice,
             refusal: None,
+            symbol: None,
         }
+    }
+
+    /// Returns the item with the symbol of the type `symbol` before its words.
+    pub fn with_symbol(mut self, symbol: Option<TypeSymbol>) -> Self {
+        self.symbol = symbol;
+        self
     }
 
     /// Returns the item with `detail` in grey under its words.
@@ -484,12 +494,15 @@ fn picker_overlay(
 fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>, under_title: bool) -> Option<Choice> {
     let mut choice = None;
     let mut under_title = under_title;
+    let symbols = type_symbols_shown(ui.ctx());
     for group in groups {
         if group.items.is_empty() {
             continue;
         }
         let heading = overlay_group(ui, &group.heading, under_title).id;
         under_title = false;
+        // An item with no symbol lines up with the items of its group that have one.
+        let symbol_space = symbols && group.items.iter().any(|item| item.symbol.is_some());
         menu_group(ui, heading, |ui| {
             for item in &group.items {
                 let row = OverlayItem {
@@ -499,6 +512,8 @@ fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>, under_t
                     described: true,
                     current: current == Some(item.label.as_str()),
                     swatch: item.swatch,
+                    symbol: item.symbol.filter(|_| symbols),
+                    symbol_space,
                 };
                 let response = ui
                     .add_enabled_ui(item.refusal.is_none(), |ui| menu_item(ui, &row))
@@ -542,10 +557,12 @@ fn parameter_items(document: &SheetDocument, number_use: NumberUse) -> Vec<Picke
         .map(|parameter| {
             let value = format_number(parameter.default).unwrap_or_default();
             let choice = Choice::Value(SheetValue::Chip(SheetChip::Param(parameter.id.clone())));
-            PickerItem::new(parameter.name.clone(), choice).with_detail(match &parameter.unit {
-                Some(unit) => format!("{value} {unit}"),
-                None => value,
-            })
+            PickerItem::new(parameter.name.clone(), choice)
+                .with_detail(match &parameter.unit {
+                    Some(unit) => format!("{value} {unit}"),
+                    None => value,
+                })
+                .with_symbol(Some(TypeSymbol::of_parameter(parameter.parameter_type)))
         })
         .collect()
 }
@@ -763,9 +780,14 @@ impl LineContext<'_> {
                     part: None,
                     property: None,
                 }));
+                let symbol = match &choice {
+                    Choice::Value(value) => self.symbol_of(value),
+                    _ => None,
+                };
                 Some(
                     PickerItem::new(label, choice)
-                        .with_detail(result_description(number, &self.sentences.result_words(line))),
+                        .with_detail(result_description(number, &self.sentences.result_words(line)))
+                        .with_symbol(symbol),
                 )
             })
             .collect()
@@ -824,10 +846,19 @@ impl LineContext<'_> {
             }
             items.extend(chips.into_iter().map(|chip| {
                 let value = SheetValue::Chip(chip);
-                PickerItem::new(self.sentences.value(&value, None), Choice::Value(value)).with_detail(detail.clone())
+                let symbol = self.symbol_of(&value);
+                PickerItem::new(self.sentences.value(&value, None), Choice::Value(value))
+                    .with_detail(detail.clone())
+                    .with_symbol(symbol)
             }));
         }
         items
+    }
+
+    /// Returns the symbol of the type of `value` on the line, as the checker reads it, `None` for a value of a type no
+    /// symbol shows or that cannot be known.
+    fn symbol_of(&self, value: &SheetValue) -> Option<TypeSymbol> {
+        value_kind(self.document, self.line_id, value).and_then(TypeSymbol::of_kind)
     }
 
     /// Returns the id of the kind of thing the line's card runs over: `cells` or a kind of agent's id.
@@ -877,15 +908,18 @@ impl LineContext<'_> {
                 this_cells_property(&property.name)
             };
             let choice = Choice::Value(SheetValue::Chip(SheetChip::My(property.id.clone())));
-            items.push(PickerItem::new(my_property_item(&property.name), choice).with_detail(detail));
+            let symbol = Some(TypeSymbol::of_property(property.property_type));
+            items.push(
+                PickerItem::new(my_property_item(&property.name), choice)
+                    .with_detail(detail)
+                    .with_symbol(symbol),
+            );
             if agents && let Some(last) = self.last_change_above(property) {
                 let choice = Choice::Value(SheetValue::Chip(SheetChip::MyNew(property.id.clone())));
                 items.push(
-                    PickerItem::new(my_new_property_item(&property.name), choice).with_detail(my_new_detail(
-                        &thing,
-                        &property.name,
-                        last,
-                    )),
+                    PickerItem::new(my_new_property_item(&property.name), choice)
+                        .with_detail(my_new_detail(&thing, &property.name, last))
+                        .with_symbol(symbol),
                 );
             }
         }
@@ -920,6 +954,7 @@ impl LineContext<'_> {
                     Choice::Value(SheetValue::Phrase(Box::new(formula))),
                 )
                 .with_detail(this_things_property(&thing, &property.name))
+                .with_symbol(Some(TypeSymbol::Number))
             })
             .collect()
     }
@@ -933,6 +968,7 @@ impl LineContext<'_> {
             .map(|property| {
                 let choice = Choice::Value(SheetValue::Chip(SheetChip::Their(property.id.clone())));
                 PickerItem::new(their_property_item(&property.name), choice)
+                    .with_symbol(Some(TypeSymbol::of_property(property.property_type)))
             })
             .collect();
         items.extend(
@@ -943,10 +979,16 @@ impl LineContext<'_> {
             ]
             .into_iter()
             .map(|relation| {
+                let symbol = if relation == ChipRelation::DistanceToThem {
+                    TypeSymbol::Number
+                } else {
+                    TypeSymbol::Vector
+                };
                 PickerItem::new(
                     relation_words(relation),
                     Choice::Value(SheetValue::Chip(SheetChip::Relation(relation))),
                 )
+                .with_symbol(Some(symbol))
             }),
         );
         PickerGroup {
@@ -1161,7 +1203,10 @@ fn ground_number_items(context: &LineContext<'_>) -> Vec<PickerItem> {
         .ground_properties()
         .iter()
         .filter(|property| property.property_type == PropertyType::Number)
-        .map(|property| PickerItem::new(property.name.clone(), Choice::Property(property.id.clone())))
+        .map(|property| {
+            PickerItem::new(property.name.clone(), Choice::Property(property.id.clone()))
+                .with_symbol(Some(TypeSymbol::of_property(property.property_type)))
+        })
         .collect()
 }
 
@@ -1233,15 +1278,21 @@ fn number_picker(
 /// Returns the new values a picker of a value offers on a card over agents: a random number between two values, and
 /// when `arrow` holds a random direction of a length. Each is a phrase whose own values start blank.
 fn new_values(arrow: bool) -> Vec<PickerItem> {
-    let mut items = vec![PickerItem::new(
-        AddItem::RandomNumber.pattern(None),
-        Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
-    )];
+    let mut items = vec![
+        PickerItem::new(
+            AddItem::RandomNumber.pattern(None),
+            Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomNumber)))),
+        )
+        .with_symbol(Some(TypeSymbol::Number)),
+    ];
     if arrow {
-        items.push(PickerItem::new(
-            AddItem::RandomDirection.pattern(None),
-            Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
-        ));
+        items.push(
+            PickerItem::new(
+                AddItem::RandomDirection.pattern(None),
+                Choice::Value(SheetValue::Phrase(Box::new(SheetLine::new(LineKind::RandomDirection)))),
+            )
+            .with_symbol(Some(TypeSymbol::Vector)),
+        );
     }
     items
 }
@@ -1252,7 +1303,10 @@ fn property_items(context: &LineContext<'_>, keep: impl Fn(&SheetProperty) -> bo
         .properties()
         .iter()
         .filter(|property| keep(property))
-        .map(|property| PickerItem::new(property.name.clone(), Choice::Property(property.id.clone())))
+        .map(|property| {
+            PickerItem::new(property.name.clone(), Choice::Property(property.id.clone()))
+                .with_symbol(Some(TypeSymbol::of_property(property.property_type)))
+        })
         .collect()
 }
 
@@ -1809,8 +1863,10 @@ pub fn list_len(line: &SheetLine, path: &str) -> usize {
 }
 
 /// Marks each value of `picker`, the picker of `target` on the line of `context`, that the place cannot take, with the
-/// reason as the checker words it. The place takes the value through [`place_refusal`], which reads the checker's rules,
-/// so the picker and the checker never disagree.
+/// reason as the checker words it.
+///
+/// The place takes the value through [`place_refusal`], which reads the checker's rules, so the picker and the checker
+/// never disagree.
 ///
 /// A value of a Calculate line of one operation is written into its formula, which takes no phrase, such as a random
 /// number or a length, and no cell. A place that refuses a typed number, such as the value of a Set of a Vector, shows

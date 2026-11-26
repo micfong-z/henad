@@ -88,9 +88,10 @@ the Viewport brought to the front of its stack, the Editor of the Editor layout 
 of Sweep or Results (else in a leaf of its own on the left at `EDITOR_LEAF_SHARE`), and any other
 tab into the focused leaf. `Workspace::focus` of the Editor switches to the Editor layout first
 while the checkbox holds, and every site that opens a model in the Editor sets `focus_request` to
-the Editor. Nothing switches back. The View menu (`menu_bar::view_menu`) holds a toggle per tab
-for the layout that shows, then "Default layout" and "Editor layout" as radio buttons, the checkbox
-and Reset layout (`Workspace::reset`, the layout that shows alone). Both layouts draw under one
+the Editor. Nothing switches back. The View menu (`menu_bar::view_menu`) holds a toggle per tab for
+the layout that shows, then "Default layout" and "Editor layout" as radio buttons, the checkbox,
+"Show type symbols on sheets" (`agents/henad-app-picker.md`) and Reset layout (`Workspace::reset`,
+the layout that shows alone). Both layouts draw under one
 `DockArea` id, so a tab body keeps its egui id across a switch, and `HenadApp::ui` copies the layout
 into `AppState::layout` before the dock draws for the Sheet pane's stored width
 (`henad-app-sheet.md`). `dock.rs` holds the eight tests of the default layout, their Editor layout

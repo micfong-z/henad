@@ -20,8 +20,8 @@ use super::{
 };
 use crate::ui::editor::sheet::set_parameter_edit;
 use crate::ui::editor::sheet::widgets::{
-    NewParameterDialog, NumberUse, caption, caption_width, commit_field, commit_number, message_ui, name_taken,
-    set_name, suggestion_field,
+    NewParameterDialog, NumberUse, TypeSymbol, caption, caption_width, commit_field, commit_number, message_ui,
+    name_taken, set_name, suggestion_field, type_symbol_ui, type_symbol_width,
 };
 use crate::ui::params::snapped;
 
@@ -108,7 +108,8 @@ pub(super) fn parameters(
             .iter()
             .map(|parameter| text_width(ui, &parameter.name) + 12.0)
             .fold(0.0, f32::max)
-            .min(PARAMETER_NAME_WIDTH + 20.0);
+            .min(PARAMETER_NAME_WIDTH + 20.0)
+            + type_symbol_width(ui.ctx());
         let value = Column::new(
             PARAMETER_COLUMNS[1],
             SLIDER_WIDTH + ITEM_GAP + FIELD_WIDTH,
@@ -348,7 +349,12 @@ fn parameter_row(
         widgets: pane.widgets,
     };
     let message = &mut pane.parameter_message;
-    row.cell(0, |ui| line(ui, |ui| fields.name(ui, message, pending)));
+    row.cell(0, |ui| {
+        line(ui, |ui| {
+            type_symbol_ui(ui, TypeSymbol::of_parameter(parameter.parameter_type));
+            fields.name(ui, message, pending);
+        });
+    });
     row.cell(1, |ui| line(ui, |ui| fields.value(ui, pending)));
     let last = if wide { 5 } else { 2 };
     if wide {

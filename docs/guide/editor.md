@@ -95,6 +95,8 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 Press **Edit** at the end of a row to change the property's name, kind or states, and **×** to delete it.
 Where the Sheet pane is too narrow for both, a menu at the end of each row holds them.
 A delete that would empty a formula the card cannot write again asks first.
+A symbol before each property and parameter, here and in the **Colours** selects, shows its type, such as a dot for a number and an arrow for a vector, as the Statistics tab shows them, and the type's name shows under the pointer.
+Uncheck **Show type symbols on sheets** in the View menu to hide them.
 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.
@@ -132,7 +134,7 @@ A button's card runs its lines once when the button is pressed, and offers **+ C
 
 ### Writing a line
 
-A new line's first blank opens its *picker*, which lists what fits there, in groups.
+A new line's first blank opens its *picker*, which lists what fits there, in groups, each value after the symbol of its type.
 A value of a line above that the blank cannot take shows greyed, and its reason shows under the pointer, such as "Flockmates' centre is a vector, and Move to needs a cell."
 The same holds for any value the model would refuse there, such as a random number as the distance of a look at agents.
 A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.

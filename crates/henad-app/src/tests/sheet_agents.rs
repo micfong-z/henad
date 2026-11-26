@@ -232,6 +232,49 @@ fn the_colours_selects_show_and_offer_none_where_no_property_colours() {
     assert_eq!(field_value(&mut harness, COLOR_GROUND_BY), COLOR_BY_NOTHING);
 }
 
+/// Each property of a Colours select follows the symbol of its type, which names the type under the pointer, and None
+/// has no symbol.
+#[test]
+fn the_colours_select_shows_the_symbol_of_each_propertys_type() {
+    use henad_graph::sheet::sentence::HEADING_KIND;
+
+    use crate::ui::editor::sheet::widgets::OVERLAY_PADDING;
+
+    // The symbol's column starts after the overlay's padding and the column of an item's marks, 16 points wide.
+    const SYMBOL_X: f32 = OVERLAY_PADDING + 16.0 + 8.0;
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("boids.toml").to_text().expect("the starter writes"));
+    click(&mut harness, COLOR_AGENTS_BY);
+    assert!(offers_nothing(&mut harness));
+    let row = |harness: &mut Harness, label: &str| {
+        harness
+            .settle()
+            .into_iter()
+            .find(|node| node.label == label && node.role == Role::Button && node.bounds.is_some())
+            .and_then(|node| node.bounds)
+            .expect("the select lists the item")
+    };
+    // Number of texts that read the kind Heading once the pointer has rested at `pointer`.
+    let headings = |harness: &mut Harness, pointer: egui::Pos2| {
+        harness.frame(vec![egui::Event::PointerMoved(pointer)]);
+        for _ in 0..60 {
+            harness.frame(Vec::new());
+        }
+        let texts = harness.accessible_texts();
+        texts.iter().filter(|text| *text == HEADING_KIND).count()
+    };
+    let heading = row(&mut harness, "Heading");
+    let nothing = row(&mut harness, COLOR_BY_NOTHING);
+    let on_words = headings(&mut harness, heading.center());
+    let on_symbol = headings(&mut harness, egui::pos2(heading.left() + SYMBOL_X, heading.center().y));
+    assert_eq!(on_symbol, on_words + 1, "the symbol's tooltip names the type");
+    let on_none = headings(&mut harness, egui::pos2(nothing.left() + SYMBOL_X, nothing.center().y));
+    assert_eq!(on_none, on_words, "None has no symbol");
+}
+
 #[test]
 fn the_agents_take_a_name_and_an_integer_up_to_the_most_the_world_holds() {
     let Some(mut harness) = blank_agents() else {

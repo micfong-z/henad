@@ -1485,3 +1485,97 @@ fn a_random_value_returns_to_a_typed_number_from_its_first_words() {
         Some(SheetValue::Chip(SheetChip::My("velocity".to_owned())))
     );
 }
+
+/// A symbol of its type shows before each property and parameter on the sheet and before each value of a picker, the
+/// symbols the Statistics tab shows for a scalar and a vector among them, and the setting hides them all.
+#[test]
+fn the_type_symbols_show_before_properties_parameters_and_values_until_hidden() {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::type_symbol_name;
+
+    use crate::icons::material_design_icons::{MDI_ARROW_TOP_RIGHT_THIN, MDI_CIRCLE_SMALL};
+    use crate::ui::editor::sheet::widgets::{TypeSymbol, show_type_symbols};
+
+    let boids = starter_document("boids.toml");
+    let picker = line_picker(&boids, "l7", |context| {
+        picker_for(context, Blank::Value, None, true, false, "", DrawKind::Chance)
+    });
+    let symbol_of = |label: &str| {
+        picker
+            .groups
+            .iter()
+            .flat_map(|group| &group.items)
+            .find(|item| item.label == label)
+            .and_then(|item| item.symbol)
+    };
+    for (label, symbol) in [
+        ("Flockmates' centre", TypeSymbol::Vector),
+        ("Too close's push", TypeSymbol::Vector),
+        ("my Velocity", TypeSymbol::Vector),
+        ("my Position", TypeSymbol::Position),
+        ("my Heading", TypeSymbol::Heading),
+        ("a random number between … and …", TypeSymbol::Number),
+        ("Visual range", TypeSymbol::Number),
+    ] {
+        assert_eq!(symbol_of(label), Some(symbol), "{label}");
+    }
+    assert_eq!(TypeSymbol::Number.glyph(), MDI_CIRCLE_SMALL);
+    assert_eq!(TypeSymbol::Vector.glyph(), MDI_ARROW_TOP_RIGHT_THIN);
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    let symbols = |harness: &mut Harness, kind: &str| {
+        harness
+            .settle()
+            .iter()
+            .filter(|node| node.role == Role::Image && node.label == type_symbol_name(kind))
+            .count()
+    };
+    assert_eq!(symbols(&mut harness, "Vector"), 1, "Velocity");
+    assert_eq!(symbols(&mut harness, "Position"), 1);
+    assert_eq!(symbols(&mut harness, "Number"), boids.parameters.len());
+    show_type_symbols(&harness.context, false);
+    for kind in ["Vector", "Position", "Number"] {
+        assert_eq!(symbols(&mut harness, kind), 0, "{kind} still shows");
+    }
+}
+
+/// The symbol before a picker's item names its type under the pointer, and the item's words do not.
+#[test]
+fn a_pickers_symbol_names_its_type_under_the_pointer() {
+    use henad_graph::sheet::sentence::NUMBER_KIND;
+
+    use crate::ui::editor::sheet::widgets::OVERLAY_PADDING;
+
+    // The symbol's column starts after the overlay's padding and the column of an item's marks, 16 points wide.
+    const SYMBOL_X: f32 = OVERLAY_PADDING + 16.0 + 8.0;
+    const PICKER: &str = "Choose the lower number";
+
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "boids.toml");
+    click_on_line(&mut harness, "Line 6", "Min speed");
+    assert!(is_open(&mut harness, PICKER));
+    let row = harness
+        .settle()
+        .into_iter()
+        .find(|node| node.dialog == PICKER && node.label == "Visual range")
+        .and_then(|node| node.bounds)
+        .expect("the picker lists the parameter Visual range");
+    let named_number = |harness: &mut Harness, pointer: egui::Pos2| {
+        harness.frame(vec![egui::Event::PointerMoved(pointer)]);
+        // A tooltip shows once the pointer has rested past egui's delay.
+        for _ in 0..60 {
+            harness.frame(Vec::new());
+        }
+        let texts = harness.accessible_texts();
+        texts.iter().filter(|text| *text == NUMBER_KIND).count()
+    };
+    let on_words = named_number(&mut harness, row.center());
+    let on_symbol = named_number(&mut harness, egui::pos2(row.left() + SYMBOL_X, row.center().y));
+    assert_eq!(on_symbol, on_words + 1, "the symbol's tooltip names the type");
+    assert!(is_open(&mut harness, PICKER), "the pointer leaves the picker open");
+}
