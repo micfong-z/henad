@@ -47,10 +47,11 @@ run it."), as after Apply beside another model's run past tick 0 and then Offloa
 waiting preview. The list then reads the preview's line and "Press Apply to check and install the
 model.", and Apply builds the sheet at its own size
 (`a_sheet_applied_beside_another_run_drops_the_build_line_once_its_preview_loads`).
-`AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied, and
-Playback's `tick_counter` then reads `henad_graph::sheet::sentence::tick_counter` ("Tick 4 (a tick
-is one step of time)", or "Tick 4 (4 days)" through `time_axis::elapsed_text` once the entry has a
-time scale). Nothing saves a sheet on its own.
+`AppState::runs_editor_sheet` holds for the sheet's preview or the source the Editor applied.
+Playback's tick counter reads as for any model, "Tick 4" with no unit and "Tick 60 (2.5 days)" once
+One tick is has one, since the lowering gives every sheet with a `[time]` table a time scale, rate
+lines or none (`a_sheet_s_tick_length_reaches_the_counter_in_the_unit_that_fits`). Nothing saves a
+sheet on its own.
 
 **The New model dialog** (`new_model.rs`). `NewModelDialog` sits in
 `EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,

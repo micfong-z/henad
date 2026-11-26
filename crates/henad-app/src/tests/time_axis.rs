@@ -1,14 +1,19 @@
-//! Tests of the time axis in the World tabs: the tick counter of a model with a time scale, and its hidden tick
-//! length, which no panel shows a slider for and the Sweep tab still varies.
+//! Tests of the time axis in the World tabs: the tick counter of a model with a time scale, its time in the unit that
+//! fits it, and its hidden tick length, which no panel shows a slider for and the Sweep tab still varies.
 
 use henad_core::metadata::{TimeScale, TimeUnit};
 use henad_core::params::{ParamDescriptor, ParamKind, ParamValue};
 use henad_graph::GraphFile;
 
 use crate::state::{AppState, default_values};
-use crate::tests::support::{accessible_names, accessible_texts, set_of, sir_rates, step_past};
+use crate::tests::panes::apply_sheet_edit;
+use crate::tests::support::{
+    accessible_names, accessible_texts, headless_app, set_of, settle_preview, sir_rates, starter_text, step_past,
+    wait_for_snapshot,
+};
 use crate::ui::editor::graph::GraphEditor;
 use crate::ui::editor::graph::world::world_ui;
+use crate::ui::editor::{EditorModel, open_text};
 use crate::ui::export::{Recording, history_csv, start_recording};
 use crate::ui::model::model_ui;
 use crate::ui::params::params_ui;
@@ -82,6 +87,44 @@ fn the_counter_names_the_days_of_a_timed_model_and_only_the_tick_of_another() {
     let tick = app.snapshot.as_ref().expect("a snapshot").tick;
     assert_eq!(app.loaded_time(), None);
     assert_eq!(tick_counter(&app), Some(format!("Tick {tick}")));
+}
+
+/// One tick is on a sheet with no rate line still gives the preview its time scale, and Playback's counter shows the
+/// time in the unit that fits it: 60 ticks of an hour read as days.
+#[test]
+fn a_sheet_s_tick_length_reaches_the_counter_in_the_unit_that_fits() {
+    use henad_graph::sheet::document::SheetTime;
+    use henad_graph::sheet::edit::SheetEdit;
+
+    let Some(mut app) = headless_app() else {
+        return;
+    };
+    open_text(
+        &mut app.editor,
+        starter_text("game_of_life.toml").to_owned(),
+        Some("opened.toml".to_owned()),
+    );
+    let EditorModel::Sheet(sheet) = &mut app.editor.model else {
+        panic!("a sheet");
+    };
+    apply_sheet_edit(
+        sheet,
+        SheetEdit::SetTime {
+            time: Some(SheetTime::new(1.0, TimeUnit::Hour)),
+        },
+    );
+    settle_preview(&mut app);
+    app.wait_for_build();
+    assert_eq!(
+        app.loaded_time(),
+        Some(RunTime {
+            unit: TimeUnit::Hour,
+            tick_length: 1.0
+        })
+    );
+    app.run_to(60);
+    wait_for_snapshot(&mut app, |tick| tick >= 60);
+    assert_eq!(tick_counter(&app).as_deref(), Some("Tick 60 (2.5 days)"));
 }
 
 /// The Export tab's stats and recording write the `time` column of a timed model after `tick`, as `--export-stats`

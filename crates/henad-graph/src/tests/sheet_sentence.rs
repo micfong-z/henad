@@ -1370,8 +1370,8 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         (
             "The grid the cells live on: its size, what happens at its edges, and the length of one tick. A tick is \
              one step of time, and every cell follows the card once per tick. Leave one tick as one step (no unit) \
-             when time has no unit, as in Game of Life. With Wrap around, a cell on the left edge has neighbours on \
-             the right edge.",
+             when time has no unit, as in Game of Life. With a unit, the time so far also shows in the Playback and \
+             Charts tabs. With Wrap around, a cell on the left edge has neighbours on the right edge.",
             "One tick is 1 day",
         ),
         (
@@ -1515,8 +1515,6 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ("Diagram", fixed(sentence::DIAGRAM)),
         ("Draw the lines as boxes and arrows", fixed(sentence::DIAGRAM_TOOLTIP)),
         // The world tabs.
-        ("Tick 4 (a tick is one step of time)", sentence::tick_counter(4, None)),
-        ("Tick 4 (4 days)", sentence::tick_counter(4, Some("4 days"))),
         (
             "Trying this value. The model keeps 0.0001.",
             sentence::trying_value("0.0001"),

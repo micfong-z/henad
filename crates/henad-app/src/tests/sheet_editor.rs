@@ -269,8 +269,8 @@ fn a_sheet_preview_waits_at_tick_zero_until_play() {
     assert!(alive > 0.0, "the start is drawn at tick 0");
     assert_eq!(
         tick_counter(&app).as_deref(),
-        Some("Tick 0 (a tick is one step of time)"),
-        "Playback explains a tick in the sheet's words"
+        Some("Tick 0"),
+        "a tick with no unit is the tick alone"
     );
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(
@@ -285,7 +285,7 @@ fn a_sheet_preview_waits_at_tick_zero_until_play() {
     app.play();
     let tick = wait_for_snapshot(&mut app, |tick| tick > 0).tick;
     assert!(tick > 0);
-    assert!(tick_counter(&app).is_some_and(|counter| counter.ends_with("(a tick is one step of time)")));
+    assert_eq!(tick_counter(&app), Some(format!("Tick {tick}")));
 
     // A graph's preview still plays once it is built.
     crate::ui::editor::new_graph_model(&mut app, "sir.toml");
@@ -1351,16 +1351,11 @@ fn the_world_tabs_show_no_forbidden_word_from_a_sheet() {
 
 /// Returns the words of the tick counter that the run of a sheet with `metadata` shows at tick 4, one tick long.
 fn tick_counter_words(metadata: &henad_core::metadata::ModelMetadata) -> String {
-    let elapsed = metadata.time.as_ref().map(|scale| {
-        crate::ui::time_axis::elapsed_text(
-            4,
-            crate::ui::time_axis::RunTime {
-                unit: scale.unit,
-                tick_length: 1.0,
-            },
-        )
+    let time = metadata.time.as_ref().map(|scale| crate::ui::time_axis::RunTime {
+        unit: scale.unit,
+        tick_length: 1.0,
     });
-    henad_graph::sheet::sentence::tick_counter(4, elapsed.as_deref())
+    crate::ui::time_axis::counter_text(4, time)
 }
 
 // A note edit, Edit model and the sheet a sweep recorded

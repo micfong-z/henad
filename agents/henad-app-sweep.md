@@ -113,9 +113,11 @@ For a model with a time scale, `ResultsStore` keeps the entry's `TimeScale` (fro
 construction and in `model_changed`, `None` for a folder whose model this device lacks), and
 `config_time` reads a config's tick length from its value column. `time_unit` and `config_time`
 are both `None` when the value columns hold no tick length, as in a folder written before the
-model declared a time scale, so such a folder reads in ticks. The Series view puts each band and
-run line at `time_axis::plot_x` of the config's own tick length, labels the x axis with
-`time_axis::axis_label`, and drops its cache when `time_unit` changes.
+model declared a time scale, so such a folder reads in ticks. The Series view takes one axis unit,
+`time_axis::axis_unit` of the longest time over the drawn configs' bands
+(`SeriesPlot::axis_unit`), puts each band and run line at `time_axis::plot_x` of the config's own
+tick length in that unit, labels the x axis with `time_axis::axis_label`, and drops its cache when
+`time_unit` changes.
 `series.rs` draws a `FilledArea` band and a centre line per config, `response.rs` caches each
 line as a `PlottedLine` and draws its whiskers as one `Whiskers` item with the line's id, so the
 legend hides both, and `heatmap.rs` draws the grid. `labels.rs` names output kinds, output

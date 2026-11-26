@@ -33,8 +33,8 @@ Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and the Agents, 
 words), the New model and New parameter dialogs (`STARTER_CHOICES` with every starter's
 description), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
-(`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (`tick_counter`, the
-tried-value words, `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Shown text takes
+(`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (the tried-value words,
+`PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. Shown text takes
 the proper characters: "…" in a menu item, a pattern or a button ("+ Repeat…", "New parameter…",
 "when … is …"), "→" between a state and its
 value in a Depending on, and "×" and "−" in a note. A blank reads `BLANK_TEXT`, "…", in shown

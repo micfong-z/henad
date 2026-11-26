@@ -98,8 +98,8 @@ impl SheetSection {
             Self::World => {
                 "The grid the cells live on: its size, what happens at its edges, and the length of one tick. A tick \
                  is one step of time, and every cell follows the card once per tick. Leave one tick as one step (no \
-                 unit) when time has no unit, as in Game of Life. With Wrap around, a cell on the left edge has \
-                 neighbours on the right edge."
+                 unit) when time has no unit, as in Game of Life. With a unit, the time so far also shows in the \
+                 Playback and Charts tabs. With Wrap around, a cell on the left edge has neighbours on the right edge."
             }
             Self::Cells => {
                 "A property is something every cell has. A States property is one of a few named states, such as Dead \
@@ -210,8 +210,9 @@ pub const AGENT_WRAP_TOOLTIP: &str =
 /// Help of the World section of a world of agents, in place of [`SheetSection::help`].
 pub const WORLD_HELP_AGENTS: &str = "The open space the agents live in: its size, what happens at its edges, and the \
                                      length of one tick. A tick is one step of time, and every agent follows its card \
-                                     once per tick. Leave one tick as one step (no unit) when time has no unit. With \
-                                     Wrap around, an agent that leaves by one edge comes back at the opposite edge.";
+                                     once per tick. Leave one tick as one step (no unit) when time has no unit. With a \
+                                     unit, the time so far also shows in the Playback and Charts tabs. With Wrap \
+                                     around, an agent that leaves by one edge comes back at the opposite edge.";
 
 /// Tooltip of [`WRAP_AROUND`].
 pub const WRAP_TOOLTIP: &str =

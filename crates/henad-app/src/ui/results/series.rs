@@ -12,7 +12,7 @@ use crate::ui::results::ResultsRequest;
 use crate::ui::results::plot::{MAX_PLOT_POINTS, cache_stale, config_color, decimate, labeled_combo};
 use crate::ui::results::store::{BandKind, ResultsStore, SeriesBand};
 use crate::ui::text::capitalize;
-use crate::ui::time_axis::{axis_label, plot_x};
+use crate::ui::time_axis::{PlotTime, axis_label, axis_unit, plot_x};
 use crate::ui::{plural, show_plot};
 
 /// Maximum number of configs the view draws at once.
@@ -44,8 +44,11 @@ struct SeriesPlot {
     band: BandKind,
     show_runs: bool,
     configs: Vec<u64>,
-    /// Unit of the x axis, `None` for a model with no time scale, whose x axis counts ticks.
+    /// Unit of the model's time scale, `None` for a model with no time scale.
     time_unit: Option<TimeUnit>,
+    /// Unit of the x axis, the [`axis_unit`] of the longest time drawn, `None` for a model with no time scale, whose x
+    /// axis counts ticks.
+    axis_unit: Option<TimeUnit>,
     /// Band of each drawn config, `None` for a config with no series held.
     bands: Vec<Option<ConfigBand>>,
     /// Line of each run of the drawn configs.
@@ -57,7 +60,7 @@ struct SeriesPlot {
 struct ConfigBand {
     config_id: u64,
     /// Band whose low and high ends the fill spans. For a model with a time scale, its ticks hold the time of each
-    /// tick in the config's runs.
+    /// tick in the config's runs, in the axis unit.
     band: SeriesBand,
     /// Centre line, decimated so its spikes survive.
     center: Vec<PlotPoint>,
@@ -151,7 +154,7 @@ fn draw_plot(ui: &mut egui::Ui, plotted: &SeriesPlot, labels: &[String], stat: &
                 .follow_insertion_order(true)
                 .grouping(LegendGrouping::ById),
         )
-        .x_axis_label(axis_label(plotted.time_unit))
+        .x_axis_label(axis_label(plotted.axis_unit))
         .y_axis_label(stat);
     show_plot(ui, plot, |plot_ui| {
         for line in &plotted.run_lines {
@@ -317,13 +320,34 @@ impl SeriesView {
             self.cache = None;
         }
         self.cache.get_or_insert_with(|| {
+            let raw_bands: Vec<Option<SeriesBand>> = configs
+                .iter()
+                .map(|&config_id| store.band(config_id, stat, band))
+                .collect();
+            // Each band ends at the last tick of its config's runs, and the axis takes the unit of the longest time.
+            let longest = configs
+                .iter()
+                .zip(&raw_bands)
+                .filter_map(|(&config_id, band)| {
+                    let last = band.as_ref()?.ticks.last()?;
+                    Some(store.config_time(config_id)?.at(*last as u64))
+                })
+                .fold(0.0, f64::max);
+            let axis_unit = time_unit.map(|unit| axis_unit(longest, unit));
+            let plot_time = |config_id: u64| {
+                Some(PlotTime {
+                    run: store.config_time(config_id)?,
+                    unit: axis_unit?,
+                })
+            };
             let bands = configs
                 .iter()
-                .map(|&config_id| {
-                    let mut band = store.band(config_id, stat, band)?;
-                    if let Some(time) = store.config_time(config_id) {
+                .zip(raw_bands)
+                .map(|(&config_id, band)| {
+                    let mut band = band?;
+                    if let Some(time) = plot_time(config_id) {
                         for x in &mut band.ticks {
-                            *x = time.at(*x as u64);
+                            *x = plot_x(*x as u64, Some(time));
                         }
                     }
                     Some(ConfigBand {
@@ -334,7 +358,7 @@ impl SeriesView {
                 })
                 .collect();
             let run_lines = if show_runs {
-                run_lines(store, &configs, stat)
+                run_lines(store, &configs, stat, axis_unit)
             } else {
                 Vec::new()
             };
@@ -347,6 +371,7 @@ impl SeriesView {
                 show_runs,
                 configs,
                 time_unit,
+                axis_unit,
                 bands,
                 run_lines,
             }
@@ -371,11 +396,14 @@ fn run_counts(store: &ResultsStore, configs: &[u64]) -> Vec<(usize, usize)> {
 
 /// Returns the line of stat `stat` for every run of `configs` whose series is held, finite values only.
 ///
-/// For a model with a time scale, a point sits at the time of its tick in the run's config.
-fn run_lines(store: &ResultsStore, configs: &[u64], stat: usize) -> Vec<RunLine> {
+/// For a model with a time scale, a point sits at the time of its tick in the run's config, in `axis_unit`.
+fn run_lines(store: &ResultsStore, configs: &[u64], stat: usize, axis_unit: Option<TimeUnit>) -> Vec<RunLine> {
     let mut lines = Vec::new();
     for (position, &config_id) in configs.iter().enumerate() {
-        let time = store.config_time(config_id);
+        let time = store
+            .config_time(config_id)
+            .zip(axis_unit)
+            .map(|(run, unit)| PlotTime { run, unit });
         for outcome in store.config_runs(config_id) {
             let Some(series) = store.series(outcome.run.run_id) else {
                 continue;
@@ -498,6 +526,7 @@ mod tests {
             band: BandKind::default(),
             show_runs: false,
             time_unit: None,
+            axis_unit: None,
             bands: configs.iter().map(|&config_id| Some(config_band(config_id))).collect(),
             configs,
             run_lines: Vec::new(),
@@ -573,7 +602,8 @@ mod tests {
         }
     }
 
-    /// The runs of a sweep over the tick length draw at the time of each tick in their own config.
+    /// The runs of a sweep over the tick length draw at the time of each tick in their own config, on one axis in the
+    /// unit of the longest time: 100 days read in months.
     #[test]
     fn a_timed_model_s_series_sits_at_the_time_of_each_tick() {
         let entry = sir_rates();
@@ -585,7 +615,7 @@ mod tests {
             .expect("the fixture declares a tick length");
         let mut draft = SweepDraft::new(&schema);
         draft.factors[index].vary = true;
-        "0.5, 2".clone_into(&mut draft.factors[index].levels_text);
+        "0.5, 10".clone_into(&mut draft.factors[index].levels_text);
         draft.steps = 10;
         draft.series_every = 10;
         let mut spec = draft
@@ -606,21 +636,26 @@ mod tests {
         };
         let plotted = view.cached_plot(&egui::Context::default(), &store, vec![0, 1]);
         assert_eq!(plotted.time_unit, Some(TimeUnit::Day));
+        assert_eq!(plotted.axis_unit, Some(TimeUnit::Month));
+        let months = |days: f64| days / 30.44;
         let mut ends = Vec::new();
         for (position, config_id) in [0, 1].into_iter().enumerate() {
             let length = store.config_time(config_id).expect("a timed config").tick_length;
             let ticks = &plotted.bands[position].as_ref().expect("a band").band.ticks;
-            assert_eq!(ticks, &[0.0, 10.0 * f64::from(length)], "config {config_id}");
+            assert_eq!(ticks, &[0.0, months(10.0 * f64::from(length))], "config {config_id}");
             let line = plotted
                 .run_lines
                 .iter()
                 .find(|line| line.position == position)
                 .expect("a run line");
-            assert_eq!(line.points.last().map(|point| point.x), Some(10.0 * f64::from(length)));
+            assert_eq!(
+                line.points.last().map(|point| point.x),
+                Some(months(10.0 * f64::from(length)))
+            );
             ends.push(10.0 * f64::from(length));
         }
         ends.sort_by(f64::total_cmp);
-        assert_eq!(ends, [5.0, 20.0], "the two tick lengths");
+        assert_eq!(ends, [5.0, 100.0], "the two tick lengths, in days");
         let labels = ["Configuration 0".to_owned(), "Configuration 1".to_owned()];
         let input = egui::RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))),
@@ -635,8 +670,8 @@ mod tests {
             collect_texts(&clipped.shape, &mut texts);
         }
         output.drop_without_applying_deltas();
-        assert!(texts.iter().any(|text| text == "Day"), "{texts:?}");
-        assert!(!texts.iter().any(|text| text == "Tick"), "{texts:?}");
+        assert!(texts.iter().any(|text| text == "Month"), "{texts:?}");
+        assert!(!texts.iter().any(|text| text == "Tick" || text == "Day"), "{texts:?}");
 
         let untimed = sir();
         let untimed_plan = Arc::new(SweepSpec::new("sir").plan(&untimed.schema()).expect("a valid spec"));

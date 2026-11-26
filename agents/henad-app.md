@@ -36,8 +36,9 @@ over `example_models()`: "Henad", the icon, the links, the licence, `cli_command
 or window (`menu_bar.rs`, `model.rs`, `playback.rs`, `pacing.rs`, `viewport.rs`, `stats.rs`,
 `charts.rs`, `performance.rs`, `system.rs`, `fault.rs`, `rebuild.rs`, `about.rs`), and
 `time_axis.rs` holds the time axis the Charts tab, the Results tab's Series view and Playback
-share. `focus.rs` holds the keyboard focus order: `without_focus_stop` takes the divider of each
-resizable panel (`panel_divider`, egui's id of the panel with "__resize") out of the order of Tab
+share, which shows a time in its natural unit (`natural_unit`). `focus.rs` holds the keyboard focus
+order: `without_focus_stop` takes the divider of each resizable panel (`panel_divider`, egui's id of
+the panel with "__resize") out of the order of Tab
 and Shift+Tab, as a divider has no name and no key moves it, and `install` adds `TabWraps`, an
 egui plugin that `HenadApp::new` and the tests' `Harness` install. Left to egui, Tab from the last
 widget leaves nothing focused in its frame, and the first widget takes the focus in the next frame.
@@ -311,15 +312,23 @@ parameter, hidden ones included, so a
 sweep varies a tick length (`a_hidden_tick_length_stays_a_sweep_factor`). The time axis:
 `AppState::loaded_time` returns a `time_axis::RunTime`, the unit of the loaded entry's
 `ModelMetadata::time` and the tick length among `loaded_values`, `None` for a model with no time
-scale. `time_axis::counter_text` is Playback's tick counter beside Play and Step ("Tick 24", or
-"Tick 24 (12 days)", singular at exactly one unit), `axis_label` the x label ("Tick", or the unit
-capitalised, "Day"), and `plot_x` a sample's x, `TimeScale::time_at` of its tick, which equals
-the `time` column of `--export-stats`. The Charts tab plots every stat at `plot_x`, includes 0 in
-the y range, and draws a series of one sample as `Points` of radius 3, since a `Line` of one point
-draws nothing. Its x range then spans the sample's tick to the next (`single_sample_x_range`).
-Otherwise egui_plot widens the zero-width range to the height of the y range. `tests/time_axis.rs`
-holds the app-level tests over henad-models' `sir_rates.toml` fixture (`support::sir_rates`). Above
-the plot, the Charts tab's History length slider draws its value box apart, `DragValue` beside a
+scale. A time shows in `natural_unit`: the longest unit of `TimeUnit::ALL`, seconds to years, in
+which it is at least 1 at three significant digits (`time_text`: "6 days", "3.43 weeks", "3.29
+months", "1.1 years", 0 in the tick's unit, singular when the number reads 1;
+`a_time_reads_in_the_unit_that_fits_it` holds the table). `time_axis::counter_text` is Playback's
+tick counter beside Play and Step ("Tick 48", or "Tick 48 (2 days)"), the same for a sheet,
+`axis_label` the x label ("Tick", or the unit capitalised, "Month"), and `plot_x` a sample's x,
+`TimeScale::time_at` of its tick converted to the unit of a `PlotTime`. `PlotTime::up_to` takes
+`axis_unit` of the time of the last tick drawn, the longest unit it reaches 2 of, so an axis spans
+whole units (10 days in days, 60 in weeks, 400 in months). The export's `time` column keeps the
+tick's unit. The Charts tab plots every stat at `plot_x`, includes 0 in the y range, and draws a
+series of one sample as `Points` of radius 3, since a `Line` of one point draws nothing. Its x
+range then spans the sample's tick to the next (`single_sample_x_range`). Otherwise egui_plot
+widens the zero-width range to the height of the y range. The plot is keyed by the axis unit, so
+the zoom and the series hidden in the legend start again when the unit changes as the run grows.
+`tests/time_axis.rs` holds the app-level tests over henad-models' `sir_rates.toml` fixture
+(`support::sir_rates`). Above the plot, the Charts tab's History length slider draws its value box
+apart, `DragValue` beside a
 `Slider` with no value, since egui's slider names its box only through `labelled_by` and keeps the
 box's id inside. Each takes the name `HISTORY_LENGTH`
 (`the_history_length_slider_and_its_box_have_names`). `playback.rs` draws the Run to tick row, its

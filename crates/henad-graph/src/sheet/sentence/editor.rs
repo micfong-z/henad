@@ -280,12 +280,6 @@ pub const DIAGRAM_TOOLTIP: &str = "Draw the lines as boxes and arrows";
 
 // The world tabs
 
-/// Returns the tick counter at tick `tick`: "Tick 4 (a tick is one step of time)", or "Tick 4 (4 days)" when the ticks
-/// so far last `elapsed`.
-pub fn tick_counter(tick: u64, elapsed: Option<&str>) -> String {
-    format!("Tick {tick} ({})", elapsed.unwrap_or("a tick is one step of time"))
-}
-
 /// Returns the note beside a parameter's slider while the world tries a value and the model keeps `kept`.
 pub fn trying_value(kept: &str) -> String {
     format!("Trying this value. The model keeps {kept}.")

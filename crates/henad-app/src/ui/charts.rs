@@ -6,7 +6,7 @@ use henad_graph::sheet::sentence::PLOT_EMPTY;
 
 use crate::state::AppState;
 use crate::ui::show_plot;
-use crate::ui::time_axis::{RunTime, axis_label, plot_x};
+use crate::ui::time_axis::{PlotTime, RunTime, axis_label, plot_x};
 
 pub fn charts_ui(ui: &mut egui::Ui, app: &mut AppState) {
     history_controls(ui, app);
@@ -106,15 +106,21 @@ fn stats_chart(ui: &mut egui::Ui, app: &AppState) {
 /// Radius in points of the dot that a series of one sample draws.
 const SINGLE_SAMPLE_RADIUS: f32 = 3.0;
 
-/// Draws every stat of `history` over time, the x axis in ticks or, for a run with a time scale, in its unit.
+/// Draws every stat of `history` over time, the x axis in ticks or, for a run with a time scale, in the unit that the
+/// time of the last sample reads in ([`PlotTime::up_to`]).
 ///
 /// The y range holds 0. A series of one sample, as at tick 0, draws as a dot in its colour, since a line through one
 /// point draws nothing, and the x range then spans the tick of the sample, as [`single_sample_x_range`] returns it.
+/// The plot's zoom and the series hidden in its legend start again when the axis takes another unit, since an x range
+/// kept from the old unit would show another span of the run.
 fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) -> PlotResponse<()> {
-    let mut plot = egui_plot::Plot::new("stats_plot")
+    let last = history.len().checked_sub(1).and_then(|position| history.tick(position));
+    let time = time.map(|run| PlotTime::up_to(run, last.unwrap_or(0)));
+    let unit = time.map(|time| time.unit);
+    let mut plot = egui_plot::Plot::new(("stats_plot", unit))
         .height(200.0)
         .show_axes(true)
-        .x_axis_label(axis_label(time.map(|time| time.unit)))
+        .x_axis_label(axis_label(unit))
         .include_y(0.0)
         // In the order the model lists its stats, which for a sheet is the order of its measures.
         .legend(egui_plot::Legend::default().follow_insertion_order(true));
@@ -144,7 +150,7 @@ fn stats_plot(ui: &mut egui::Ui, history: &StatsHistory, time: Option<RunTime>) 
 ///
 /// Note that `egui_plot` widens an x range of zero width to the height of the y range. A count of 65536 cells would
 /// then stretch the x axis of one sample at tick 0 from about -34000 to 34000.
-fn single_sample_x_range(history: &StatsHistory, time: Option<RunTime>) -> Option<[f64; 2]> {
+fn single_sample_x_range(history: &StatsHistory, time: Option<PlotTime>) -> Option<[f64; 2]> {
     if history.len() != 1 {
         return None;
     }
@@ -153,7 +159,7 @@ fn single_sample_x_range(history: &StatsHistory, time: Option<RunTime>) -> Optio
 }
 
 /// Returns the points of stat column `column` of `history`, each sample at [`plot_x`] of its tick.
-fn stat_points(history: &StatsHistory, column: usize, time: Option<RunTime>) -> Vec<[f64; 2]> {
+fn stat_points(history: &StatsHistory, column: usize, time: Option<PlotTime>) -> Vec<[f64; 2]> {
     (0..history.len())
         .filter_map(|position| {
             let (value, tick) = history.get(column, position)?;
@@ -241,7 +247,7 @@ mod tests {
 
     use super::{HISTORY_LENGTH, history_controls, single_sample_x_range, stat_points, stats_plot};
     use crate::tests::support::{accessible_texts, gpu_only_app};
-    use crate::ui::time_axis::RunTime;
+    use crate::ui::time_axis::{PlotTime, RunTime};
 
     const HALF_DAY: RunTime = RunTime {
         unit: TimeUnit::Day,
@@ -278,7 +284,7 @@ mod tests {
     }
 
     /// Returns a history of one stat, Infected, holding `samples`, each a tick and its value.
-    fn history(samples: &[(u64, f64)]) -> StatsHistory {
+    fn history_of(samples: &[(u64, f64)]) -> StatsHistory {
         let color = [255, 0, 0, 255];
         let mut history = StatsHistory::new(vec![StatDescriptor::new("Infected", color)], None);
         for &(tick, value) in samples {
@@ -339,21 +345,31 @@ mod tests {
 
     #[test]
     fn a_timed_run_plots_each_sample_at_its_tick_times_the_tick_length() {
-        let history = history(&[(0, 120.0), (10, 150.0), (20, 180.0)]);
+        let history = history_of(&[(0, 120.0), (10, 150.0), (20, 180.0)]);
         assert_eq!(
             stat_points(&history, 0, None),
             [[0.0, 120.0], [10.0, 150.0], [20.0, 180.0]]
         );
         assert_eq!(
-            stat_points(&history, 0, Some(HALF_DAY)),
+            stat_points(&history, 0, Some(PlotTime::up_to(HALF_DAY, 20))),
             [[0.0, 120.0], [5.0, 150.0], [10.0, 180.0]]
         );
+        // 200 days read in months, a month being 30.44 days.
+        let long = history_of(&[(0, 120.0), (100, 150.0), (200, 180.0)]);
+        let xs: Vec<f64> = stat_points(&long, 0, Some(PlotTime::up_to(DAY, 200)))
+            .iter()
+            .map(|[x, _]| *x)
+            .collect();
+        assert_eq!(xs.len(), 3);
+        for (x, days) in xs.iter().zip([0.0, 100.0, 200.0]) {
+            assert!((x - days / 30.44).abs() < 1e-9, "{x} for {days} days");
+        }
     }
 
     #[test]
     fn the_axis_reads_in_ticks_or_the_unit_and_the_range_holds_zero() {
         // The samples start after tick 0. The only "0" left is then the label on the left axis.
-        let history = history(&[(10, 120.0), (20, 150.0), (30, 180.0)]);
+        let history = history_of(&[(10, 120.0), (20, 150.0), (30, 180.0)]);
         let untimed = draw(&history, None);
         assert!(untimed.texts.iter().any(|text| text == "Tick"), "{:?}", untimed.texts);
         assert!(!untimed.texts.iter().any(|text| text == "Day"), "{:?}", untimed.texts);
@@ -364,7 +380,11 @@ mod tests {
             untimed.texts
         );
 
-        let timed = draw(&history, Some(HALF_DAY));
+        let quarter_day = RunTime {
+            unit: TimeUnit::Day,
+            tick_length: 0.25,
+        };
+        let timed = draw(&history, Some(quarter_day));
         assert!(timed.texts.iter().any(|text| text == "Day"), "{:?}", timed.texts);
         assert!(!timed.texts.iter().any(|text| text == "Tick"), "{:?}", timed.texts);
         assert!(timed.lowest_y <= 0.0, "the range starts at {}", timed.lowest_y);
@@ -373,12 +393,22 @@ mod tests {
             "the left axis labels 0: {:?}",
             timed.texts
         );
+
+        // 15 days reach 2 weeks, and the axis reads in weeks.
+        let weeks = draw(&history, Some(HALF_DAY));
+        assert!(weeks.texts.iter().any(|text| text == "Week"), "{:?}", weeks.texts);
+
+        // An axis of 400 days reads in months, and its last sample sits past 13 on the axis.
+        let long = draw(&history_of(&[(0, 120.0), (200, 150.0), (400, 180.0)]), Some(DAY));
+        assert!(long.texts.iter().any(|text| text == "Month"), "{:?}", long.texts);
+        assert!(!long.texts.iter().any(|text| text == "Day"), "{:?}", long.texts);
+        assert!((13.1..14.0).contains(&long.x_range[1]), "x up to {}", long.x_range[1]);
     }
 
     #[test]
     fn a_series_of_one_sample_draws_as_a_dot() {
-        let one = draw(&history(&[(0, 94.0)]), None).circles;
-        let two = draw(&history(&[(0, 94.0), (1, 96.0)]), None).circles;
+        let one = draw(&history_of(&[(0, 94.0)]), None).circles;
+        let two = draw(&history_of(&[(0, 94.0), (1, 96.0)]), None).circles;
         // The legend paints the same circles for both, so the dot is the one more.
         assert_eq!(one, two + 1, "{one} circles with one sample, {two} with two");
     }
@@ -388,10 +418,11 @@ mod tests {
     /// it to tens of thousands.
     #[test]
     fn one_sample_shows_the_tick_it_sits_on() {
-        let one = history(&[(0, 65_536.0)]);
+        let one = history_of(&[(0, 65_536.0)]);
         assert_eq!(single_sample_x_range(&one, None), Some([0.0, 1.0]));
-        assert_eq!(single_sample_x_range(&one, Some(DAY)), Some([0.0, 1.0]));
-        assert_eq!(single_sample_x_range(&one, Some(HALF_DAY)), Some([0.0, 0.5]));
+        let at_start = |run| Some(PlotTime::up_to(run, 0));
+        assert_eq!(single_sample_x_range(&one, at_start(DAY)), Some([0.0, 1.0]));
+        assert_eq!(single_sample_x_range(&one, at_start(HALF_DAY)), Some([0.0, 0.5]));
         for time in [None, Some(DAY)] {
             let [start, end] = draw(&one, time).x_range;
             assert!(
@@ -400,7 +431,7 @@ mod tests {
             );
         }
 
-        let two = history(&[(0, 65_536.0), (1, 65_000.0)]);
+        let two = history_of(&[(0, 65_536.0), (1, 65_000.0)]);
         assert_eq!(
             single_sample_x_range(&two, None),
             None,

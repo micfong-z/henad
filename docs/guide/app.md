@@ -246,7 +246,7 @@ Selecting the running model again brings back the parameters, seed and scheduled
 
 **Tick 24**
 : The tick the simulation has reached.
-  For a model with a [time scale](../reference/model-files.md#time-scale), the counter adds the time, as in **Tick 24 (12 days)** for a tick of half a day.
+  For a model with a [time scale](../reference/model-files.md#time-scale), the counter adds the time in the unit that fits it, as in **Tick 48 (2 days)** for a tick of an hour and **Tick 100 (3.29 months)** for a tick of a day.
 
 **Run to tick** and <span class="ui" markdown>:material-fast-forward: Run</span>
 : Step as fast as possible to a tick, then pause.
@@ -405,7 +405,8 @@ There are three types of statistics available:
 </figure>
 
 Every stat contributes a line to one time series, plotted against tick on an axis labelled **Tick**.
-For a model with a [time scale](../reference/model-files.md#time-scale), the axis reads in its unit, such as **Day**, and each sample sits at its tick times the length of one tick.
+For a model with a [time scale](../reference/model-files.md#time-scale), each sample sits at its tick times the length of one tick, and the axis reads in the longest unit the latest time reaches 2 of, such as **Day** for the first two weeks of ticks of a day, **Week** up to two months and **Month** after that.
+When the unit changes, the zoom and the series hidden in the legend start again.
 The left axis always includes 0.
 A stat with one sample so far, as at tick 0, shows as a dot, and the axis then runs from that tick to the next.
 Each non-scalar stat is also plotted for the latest snapshot: an arrow from the origin for a vector, with a circle at its current magnitude, and a bar chart for a histogram.
@@ -875,7 +876,8 @@ The first five configurations are drawn at the start, and at most ten are drawn 
 | Median, 10–90% | Median | The 10th to the 90th percentile         |
 
 Failed runs are left out, and a run that stopped early adds nothing past its last tick.
-For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in its unit, and the runs of each configuration sit at the times their own tick length gives, as the `time` column of `series.csv` does.
+For a model with a [time scale](../reference/model-files.md#time-scale), the x axis reads in the longest unit the longest time drawn reaches 2 of, such as months for runs of 100 days, and the runs of each configuration sit at the times their own tick length gives.
+The `time` column of `series.csv` holds the same times in the unit of one tick.
 Select **Show runs** to draw every replicate as a thin line, and click a line to select its run.
 
 The app holds up to 256 MiB of series, or 64 MiB in a browser, and keeps the runs past that without their series.
@@ -1095,7 +1097,7 @@ The world stays in the Viewport, Playback, Pacing, Parameters and Charts tabs.
 A sheet starts at a small size in the Viewport, paused at tick 0 with the start drawn.
 Press Play in the Playback tab to run it, <span class="ui" markdown>:material-fast-forward: Run</span> beside [**Run to tick**](#run-to-tick) to run it to a tick, and <span class="ui" markdown>:material-restart: Build</span> to start it again from tick 0 as it started before.
 Once you select another model in the Model tab, Build builds that model instead.
-The tick counter says what a tick is: "Tick 4 (a tick is one step of time)".
+Once **One tick is** has a unit, the tick counter adds the elapsed time, as in "Tick 60 (2.5 days)" for ticks of an hour, and the Charts tab plots the measures over that time.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
 A sheet that holds a problem still opens, with the problem under its line on the card, or listed under the panes when no line holds it.
 

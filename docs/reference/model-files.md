@@ -129,7 +129,8 @@ A month is 30.44 days and a year 365.25 days.
 A graph's stat cannot be labelled `run_id`, `tick` or `time`, and a sheet's measure cannot take any of those names, since an export or a sweep's `series.csv` writes columns of those names before the stats.
 A parameter of a graph or a sheet cannot take the id of a column that a sweep's `runs.csv` writes beside the parameters: `run_id`, `config_id`, `block`, `rep`, `seed`, `run_key`, `status`, `stop_reason`, `ticks`, `population`, `build_ms`, `wall_ms`, `steps_per_s` or `note`.
 A tick length is a parameter like any other in the code identity and the schema, and a sweep over it, such as `--vary tick_length=0.25:1:0.25`, compares one model at several tick lengths.
-The app leaves a hidden parameter out of its Parameters tab and offers it in the Sweep tab, and its tick counter and plots read in the unit of one tick.
+The app leaves a hidden parameter out of its Parameters tab and offers it in the Sweep tab, and its tick counter and plots show the time in the unit that fits it, from seconds to years, such as 3.29 months for 100 ticks of a day.
+The exported `time` column keeps the unit of one tick.
 Neither key changes the code of a file that leaves both out.
 
 ### `[step]`

@@ -5,7 +5,7 @@ use crate::icons::material_design_icons::{
 use crate::state::{AppState, BUILDING_MODEL, DID_NOT_STOP};
 use crate::ui::editor::preview::rebuild_preview;
 use crate::ui::results::table::INEXACT_REPLAY;
-use crate::ui::time_axis::{counter_text, elapsed_text};
+use crate::ui::time_axis::counter_text;
 use crate::ui::{add_progress_bar, mcs};
 
 /// Sets `name` as the accessible name of the control `id`, an icon button or a box beside its label.
@@ -111,19 +111,11 @@ pub fn press_build(app: &mut AppState) {
 
 /// Returns the text of the tick counter beside Play and Step, `None` before the loaded model's first snapshot.
 ///
-/// The counter reads "Tick 24", or "Tick 24 (12 days)" for a model with a time scale. For the Editor's sheet it
-/// explains a tick in the sheet's words: "Tick 24 (a tick is one step of time)", or "Tick 24 (12 days)".
+/// The counter reads "Tick 48", or "Tick 48 (2 days)" for a model with a time scale, the time in the unit that reads
+/// most naturally for it.
 pub(crate) fn tick_counter(app: &AppState) -> Option<String> {
     let snapshot = app.snapshot.as_ref()?;
-    let time = app.loaded_time();
-    if app.runs_editor_sheet() {
-        let elapsed = time.map(|time| elapsed_text(snapshot.tick, time));
-        return Some(henad_graph::sheet::sentence::tick_counter(
-            snapshot.tick,
-            elapsed.as_deref(),
-        ));
-    }
-    Some(counter_text(snapshot.tick, time))
+    Some(counter_text(snapshot.tick, app.loaded_time()))
 }
 
 /// Hover text of the preview line while the Editor holds the previewed graph.
