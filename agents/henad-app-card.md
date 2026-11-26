@@ -170,9 +170,9 @@ multiline field named `note_field_name` in the note's place under the line, hint
 Enter or leaving it keeps, Escape cancels, empty removes the note, and `keep_note` runs `SetNote`
 after the card's edits as a `starts_only` edit, so a played preview runs on), `add_line_above` and
 `add_line_below` (`CardState::inserting`: `insert_menu_ui` under the menu's button, a `menu_dialog`
-titled `add_above_name` or `add_below_name` of `add_inside_groups` through `add_items_ui`, a Repeat
-around the line greying the looks, whose item runs `InsertLine` and opens the new line's first
-blank), `duplicate_line` (`DuplicateLine`, `DUPLICATE_BLOCK_TOOLTIP` on a When or a Repeat),
+titled `add_above_name` or `add_below_name` of `add_inside_groups` through `add_items_ui`, greying
+each item `add_refusal` refuses, inside a Repeat around the line too, whose item runs `InsertLine`
+and opens the new line's first blank), `duplicate_line` (`DuplicateLine`, `DUPLICATE_BLOCK_TOOLTIP` on a When or a Repeat),
 `move_line_up` and `move_line_down` (`MoveLine`, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as tooltip where `can_move` finds the outline's edge: only the
 card's first line stays at the top, and only a top-level line with no top-level line after it at
@@ -368,11 +368,19 @@ Refusals: `SheetEditor::refresh` adds `SheetFile::lowering_problems` to the repo
 checks and does not lower, so a lowering refusal about a line (a Set and a Steer of one property,
 Move by and Move to, a change a Repeat cannot hold) draws in red under its line, and the list under
 the panes keeps those about no line. A Count, Look around or Pick a cell inside a Repeat is a check
-error in the author's words (`LOOK_IN_REPEAT`) and draws there too. The add-inside menu of a
-Repeat, or of a block inside one (`ClosingBlock::in_repeat`), shows those items weak with
-`LOOK_IN_REPEAT` as the tooltip (`looks_in_place` over `new_line`'s kind). It still offers the
-changes a Repeat cannot hold, which only the lowering refuses. `add_summary_ui` opens the new
-summary's value, except for a count, which has none. The author's own `note` under a line draws
+error in the author's words (`LOOK_IN_REPEAT`) and draws there too. An add menu shows weak, with
+the refusal as its tooltip, each item whose `new_line` `add_refusal` refuses, through henad-graph's
+`sheet::refusals`, the tests the check and the lowering refuse by: `refusals::change` beside the
+card's other lines (a Move to beside a Move by and the other way round, a Move by behind walls or
+over a ground that blocks a state), then inside a Repeat, or a block inside one
+(`ClosingBlock::in_repeat`), `refusals::in_repeat` (the looks with `LOOK_IN_REPEAT`, and Keep
+between, When, Repeat, Leave, Record and Move to with `NOT_YET_REPEAT_CHANGE`). A card not made yet
+counts as an empty one. A select's option takes the same tests (`option_refusal`): a mode a Move
+line cannot take, through `refusals::change` in the line's own place, and "the cell ahead of me"
+while `refusals::cell_ahead` refuses it. The current option is never greyed, so a refused line can
+always go back. `the_add_menus_and_selects_grey_each_choice_the_build_refuses_with_its_reason` (in
+`src/tests/sheet_agent_lines.rs`) holds each greyed item and its tooltip, and that a weak item adds
+nothing. `add_summary_ui` opens the new summary's value, except for a count, which has none. The author's own `note` under a line draws
 last, in grey (`author_note`).
 
 `src/tests/sheet_agent_lines.rs` holds

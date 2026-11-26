@@ -27,6 +27,7 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError, SheetLosses};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::rates::chance_line_numbers;
+use henad_graph::sheet::refusals;
 use henad_graph::sheet::sentence::DELETE;
 use henad_graph::sheet::sentence::{AGENT_WALLS_SENTENCE, AGENT_WRAP_TOOLTIP};
 use henad_graph::sheet::sentence::{
@@ -779,9 +780,13 @@ fn world(ui: &mut Ui, document: &SheetDocument, pane: &PaneState, pending: &mut 
     };
     form.row(ui, EDGES_LABEL, |ui| {
         let options = [(Edges::Wrap, WRAP_AROUND), (Edges::Walls, WALLS)];
+        // Walls around agents that move by a vector are refused, unless they are the world's edges already.
         let items = options.map(|(edges, label)| OverlayItem {
             label,
             current: edges == world.edges,
+            refusal: (edges == Edges::Walls && world.edges != Edges::Walls)
+                .then(|| refusals::walls(document))
+                .flatten(),
             ..OverlayItem::default()
         });
         let (response, chosen) = select(ui, "henad_sheet_edges", EDGES_LABEL, words, &items);

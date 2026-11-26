@@ -16,6 +16,7 @@ use super::value::{Operand, PlaceValue, layer_literal, output, port, port_of, st
 use super::{Builder, Site, text};
 use crate::ids::NodeId;
 use crate::sheet::document::{CellWhich, Edges, PropertyType, SheetLine, SheetProperty};
+use crate::sheet::refusals;
 use crate::sheet::sentence;
 use crate::types::ValueType;
 use crate::value::{InputValue, Literal, PortRef};
@@ -152,16 +153,16 @@ impl<'a> CardLowering<'_, 'a> {
 
     /// Returns the cell ahead of me, one step of my Heading from my cell, open only when I have a heading.
     fn ahead(&mut self, site: &Site) -> Result<Operand, String> {
+        if let Some(refusal) = refusals::cell_ahead(self.builder.document) {
+            return Err(refusal.to_owned());
+        }
         let heading = self
             .builder
             .properties()
             .iter()
             .find(|property| property.property_type == PropertyType::Heading)
-            .map(|property| property.id.clone());
-        let heading = match heading {
-            Some(heading) if self.builder.cell_mover => heading,
-            _ => return Err(sentence::AHEAD_NEEDS_CELLS.to_owned()),
-        };
+            .map(|property| property.id.clone())
+            .ok_or(sentence::AHEAD_NEEDS_CELLS)?;
         let step = self.builder.read(self.pass, &heading)?;
         let step = self.builder.input_as(site, &step, &ValueType::Vec2I)?;
         let cell = self.builder.my_cell(self.pass)?;

@@ -54,6 +54,7 @@ use henad_graph::sheet::edit::{
     LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError, automatic_name, slot_value,
 };
 use henad_graph::sheet::rates::{chance_note, conversion, count_as_draw, grow_count, parameter_defaults, rate_note};
+use henad_graph::sheet::refusals;
 use henad_graph::sheet::relations::{CardRelations, RelationNote, RelationNoteKind};
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ALWAYS, ALWAYS_TOOLTIP, AddButton, AddItem, BLANK_MODEL_CARD, BUTTON_CARD_EMPTY, Blank,
@@ -67,10 +68,10 @@ use henad_graph::sheet::sentence::{
     use_for_each_label, use_for_each_name, use_instead_label, use_instead_name,
 };
 use henad_graph::sheet::sentence::{
-    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, LOOK_IN_REPEAT, RANDOM_VALUE_GROUP,
-    REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
-    comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
-    long_tick_note, rate_grow_prompt, tick_set_notice,
+    CHANGE_TO_CHANCE, CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, RANDOM_VALUE_GROUP, REMOVE_SUMMARY_HEADING,
+    add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name, comparison_words, drag_line_tooltip,
+    fire_count, fire_count_description, include_me_tool, leave_me_out_tool, long_tick_note, rate_grow_prompt,
+    tick_set_notice,
 };
 use henad_graph::sheet::sentence::{
     DUPLICATE_BLOCK_TOOLTIP, NOTE_FIELD_HINT, REMOVE_CHOOSE_ROW, add_above_name, add_below_name, add_line_above,
@@ -1010,7 +1011,8 @@ fn add_inside_ui(
     let label = add_inside_label(block.number);
     let title = add_inside_name(block.number);
     let groups = add_inside_groups(drawing.card);
-    let agents = over_agents(&drawing.card.every);
+    let relations = CardRelations::new(drawing.document, drawing.card);
+    let refused = |line: &SheetLine| add_refusal(drawing.document, &relations, line, block.in_repeat);
     let id = state.widgets.with(("add inside", &block.id));
     let menu_id = id.with("menu");
     let ground = ui.painter().add(Shape::Noop);
@@ -1035,7 +1037,8 @@ fn add_inside_ui(
                     let mut chosen = None;
                     for (index, &button) in groups.iter().enumerate() {
                         let group = overlay_group(ui, button.group(), index == 0).id;
-                        if let Some(item) = add_items_ui(ui, group, button, agents, states, block.in_repeat) {
+                        let every = drawing.card.every.as_str();
+                        if let Some(item) = add_items_ui(ui, group, button, every, states, &refused) {
                             chosen = Some(item);
                         }
                     }
@@ -1219,6 +1222,10 @@ fn add_buttons_ui(
     };
     let states = pattern_states(document, every);
     let card_id = card.map(|card| card.id.clone());
+    // A world with no card yet refuses a line as an empty card would.
+    let empty = SheetCard::new("", every, CardRuns::EachTick);
+    let relations = CardRelations::new(document, card.unwrap_or(&empty));
+    let refused = |line: &SheetLine| add_refusal(document, &relations, line, false);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         for button in buttons {
@@ -1233,8 +1240,9 @@ fn add_buttons_ui(
                     add_menu_ui(
                         ui,
                         *button,
-                        agents,
+                        every,
                         states.as_ref().map(|(new, old)| (new.as_str(), old.as_str())),
+                        &refused,
                     )
                 })
                 .and_then(|popup| popup.inner);
@@ -1262,13 +1270,20 @@ fn menu_dialog<R>(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui, Id) -> R) 
     inner
 }
 
-/// Draws the menu of the add button `button`, on a card over agents when `agents` holds: its heading, and each item
-/// with its pattern in grey under it. Returns the item chosen.
+/// Draws the menu of the add button `button` on a card over the kind of thing `every`: its heading, and each item with
+/// its pattern in grey under it, weak with its refusal as its tooltip where `refused` refuses its line. Returns the item
+/// chosen.
 ///
 /// The pattern is painted, so it stays out of the accessibility tree and the item is named by its label alone.
-fn add_menu_ui(ui: &mut Ui, button: AddButton, agents: bool, states: Option<(&str, &str)>) -> Option<AddItem> {
-    menu_dialog(ui, button.heading_for(agents), |ui, heading| {
-        overlay_items(ui, |ui| add_items_ui(ui, heading, button, agents, states, false))
+fn add_menu_ui(
+    ui: &mut Ui,
+    button: AddButton,
+    every: &str,
+    states: Option<(&str, &str)>,
+    refused: &dyn Fn(&SheetLine) -> Option<String>,
+) -> Option<AddItem> {
+    menu_dialog(ui, button.heading_for(over_agents(every)), |ui, heading| {
+        overlay_items(ui, |ui| add_items_ui(ui, heading, button, every, states, refused))
     })
 }
 
@@ -1281,23 +1296,23 @@ fn opens_group(item: AddItem) -> Option<&'static str> {
     }
 }
 
-/// Draws each item of the menu of the add button `button`, on a card over agents when `agents` holds, with its pattern
+/// Draws each item of the menu of the add button `button`, on a card over the kind of thing `every`, with its pattern
 /// in grey under it, and returns the item chosen.
 ///
 /// The items until the first group of their own form a menu labelled by the node `label`, and each later group a menu
-/// labelled by its heading. Inside a Repeat (`in_repeat`), an item whose line looks around, counts or picks a cell is
-/// weak, with [`LOOK_IN_REPEAT`] as its tooltip, and adds nothing.
+/// labelled by its heading. An item whose line `refused` refuses is weak, with the refusal as its tooltip, and adds
+/// nothing.
 fn add_items_ui(
     ui: &mut Ui,
     label: Id,
     button: AddButton,
-    agents: bool,
+    every: &str,
     states: Option<(&str, &str)>,
-    in_repeat: bool,
+    refused: &dyn Fn(&SheetLine) -> Option<String>,
 ) -> Option<AddItem> {
     let mut chosen = None;
     let mut label = label;
-    let mut rest = button.items_for(agents);
+    let mut rest = button.items_for(over_agents(every));
     while let Some(first) = rest.first() {
         let end = rest
             .iter()
@@ -1317,12 +1332,14 @@ fn add_items_ui(
                     detail: Some(&pattern),
                     ..OverlayItem::default()
                 };
-                let refused = in_repeat && looks_in_place(new_line(*item, "").kind);
-                let response = ui.add_enabled_ui(!refused, |ui| menu_item(ui, &row)).inner;
-                if refused {
-                    response.on_disabled_hover_text(LOOK_IN_REPEAT);
-                } else if response.clicked() {
-                    chosen = Some(*item);
+                let refusal = refused(&new_line(*item, every));
+                let response = ui.add_enabled_ui(refusal.is_none(), |ui| menu_item(ui, &row)).inner;
+                match refusal {
+                    Some(refusal) => {
+                        response.on_disabled_hover_text(refusal);
+                    }
+                    None if response.clicked() => chosen = Some(*item),
+                    None => {}
                 }
             }
         });
@@ -1330,10 +1347,23 @@ fn add_items_ui(
     chosen
 }
 
-/// Returns whether a line of `kind` looks at the cells or agents around its place, which a Repeat cannot hold: a Count,
-/// a Look around or a Pick a cell.
-pub(super) fn looks_in_place(kind: LineKind) -> bool {
-    matches!(kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell)
+/// Returns the refusal of `line`, which an add menu adds at the end of the card of `relations` in `document`, or at the
+/// end of a block inside a Repeat when `in_repeat` holds, `None` for a line the sheet runs there.
+///
+/// The refusals are henad-graph's [`refusals`], which the sheet's check and lowering give, so a menu greys exactly the
+/// lines the sheet's build refuses. A refusal of the card's other lines comes first, as the lowering gives it first.
+fn add_refusal(
+    document: &SheetDocument,
+    relations: &CardRelations<'_>,
+    line: &SheetLine,
+    in_repeat: bool,
+) -> Option<String> {
+    refusals::change(document, relations, line, None).or_else(|| {
+        in_repeat
+            .then(|| refusals::in_repeat(line))
+            .flatten()
+            .map(str::to_owned)
+    })
 }
 
 /// Returns the second and first states of the first States property with two or more states of the kind of thing
@@ -2860,16 +2890,44 @@ fn select_popup(
         } => look_summary_options(*index, line.summaries.len() > 1),
         _ => Vec::new(),
     };
+    // The current option stays open, so the way back from a refused sheet is never greyed.
+    let refusals: Vec<Option<String>> = options
+        .iter()
+        .map(|(words, option)| {
+            (words.as_str() != current)
+                .then(|| option_refusal(drawing.context, *option))
+                .flatten()
+        })
+        .collect();
     let items: Vec<OverlayItem<'_>> = options
         .iter()
-        .map(|(words, _)| OverlayItem {
+        .zip(&refusals)
+        .map(|((words, _), refusal)| OverlayItem {
             label: words,
             current: words.as_str() == current,
+            refusal: refusal.as_deref(),
             ..OverlayItem::default()
         })
         .collect();
     let chosen = select_list(ui, anchor, popup_id, &items)?;
     options.get(chosen).map(|(_, option)| *option)
+}
+
+/// Returns the refusal of `option` in a select of the line of `context`, `None` for an option the sheet runs: a mode
+/// that a Move line cannot take beside the card's other lines, or the cell ahead where the agents do not move to cells.
+///
+/// The refusals are henad-graph's [`refusals`], which the sheet's check and lowering give.
+fn option_refusal(context: &LineContext<'_>, option: SelectOption) -> Option<String> {
+    let line = context.line;
+    match option {
+        SelectOption::Mode(mode) if line.kind == LineKind::Move => {
+            let mut switched = line.clone();
+            switched.mode = Some(mode);
+            refusals::change(context.document, context.relations, &switched, Some(context.line_id))
+        }
+        SelectOption::Which(CellWhich::Ahead) => refusals::cell_ahead(context.document).map(str::to_owned),
+        _ => None,
+    }
 }
 
 /// Returns the edit that chooses `option` in the select at `place`, or `None` when it only changes a draft.
@@ -3290,9 +3348,11 @@ fn insert_menu_ui(
     };
     let states = pattern_states(drawing.document, &drawing.card.every);
     let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
-    let agents = over_agents(&drawing.card.every);
-    // The new line sits in the block that holds `line`, so a Repeat around `line` holds it too.
+    // The new line sits in the block that holds `line`, so a Repeat around `line` holds it too, and an item whose line
+    // the sheet's build refuses there is weak, as in the add menus.
     let in_repeat = relations.repeat_of(&line.id).is_some();
+    let refused = |new: &SheetLine| add_refusal(drawing.document, relations, new, in_repeat);
+    let every = drawing.card.every.as_str();
     let popup = Popup::menu(button)
         .id(popup_id)
         .open_memory(None)
@@ -3306,7 +3366,7 @@ fn insert_menu_ui(
                     let mut chosen = None;
                     for (index, &group) in add_inside_groups(drawing.card).iter().enumerate() {
                         let label = overlay_group(ui, group.group(), index == 0).id;
-                        if let Some(item) = add_items_ui(ui, label, group, agents, states, in_repeat) {
+                        if let Some(item) = add_items_ui(ui, label, group, every, states, &refused) {
                             chosen = Some(item);
                         }
                     }

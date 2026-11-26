@@ -309,6 +309,16 @@ A card changes a property one way: by Set or by Steer, and an agent's place by M
 A second way shows under its line in red, such as "Line 3 steers Velocity. This card cannot also set it.", and the model does not build until it is gone.
 A look around, a count or a pick of a cell inside a Repeat shows "A look around, a count or a pick of a cell cannot be used inside a Repeat." under its line.
 The **+ Add inside** menu of a Repeat shows Count, Look around and Pick a cell greyed out, with that message as their tooltip.
+It shows Keep between, When, Repeat, Leave, Record and Move to greyed out too, with "Keep between, When, Repeat, Leave, Record and Move to inside a Repeat are not supported yet."
+
+Wherever a choice would stop the model building, an add menu, a select or a box shows it greyed out with the reason under the pointer:
+
+- Move to on a card that moves by a vector, and Move by on a card that moves to places, as "Line 2 moves by a vector. This card cannot also move to a place." says.
+- Move by, and **Walls** under **Edges**, while agents that move by a vector would meet walls.
+- Move by, and a box under **Ground** that keeps agents out of a state, while a line would move agents by a vector over that ground.
+- "the cell ahead of me" while no line moves the agents to cells.
+
+A choice a line or a section already holds is never greyed out, so a model that does not build can always change back.
 
 ### The line menu
 
@@ -345,7 +355,7 @@ A red line marks a place the line cannot go, and the copy says why:
 
 - Another card. A line moves only within its own card.
 - Inside another When or Repeat, for a When or a Repeat.
-- Inside a Repeat, for a look around, a count or a pick of a cell.
+- Inside a Repeat, for a look around, a count, a pick of a cell, a Keep between, a Leave, a Record or a Move to.
 
 A drop makes the same moves as **Move line 2 up** and **Move line 2 down**, and one Undo takes it back.
 Press <span class="ui">Escape</span> to end a drag and leave the line where it was.

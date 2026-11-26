@@ -12,6 +12,7 @@ use henad_graph::sheet::document::{
     AgentKind, Marks, PropertyType, SheetDocument, SheetLiteral, SheetProperty, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, is_reserved_name, mint_id};
+use henad_graph::sheet::refusals;
 use henad_graph::sheet::sentence::DELETE_EVENT_HEADING;
 use henad_graph::sheet::sentence::{
     ADD_EVENT, ADD_GROUND_PROPERTY_NAME, AGENT_COUNT_LABEL, AGENT_COUNT_NAME, AGENT_MAX_LABEL, AGENT_MAX_NAME,
@@ -323,11 +324,18 @@ fn blocked_row(ui: &mut Ui, document: &SheetDocument, property: &SheetProperty, 
                 .any(|known| known.property == property.id && known.state == state)
         })
     };
+    // A box already ticked stays open, so a refused sheet can drop the state again.
+    let refusal = refusals::blocked_state(document);
     wrapped_line(ui, |ui| {
         ui.label(blocked_lead(&property.name));
         for state in &property.states {
             let mut kept_out = blocked(&state.id);
-            let response = ui.checkbox(&mut kept_out, &state.name);
+            let refused = refusal.filter(|_| !kept_out);
+            let response = ui.add_enabled(refused.is_none(), egui::Checkbox::new(&mut kept_out, &state.name));
+            let response = match refused {
+                Some(refusal) => response.on_disabled_hover_text(refusal),
+                None => response,
+            };
             set_name(ui, response.id, &blocked_state_name(&state.name));
             if response.changed() {
                 pending.push(Pending::one(SheetEdit::SetBlocked {

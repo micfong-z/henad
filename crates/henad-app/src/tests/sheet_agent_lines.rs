@@ -7,14 +7,16 @@
 use egui::{Key, Modifiers};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
-    LineKind, ParameterType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetValue, Slot,
+    CellWhich, LineKind, ParameterType, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral,
+    SheetParameter, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
 use henad_graph::sheet::sentence::remove_choose_row_name;
 use henad_graph::sheet::sentence::{
-    ADD_BUTTON, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
-    LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES, NO_STATES, NUMBER_BOX_HINT,
-    OR_A_NEW_VALUE, PlaceTarget, Sentences, add_property_name, add_summary_name, moved_by_already, run_once,
+    ADD_BUTTON, AHEAD_NEEDS_CELLS, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER,
+    DONE, DrawKind, LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES, NO_STATES,
+    NOT_YET_AGENT_WALLS, NOT_YET_BLOCKED_MOVE_BY, NOT_YET_REPEAT_CHANGE, NUMBER_BOX_HINT, OR_A_NEW_VALUE, PlaceTarget,
+    Sentences, add_property_name, add_summary_name, blocked_state_name, moved_by_already, moved_to_already, run_once,
     sheet_parameter_name_field, steered_already, value_field_name, value_slider_name,
 };
 
@@ -1190,6 +1192,144 @@ fn a_repeats_add_menu_offers_its_looks_weak_with_the_reason() {
         .find(|node| node.label == "Count" && node.dialog == dialog)
         .expect("the When's menu lists Count");
     assert!(count.disabled, "Count cannot sit in a When inside a Repeat");
+}
+
+/// Returns the one node of `harness` named `label`, inside the dialog `dialog` when one is given, after checking that
+/// it is disabled and that a pointer resting on it shows `tooltip`.
+fn refused_with(harness: &mut Harness, dialog: Option<&str>, label: &str, tooltip: &str) {
+    let nodes = harness.settle();
+    let found: Vec<_> = nodes
+        .iter()
+        .filter(|node| node.label == label && dialog.is_none_or(|dialog| node.dialog == dialog))
+        .collect();
+    assert_eq!(found.len(), 1, "one control reads {label}: {found:?}");
+    assert!(found[0].disabled, "{label} is weak");
+    let centre = found[0].bounds.expect("bounds").center();
+    harness.frame(vec![egui::Event::PointerMoved(centre)]);
+    // A tooltip shows once the pointer has rested past egui's delay.
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    let texts = harness.accessible_texts();
+    assert!(
+        texts.iter().any(|text| text == tooltip),
+        "{label} shows the tooltip {tooltip}: {texts:?}"
+    );
+}
+
+/// Returns whether the one node of `harness` named `label` inside the dialog `dialog` is enabled.
+fn offered(harness: &mut Harness, dialog: &str, label: &str) -> bool {
+    harness
+        .settle()
+        .iter()
+        .find(|node| node.label == label && node.dialog == dialog)
+        .is_some_and(|node| !node.disabled)
+}
+
+#[test]
+fn the_add_menus_and_selects_grey_each_choice_the_build_refuses_with_its_reason() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    // Inside the walkers' Repeat, the changes a Repeat cannot hold are weak, and a Move to names the Move by above.
+    open_starter(&mut harness, "random_walk.toml");
+    let dialog = "Add a line inside line 1";
+    click(&mut harness, "+ Add inside line 1");
+    for label in ["Keep between", "When", "Repeat", "Leave", "Record"] {
+        refused_with(&mut harness, Some(dialog), label, NOT_YET_REPEAT_CHANGE);
+    }
+    refused_with(&mut harness, Some(dialog), "Move to", &moved_by_already("Line 2"));
+    for label in ["Move by", "Steer", "Set", "Become"] {
+        assert!(offered(&mut harness, dialog, label), "{label} can sit inside a Repeat");
+    }
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // On the card, Move to is weak beside the walkers' Move by, and adds nothing.
+    let dialog = AddButton::Change.heading_for(true);
+    click_last(&mut harness, AddButton::Change.label());
+    refused_with(&mut harness, Some(dialog), "Move to", &moved_by_already("Line 2"));
+    assert!(offered(&mut harness, dialog, "Move by"));
+    let before = text(&harness);
+    let move_to = harness
+        .settle()
+        .iter()
+        .find(|node| node.label == "Move to" && node.dialog == dialog)
+        .and_then(|node| node.bounds)
+        .expect("Move to");
+    harness.click_at(move_to.center());
+    harness.settle();
+    assert_eq!(text(&harness), before, "a weak item adds nothing");
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // Walls around walkers that move by a vector, the cell ahead of agents that never move to cells, and Move to in
+    // the place of the walkers' Move by inside the Repeat.
+    click(&mut harness, "Edges");
+    refused_with(&mut harness, None, "Walls", NOT_YET_AGENT_WALLS);
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Line 2: by or to");
+    refused_with(&mut harness, None, "to", NOT_YET_REPEAT_CHANGE);
+    harness.press(Key::Escape, Modifiers::NONE);
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddLine {
+            card: "walker_tick".to_owned(),
+            inside: None,
+            line: Box::new({
+                let mut here = SheetLine::new(LineKind::LookAtCell);
+                here.which = Some(CellWhich::Here);
+                here
+            }),
+        },
+    );
+    click(&mut harness, "Line 3: which cell");
+    refused_with(&mut harness, None, "the cell ahead of me", AHEAD_NEEDS_CELLS);
+    harness.press(Key::Escape, Modifiers::NONE);
+
+    // A ground made on the sheet under walkers that move by a vector blocks no state, and a ticked box stays open.
+    for edit in [
+        SheetEdit::AddProperty {
+            thing: "ground".to_owned(),
+            name: "Terrain".to_owned(),
+            property_type: PropertyType::States,
+        },
+        SheetEdit::AddState {
+            property: "terrain".to_owned(),
+            name: "Open".to_owned(),
+            color: None,
+        },
+        SheetEdit::AddState {
+            property: "terrain".to_owned(),
+            name: "Rock".to_owned(),
+            color: None,
+        },
+    ] {
+        apply_sheet_edit(sheet_mut(&mut harness), edit);
+    }
+    refused_with(&mut harness, None, &blocked_state_name("Rock"), NOT_YET_BLOCKED_MOVE_BY);
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetBlocked {
+            property: "terrain".to_owned(),
+            state: "rock".to_owned(),
+            blocked: true,
+        },
+    );
+    let nodes = harness.settle();
+    let rock = nodes
+        .iter()
+        .find(|node| node.label == blocked_state_name("Rock"))
+        .expect("the box of Rock");
+    assert!(!rock.disabled, "a ticked box can be cleared");
+
+    // The ants move to places behind walls over a ground that blocks a state, so a Move by is weak three ways and
+    // names the Move to first.
+    open_starter(&mut harness, "ants.toml");
+    click_last(&mut harness, AddButton::Change.label());
+    refused_with(&mut harness, Some(dialog), "Move by", &moved_to_already("Line 8"));
+    assert!(offered(&mut harness, dialog, "Move to"));
+    harness.press(Key::Escape, Modifiers::NONE);
+    click(&mut harness, "Line 8: by or to");
+    refused_with(&mut harness, None, "by", NOT_YET_AGENT_WALLS);
 }
 
 #[test]

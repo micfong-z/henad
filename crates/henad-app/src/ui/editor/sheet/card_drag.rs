@@ -19,10 +19,9 @@ use egui::{
 };
 use henad_graph::sheet::document::{LineKind, SheetCard, SheetDocument};
 use henad_graph::sheet::edit::{MoveDirection, SheetBuilder, SheetEdit, SheetEditError};
+use henad_graph::sheet::refusals;
 use henad_graph::sheet::relations::CardRelations;
-use henad_graph::sheet::sentence::{
-    AddButton, DROP_INTO_BLOCK, DROP_MISSED, DROP_ON_OTHER_CARD, LOOK_IN_REPEAT, more_lines,
-};
+use henad_graph::sheet::sentence::{AddButton, DROP_INTO_BLOCK, DROP_MISSED, DROP_ON_OTHER_CARD, more_lines};
 
 use super::card_lines::CardLine;
 use super::widgets::{KIND_BAR_WIDTH, kind_bar, small_label};
@@ -416,7 +415,8 @@ impl DragFrame {
                 before: None,
             },
         };
-        let kind = relations.line(&payload.line).map(|line| line.kind);
+        let line = relations.line(&payload.line);
+        let kind = line.map(|line| line.kind);
         let in_repeat = slot.parent.as_deref().is_some_and(|parent| {
             relations
                 .line(parent)
@@ -426,8 +426,10 @@ impl DragFrame {
         let verdict = match plan.reach(&slot) {
             None if kind.is_some_and(LineKind::is_block) => Err(DROP_INTO_BLOCK),
             None => return None,
-            Some(_) if in_repeat && kind.is_some_and(super::card_pane::looks_in_place) => Err(LOOK_IN_REPEAT),
-            Some(reach) => Ok(reach),
+            Some(reach) => match line.filter(|_| in_repeat).and_then(refusals::in_repeat) {
+                Some(refusal) => Err(refusal),
+                None => Ok(reach),
+            },
         };
         let (y, left) = match rows.get(gap) {
             Some(row) => (row.rect.top(), row.body_left),

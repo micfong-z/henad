@@ -19,6 +19,7 @@ use crate::sheet::document::{
 use crate::sheet::edit::lines::{parse_path, set_value};
 use crate::sheet::edit::{slot_value, unit_in_text};
 use crate::sheet::limits::{ADD_UP_RESOLUTION_SHIFT, MAX_NESTING};
+use crate::sheet::refusals;
 use crate::sheet::sentence::{
     self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
     NOT_RUN_TICK, PlaceTarget, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
@@ -352,10 +353,10 @@ fn check_line<'a>(
     if line.name.is_some() && !line.kind.works_out_result() {
         checker.error(format!("{word}: a line that makes a change cannot have a name"), &place);
     }
-    if owner.in_repeat && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
+    if owner.in_repeat && refusals::looks_around(line.kind) {
         checker.error(sentence::LOOK_IN_REPEAT.to_owned(), &place);
     }
-    if owner.runs_once && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
+    if owner.runs_once && refusals::looks_around(line.kind) {
         checker.error(format!("{word}: a card that runs once cannot look around"), &place);
     }
     let mut state = LineState::default();

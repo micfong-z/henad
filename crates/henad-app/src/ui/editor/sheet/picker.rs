@@ -514,6 +514,7 @@ fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>, under_t
                     swatch: item.swatch,
                     symbol: item.symbol.filter(|_| symbols),
                     symbol_space,
+                    refusal: None,
                 };
                 let response = ui
                     .add_enabled_ui(item.refusal.is_none(), |ui| menu_item(ui, &row))

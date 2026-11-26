@@ -145,7 +145,9 @@ whether typed in the field or in its parameter chip's Number box, and a new para
 in 0 to 1 (the checker warns at any other share or parameter range), `KEPT_TAIL`,
 `a_share_kept_through_its_parameter_chip_stays_from_0_to_1`,
 `a_share_kept_parameter_widened_past_1_warns`) and per States property `blocked_row`
-(`blocked_lead`, a box per state named `blocked_state_name`, `SetBlocked`). Events:
+(`blocked_lead`, a box per state named `blocked_state_name`, `SetBlocked`, an empty box disabled
+with `refusals::blocked_state` as its tooltip while a line moves the agents by a vector, a ticked
+one left open to clear). Events:
 `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the two checks, × named
 `delete_event_name` (through the dialog that asks first), and `EventForm` (`NEW_EVENT`,
 `EVENT_NAME_FIELD`, Done or Enter). Measures count agents (`COUNT_AGENTS_MEASURE`,

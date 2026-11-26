@@ -656,6 +656,9 @@ pub struct OverlayItem<'a> {
     /// Whether an item with no symbol leaves the symbol's column empty, to line up with items of the same list that
     /// have one.
     pub symbol_space: bool,
+    /// Reason an option of a select cannot be chosen, `None` for an option that can. [`select_list`] draws a refused
+    /// option weak, with the reason as its tooltip.
+    pub refusal: Option<&'a str>,
 }
 
 /// Adds `item` as a full-width row of an overlay and returns its response.
@@ -963,7 +966,8 @@ pub fn select_within(ui: &mut Ui, id: Option<Id>, words: &str, name: &str, empty
 /// Draws the list of options of a select under `anchor` while the popup `popup_id` is open, one row of `items` per
 /// option, and returns the index of the option chosen.
 ///
-/// A click on `anchor` opens and closes the list, and a choice or a click outside closes it. The list is an overlay.
+/// A click on `anchor` opens and closes the list, and a choice or a click outside closes it. The list is an overlay. An
+/// option with a refusal is weak and takes no click, and shows its refusal under the pointer.
 pub fn select_list(ui: &Ui, anchor: &Response, popup_id: Id, items: &[OverlayItem<'_>]) -> Option<usize> {
     let was_open = Popup::is_id_open(ui.ctx(), popup_id);
     if anchor.clicked() {
@@ -981,8 +985,15 @@ pub fn select_list(ui: &Ui, anchor: &Response, popup_id: Id, items: &[OverlayIte
         overlay(ui, |ui| {
             let mut chosen = None;
             for (index, item) in items.iter().enumerate() {
-                if overlay_item(ui, item).clicked() {
-                    chosen = Some(index);
+                let response = ui
+                    .add_enabled_ui(item.refusal.is_none(), |ui| overlay_item(ui, item))
+                    .inner;
+                match item.refusal {
+                    Some(refusal) => {
+                        response.on_disabled_hover_text(refusal);
+                    }
+                    None if response.clicked() => chosen = Some(index),
+                    None => {}
                 }
             }
             if chosen.is_some() {

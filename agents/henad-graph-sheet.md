@@ -18,7 +18,18 @@ reads names through. `SheetDocument` writes its own `Debug` ending in `finish_no
 `sheet/starters.rs` is private, and `sheet` re-exports `starters`. `sheet/sentence/` is public
 (`sheet::sentence`), the wording table and `Sentences`. `sheet/writer.rs` is private, and `sheet`
 re-exports `format_number` and `SheetWriteError`. `sheet/relations.rs` is public
-(`sheet::relations`), `CardRelations`.
+(`sheet::relations`), `CardRelations`. `sheet/refusals.rs` is public (`sheet::refusals`): the
+choices a sheet cannot run in this version as tests an editor runs before it offers one, each
+returning the refusal in the author's words: `looks_around` and `in_repeat` (a look with
+`LOOK_IN_REPEAT`, a change `changes_outside_repeat` with `NOT_YET_REPEAT_CHANGE`), `walls`,
+`blocked_state`, `cell_ahead`, `first_move_by`, `moves_to_cells` and `change` (a change beside the
+card's other lines, in a line's place or at the card's end: one property changed two ways through
+the crate-visible `Way`, a Move by behind walls or over a ground that blocks a state, a line inside a
+Repeat, and the last Move to of a sheet whose line looks at the cell ahead). The checker and the
+lowering refuse through the same tests, so an editor and the build never disagree
+(`src/tests/sheet_refusals.rs`: every line and Move offered on each agent sheet, in and out of the
+walkers' Repeat, each Move switched to the other mode, walls, a blocked state and the cell ahead,
+each greyed choice refused by the build in its words and each offered one with no new refusal).
 `sheet/check/` is public (`sheet::check`): `mod.rs` holds `check`, `SheetReport`, `SheetDiagnostic`,
 `ParsedSheet::check`, the private `Checker`, and `Place`, `Thing` and `span_of`, visible to `sheet`
 for the lowering's errors, with `formula::references` visible to `sheet` for the lowering's read of

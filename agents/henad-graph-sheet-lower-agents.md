@@ -7,7 +7,8 @@ motion, Repeat and the ground under the agents.
 
 **The lowering of agent sheets**. A sheet of agents first refuses `edges = "walls"` when a
 card moves agents by an arrow (`NOT_YET_AGENT_WALLS` at `[world]`), and the first Move by in
-display order when the ground blocks some states (`NOT_YET_BLOCKED_MOVE_BY` at its line). Agents
+display order when the ground blocks some states (`NOT_YET_BLOCKED_MOVE_BY` at its line), through
+`sheet::refusals` (`first_move_by`, `walls`, `blocked_state`), which an editor asks too. Agents
 that move to places walk the cells and stop at walls and blocked cells on their own. `world.rs`
 writes `[agents]` from the kind (`count`, `max_count`, the world's width and height in `f32`),
 Position as the `vec2f` lane with `role = "position"`, an Arrow and a Heading as `vec2f` (a Heading
@@ -29,8 +30,9 @@ Cards (`card.rs`, the card whose `every` is the kind): on a card of agents the i
 Repeat. A property changed two ways is refused at
 the second line, naming the first in display order: Steer below a Set (`set_already`), Set below a
 Steer (`steered_already`), Move to below Move by (`moved_by_already`) and Move by below Move to
-(`moved_to_already`). That error takes the place of the line's own interim
-refusal, so a refusal gives one located error. The checker refuses a Count, Look around or Pick a
+(`moved_to_already`), through `refusals::Way` and `refusals::changes_outside_repeat`. That error
+takes the place of the line's own interim refusal, so a refusal gives one located error. The cell
+ahead lowers only while `refusals::cell_ahead` lets it. The checker refuses a Count, Look around or Pick a
 cell inside a Repeat. A Count over agents in a slot is an error ("must be on a line of its own").
 
 Looks (`agents.rs`): at the card's first look at agents, `open_looks` takes every look that runs,

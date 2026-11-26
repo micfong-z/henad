@@ -82,7 +82,9 @@ sections, their form rows and tables, and the sections of a world of agents are 
 `agents/henad-app-sheet-pane.md`. The world: `CELLS_ON_A_GRID`, Size as two `commit_number`s named
 `WIDTH_NAME` and `HEIGHT_NAME` (a whole number of cells from 1 to
 `henad_graph::limits::MAX_GRID_SIDE`, with `world_side_out_of_range` for any other text, a fraction,
-a percent and a word included), Edges as a select named `EDGES_LABEL` with `WRAP_TOOLTIP` or
+a percent and a word included), Edges as a select named `EDGES_LABEL` (Walls weak with
+`refusals::walls` as its tooltip while it is no current option, through `OverlayItem::refusal`,
+which `select_list` draws weak with its tooltip) with `WRAP_TOOLTIP` or
 `WALLS_SENTENCE` and the grey sentence (no torus mark), `AGENT_WRAP_TOOLTIP` and
 `AGENT_WALLS_SENTENCE` in a world of agents, then the Time line: `ONE_TICK_IS`, the length field
 named `TICK_LENGTH_NAME` while a unit is set (0 or less refused with `TICK_LENGTH_NOT_POSITIVE`),

@@ -58,10 +58,8 @@ use self::ids::{Numberer, Owner, SheetKey};
 use self::table::{FireLines, LineMap, NodeOrigin};
 use self::value::Operand;
 use super::check::{Place, SheetReport, Thing, formula, formula_chip};
-use super::document::{
-    Edges, LineKind, LineMode, MadeOf, PropertyType, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue,
-};
-use super::sentence;
+use super::document::{Edges, MadeOf, PropertyType, SheetChip, SheetDocument, SheetLine, SheetProperty, SheetValue};
+use super::refusals;
 use crate::document::{Domain, GraphDocument, Pass, PassStage};
 use crate::ids::NodeId;
 use crate::node::Node;
@@ -125,30 +123,19 @@ pub(super) fn lower(document: &SheetDocument, report: &SheetReport) -> Result<Lo
 /// move by an arrow, and the first Move by line of a sheet whose ground blocks some states.
 fn refuse_agent_tables(builder: &mut Builder<'_>) {
     let document = builder.document;
-    let first_move_by = document.cards.iter().enumerate().find_map(|(card_index, card)| {
-        let relations = super::relations::CardRelations::new(document, card);
-        relations
-            .order()
-            .iter()
-            .find(|id| {
-                relations
-                    .line(id)
-                    .is_some_and(|line| line.kind == LineKind::Move && line.mode != Some(LineMode::To))
-            })
-            .map(|id| Place::Line(card_index, (*id).to_owned()))
-    });
-    let Some(move_by) = first_move_by else {
+    let Some((card_index, move_by)) = refusals::first_move_by(document) else {
         return;
     };
-    if document.world.edges == Edges::Walls {
-        builder.problem(sentence::NOT_YET_AGENT_WALLS, Place::World);
+    if let Some(message) = refusals::walls(document).filter(|_| document.world.edges == Edges::Walls) {
+        builder.problem(message, Place::World);
     }
-    if document
-        .ground
-        .as_ref()
-        .is_some_and(|ground| !ground.blocked.is_empty())
-    {
-        builder.problem(sentence::NOT_YET_BLOCKED_MOVE_BY, move_by);
+    if let Some(message) = refusals::blocked_state(document).filter(|_| {
+        document
+            .ground
+            .as_ref()
+            .is_some_and(|ground| !ground.blocked.is_empty())
+    }) {
+        builder.problem(message, Place::Line(card_index, move_by.to_owned()));
     }
 }
 
@@ -177,15 +164,6 @@ pub(super) fn visit_value_chips(document: &SheetDocument, value: &SheetValue, vi
         }
         SheetValue::Literal(_) => {}
     }
-}
-
-/// Returns whether a card of `document` moves agents to places. The Heading of such agents is a step between cells.
-fn moves_to_cells(document: &SheetDocument) -> bool {
-    document
-        .cards
-        .iter()
-        .flat_map(|card| card.line_tables.values())
-        .any(|line| line.kind == LineKind::Move && line.mode == Some(LineMode::To))
 }
 
 /// Place a node is written at: its pass, owner, slot path and region.
@@ -317,7 +295,7 @@ impl<'a> Builder<'a> {
             dropped: HashSet::new(),
             fault_names: Vec::new(),
             results: Vec::new(),
-            cell_mover: document.world.made_of == MadeOf::Agents && moves_to_cells(document),
+            cell_mover: document.world.made_of == MadeOf::Agents && refusals::moves_to_cells(document),
             ground_fields: HashMap::new(),
             fades: Vec::new(),
             stat_measures: Vec::new(),

@@ -37,8 +37,9 @@ until it is refused and then down, keeping each slot passed with the direction a
 moves (`Reach`). The plan lives in egui temp data under the pane's id with "henad_line_drag_plan"
 until the drag ends, with the pointer's offset in the row where the drag started (`grab`). A slot
 the moves reach can take the line, except a slot inside a Repeat or a block inside one for a line
-`card_pane::looks_in_place` holds (Count, Look around, Pick a cell), refused with `LOOK_IN_REPEAT`
-as the Repeat's add menu refuses them. A When or Repeat passes no slot inside another block, so
+henad-graph's `refusals::in_repeat` refuses there (a Count, Look around or Pick a cell with
+`LOOK_IN_REPEAT`, a Keep between, Leave, Record or Move to with `NOT_YET_REPEAT_CHANGE`), refused
+with its words as the Repeat's add menu refuses them. A When or Repeat passes no slot inside another block, so
 those read `DROP_INTO_BLOCK`. Over another card the copy reads `DROP_ON_OTHER_CARD`.
 
 **A drop.** On release over a slot that can take the line, `DragFrame::place_ui` returns a

@@ -29,6 +29,7 @@ use crate::sheet::document::{
     Around, CardRuns, CompareTest, LineKind, LineMode, PropertyType, SheetCard, SheetChip, SheetLine, SheetProperty,
     SheetValue, Slot,
 };
+use crate::sheet::refusals::{self, Way};
 use crate::sheet::relations::CardRelations;
 use crate::sheet::sentence::{self, ANY_STATE_ID};
 use crate::types::ValueType;
@@ -111,11 +112,7 @@ enum Refusal {
 /// Returns the first reason `line` cannot lower on a card of cells, or of agents with `agents`, inside a Repeat with
 /// `in_repeat`, its own kind first and then the phrases in its slots.
 fn refusal(line: &SheetLine, agents: bool, in_repeat: bool) -> Option<Refusal> {
-    let changes_in_repeat = matches!(
-        line.kind,
-        LineKind::KeepBetween | LineKind::When | LineKind::Repeat | LineKind::Leave | LineKind::Record
-    ) || (line.kind == LineKind::Move && line.mode == Some(LineMode::To));
-    let own = if in_repeat && changes_in_repeat {
+    let own = if in_repeat && refusals::changes_outside_repeat(line) {
         Some(Refusal::NotYet(sentence::NOT_YET_REPEAT_CHANGE))
     } else if agents {
         None
@@ -145,59 +142,6 @@ fn value_refusal(value: &SheetValue, agents: bool) -> Option<Refusal> {
         SheetValue::Phrase(phrase) => refusal(phrase, agents, false),
         SheetValue::List(items) => items.iter().find_map(|item| value_refusal(item, agents)),
         SheetValue::Literal(_) | SheetValue::Chip(_) => None,
-    }
-}
-
-/// Way a line changes a property, for the rule that a card changes a property one way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Way {
-    /// Set.
-    Set,
-    /// Steer.
-    Steer,
-    /// Move by an arrow.
-    MoveBy,
-    /// Move to a place.
-    MoveTo,
-}
-
-impl Way {
-    /// Returns the way `line` changes a property, with the id of the property a Set or Steer names, `None` for a line
-    /// of another kind.
-    fn of(line: &SheetLine) -> Option<(Self, Option<&str>)> {
-        match line.kind {
-            LineKind::Set => Some((Self::Set, Some(line.property.as_deref()?))),
-            LineKind::Steer => Some((Self::Steer, Some(line.property.as_deref()?))),
-            LineKind::Move => match line.mode? {
-                LineMode::To => Some((Self::MoveTo, None)),
-                _ => Some((Self::MoveBy, None)),
-            },
-            _ => None,
-        }
-    }
-
-    /// Returns the error on a line that changes `property` another way than the line whose line prefix is `prefix`,
-    /// such as "Line 3".
-    ///
-    /// That line changes the property this way.
-    fn conflict(self, prefix: &str, property: &str) -> String {
-        match self {
-            Self::Set => sentence::set_already(prefix, property),
-            Self::Steer => sentence::steered_already(prefix, property),
-            Self::MoveBy => sentence::moved_by_already(prefix),
-            Self::MoveTo => sentence::moved_to_already(prefix),
-        }
-    }
-
-    /// Returns whether a change `self` and a change `other` of one property conflict.
-    fn conflicts_with(self, other: Self) -> bool {
-        matches!(
-            (self, other),
-            (Self::Set, Self::Steer)
-                | (Self::Steer, Self::Set)
-                | (Self::MoveBy, Self::MoveTo)
-                | (Self::MoveTo, Self::MoveBy)
-        )
     }
 }
 
