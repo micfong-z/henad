@@ -56,7 +56,11 @@ stays as typed (`a_slider_keeps_its_ends_and_never_leaves_its_range`, the values
 sweep accept). A drag or a key reaches the setter on egui's steps already, and `snapped` only holds
 it inside the range, so a maximum less than half a step past the last step is reached by typing
 alone. The parser reads text such as "NaN" or "inf" as no number, and the value stays as it was.
-`--set` refuses such text too. `seed.rs` draws the Seed row, `schedule.rs` the scheduled actions
+`--set` refuses such text too. Each slider of the tab, `u32` included, takes its box's text when
+Enter or a loss of focus ends the edit (`update_while_editing(false)`). egui 0.36.2 drops a box's
+text once its value changes, and a snap per key would leave "9951" at World Width's minimum
+(`a_slider_takes_a_number_typed_one_key_at_a_time`). The app's other boxes read back the value
+they set, and keep egui's default. `seed.rs` draws the Seed row, `schedule.rs` the scheduled actions
 and `trial.rs` the preview mode. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record

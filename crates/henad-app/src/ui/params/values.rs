@@ -25,7 +25,10 @@ pub(super) fn value_widget(
             *number != before
         }
         (ParamKind::U32 { min, max, .. }, ParamValue::U32(number)) => {
-            with_hint(ui.add(egui::Slider::new(number, *min..=*max).text(text)), hint).changed()
+            let slider = egui::Slider::new(number, *min..=*max)
+                .update_while_editing(false)
+                .text(text);
+            with_hint(ui.add(slider), hint).changed()
         }
         (ParamKind::Bool { .. }, ParamValue::Bool(flag)) => with_hint(ui.checkbox(flag, text), hint).changed(),
         (ParamKind::Choice { options, .. }, ParamValue::Choice(choice)) => {
@@ -49,7 +52,8 @@ pub(super) fn value_widget(
 ///
 /// Note that the slider snaps `value` only when the user edits it. Drawing it leaves a value set by a spec or an
 /// opened run as it is. egui snaps a drag or an arrow key to the steps from `min` before [`snapped`] sees it, so a
-/// maximum less than half a step past the last step is reached by typing alone.
+/// maximum less than half a step past the last step is reached by typing alone. A number typed into the value box
+/// stays as typed while the box holds the focus, and snaps when Enter or a loss of focus ends the edit.
 fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>, percent: Option<usize>) -> egui::Slider<'_> {
     let (low, high) = (decimal_value(min), decimal_value(max));
     let step = step.map(decimal_value);
@@ -68,6 +72,9 @@ fn f32_slider(value: &mut f32, min: f32, max: f32, step: Option<f32>, percent: O
         f64::from(*value)
     })
     .clamping(egui::SliderClamping::Edits)
+    // egui drops the box's text when the value changed since the last frame. A snap on each key would leave the first
+    // digit's snap, so the box sets the value once the edit ends.
+    .update_while_editing(false)
     .custom_parser(move |text| {
         let number = if percent.is_some() {
             read_percent(text)
@@ -425,6 +432,71 @@ mod tests {
         draw_value(&context, descriptor, &mut value, &[egui::Key::Enter]);
         draw_value(&context, descriptor, &mut value, &[]);
         value
+    }
+
+    /// Returns `value` after `text` is typed into the value box of the slider of `descriptor` over it one key a frame,
+    /// and `commit` pressed. The value stays as it was until `commit` ends the edit.
+    fn typed_by_key(descriptor: &ParamDescriptor, value: ParamValue, text: &str, commit: egui::Key) -> ParamValue {
+        let context = egui::Context::default();
+        let mut value = value;
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Tab]);
+        draw_value(&context, descriptor, &mut value, &[egui::Key::Tab]);
+        let before = value.clone();
+        for character in text.chars() {
+            let typed = egui::RawInput {
+                events: vec![egui::Event::Text(character.to_string())],
+                ..egui::RawInput::default()
+            };
+            draw_value_with(&context, descriptor, &mut value, typed);
+            assert_eq!(value, before, "{} while {text} is typed", descriptor.id());
+        }
+        draw_value(&context, descriptor, &mut value, &[commit]);
+        draw_value(&context, descriptor, &mut value, &[]);
+        value
+    }
+
+    /// Digits typed one key a frame into the value box of a stepped slider stay as typed until Enter or Tab ends the
+    /// edit, which snaps them: World Width, whose first digit alone would snap to its minimum, an integer, a
+    /// percentage and a whole number.
+    #[test]
+    fn a_slider_takes_a_number_typed_one_key_at_a_time() {
+        use henad_core::params::ParamValue::{F32, U32};
+
+        let models = example_models();
+        let world_width = models
+            .get("boids")
+            .expect("boids is registered")
+            .param_descriptors()
+            .iter()
+            .find(|descriptor| descriptor.id() == "world_width")
+            .expect("boids declares a world width")
+            .clone();
+        let cells = f32_param("cells", "Cells", 1.0, 1.0, 100.0, Some(5.0)).integer();
+        let share = f32_param("share", "Share", 0.05, 0.0, 1.0, Some(0.05)).percent();
+        let count = u32_param("count", "Count", 10, 1, 1000);
+        let cases = [
+            (&world_width, F32(1000.0), "9951", F32(9951.0)),
+            (&world_width, F32(1000.0), "10000", F32(10_000.0)),
+            (&world_width, F32(1000.0), "9970", F32(9951.0)),
+            (&world_width, F32(1000.0), "1", F32(1.0)),
+            (&cells, F32(1.0), "46", F32(46.0)),
+            (&cells, F32(1.0), "100", F32(100.0)),
+            (&share, F32(0.05), "35", F32(0.35)),
+            (&share, F32(0.05), "35%", F32(0.35)),
+            (&count, U32(10), "250", U32(250)),
+        ];
+        for (descriptor, start, text, expected) in cases {
+            for commit in [egui::Key::Enter, egui::Key::Tab] {
+                let value = typed_by_key(descriptor, start.clone(), text, commit);
+                assert_eq!(value, expected, "{} typed {text}, then {commit:?}", descriptor.id());
+                assert_eq!(
+                    check_param(descriptor, &value),
+                    Ok(()),
+                    "{} typed {text}",
+                    descriptor.id()
+                );
+            }
+        }
     }
 
     /// Returns `value` after the slider of `descriptor` over it takes the focus and `key` is pressed.
