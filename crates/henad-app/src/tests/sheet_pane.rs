@@ -1879,7 +1879,7 @@ fn each_property_row_edits_and_deletes_its_property() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
-    harness.screen = egui::vec2(1280.0, 800.0);
+    harness.screen = egui::vec2(1600.0, 800.0);
     open_starter(&mut harness, "ants.toml");
     let starter = text(&harness);
     // Names of the properties of the ground, and of the ants.
@@ -1963,9 +1963,9 @@ fn each_property_row_edits_and_deletes_its_property() {
     );
 }
 
-/// A table of properties with room for every word whole shows the symbol of each property's type and its Edit and
-/// delete buttons. Short of room it gives up the buttons for a menu first, and then the symbols, which its Kind column
-/// names too, while the parameters keep theirs.
+/// A table of properties with room for every column at its natural width shows the symbol of each property's type and
+/// its Edit and delete buttons. Short of room it gives up the buttons for a menu first, and then the symbols, which its
+/// Kind column names too. The parameters leave out their symbols short of room as well.
 #[test]
 fn a_property_table_short_of_room_leaves_out_its_symbols_after_its_buttons() {
     use egui::accesskit::Role;
@@ -1996,6 +1996,206 @@ fn a_property_table_short_of_room_leaves_out_its_symbols_after_its_buttons() {
         return;
     };
     assert_eq!(narrow.0, 0, "the table leaves out its symbols");
-    assert!(narrow.1 > 0 && narrow.1 < wide.1, "the parameters keep their symbols");
+    assert!(wide.1 > 0, "the parameters show their symbols");
+    assert_eq!(narrow.1, 0, "the parameters leave out their symbols");
     assert!(!narrow.2, "the rows hold a menu");
+}
+
+/// Words of the Cells table of the SIR sheet that keep their line, and what the table shows beside them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CellsTable {
+    /// Whether the name of each state sits beside its swatch.
+    names_beside_swatches: bool,
+    /// Whether "with chance" shares its line with the chance field.
+    chance_beside_field: bool,
+    /// Whether the state of the first row shares its line with "with chance".
+    state_beside_chance: bool,
+    /// Whether "Use a parameter" shares its line with the row's ×.
+    parameter_beside_remove: bool,
+    /// Whether the lines that change Health, and the column's header, each take one line.
+    changed_by_on_one_line: bool,
+    /// Whether the symbol of the type of Health shows.
+    symbol: bool,
+    /// Whether the Edit and delete buttons of Health show.
+    buttons: bool,
+}
+
+impl CellsTable {
+    /// Returns whether every word of the table keeps its line.
+    fn whole(self) -> bool {
+        self.names_beside_swatches
+            && self.chance_beside_field
+            && self.state_beside_chance
+            && self.parameter_beside_remove
+            && self.changed_by_on_one_line
+    }
+}
+
+/// Returns the Cells table of the SIR sheet, its start a chance of 0.004%, in a window `width` points wide with the
+/// app's own fonts, or `None` to skip on a machine without a device. The Sheet pane takes 0.4 of the Editor's width,
+/// about `0.4 * width - 17` points.
+fn sir_cells_table(width: f32) -> Option<CellsTable> {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::{
+        CELLS_COLUMNS, StartsField, WITH_CHANCE, changed_by, edit_property_heading, remove_row_name, starts_field_name,
+        starts_row_place, type_symbol_name,
+    };
+
+    let mut harness = Harness::new()?;
+    crate::init::setup_custom_fonts(&harness.context);
+    crate::init::setup_custom_styles(&harness.context);
+    harness.screen = egui::vec2(width, 1600.0);
+    let sheet_text = crate::tests::support::edited(
+        starter_text("sir.toml"),
+        "chance = { param = \"initial_infected\" }",
+        "chance = { percent = 0.004 }",
+    );
+    harness.open_sheet(&sheet_text);
+    let nodes = harness.settle();
+    let pane = nodes
+        .iter()
+        .find(|node| node.role == Role::Group && node.label == SHEET_PANE)
+        .and_then(|node| node.bounds)
+        .expect("the Sheet pane");
+    let cells = nodes
+        .iter()
+        .filter(|node| node.role == Role::Label && node.value == "Cells")
+        .find_map(|node| node.bounds)
+        .expect("the Cells heading");
+    // The first match under the Cells heading in the Sheet pane, as the measures and the card name states too.
+    let bounds = |test: &dyn Fn(&crate::tests::support::Node) -> bool, what: &str| {
+        nodes
+            .iter()
+            .filter(|node| test(node))
+            .filter_map(|node| node.bounds)
+            .filter(|rect| pane.x_range().contains(rect.left()) && rect.top() >= cells.top())
+            .min_by(|one, other| one.top().total_cmp(&other.top()))
+            .unwrap_or_else(|| panic!("the table shows {what}"))
+    };
+    let text = |words: &str| bounds(&|node| node.role == Role::Label && node.value == words, words);
+    let named = |name: &str| bounds(&|node| node.label == name, name);
+    let same_line = |left: egui::Rect, right: egui::Rect| (left.center().y - right.center().y).abs() < 4.0;
+    let one_line = text(CELLS_COLUMNS[1]).height();
+    let place = starts_row_place("Health", 1);
+    let kind = text("States");
+    Some(CellsTable {
+        names_beside_swatches: ["Susceptible", "Infected", "Recovered"]
+            .iter()
+            .all(|state| text(state).left() > kind.left() + 8.0),
+        chance_beside_field: same_line(
+            text(WITH_CHANCE),
+            named(&starts_field_name(&place, StartsField::Chance)),
+        ),
+        state_beside_chance: same_line(named(&starts_field_name(&place, StartsField::State)), text(WITH_CHANCE)),
+        parameter_beside_remove: same_line(
+            named(&starts_field_name(&place, StartsField::UseParameter)),
+            named(&remove_row_name(1, "Health")),
+        ),
+        changed_by_on_one_line: text(&changed_by(&[2, 3])).height() < 1.5 * one_line
+            && text(CELLS_COLUMNS[3]).height() < 1.5 * one_line,
+        symbol: nodes
+            .iter()
+            .any(|node| node.role == Role::Image && node.label == type_symbol_name("States")),
+        buttons: nodes.iter().any(|node| node.label == edit_property_heading("Health")),
+    })
+}
+
+/// A table of properties leaves out its buttons, then its symbols, then the column of its menu before any column gives
+/// up width, so they never wrap a word that fits without them. The Cells table of the SIR sheet keeps every word on its
+/// line while it shows a symbol or a button, gives each up only as the window narrows, and keeps the words that fit
+/// before the symbols and the buttons came: in a Sheet pane about 337 points wide, as an Editor leaf 896 points wide
+/// leaves it, and in one 430 points wide.
+#[test]
+fn a_property_table_leaves_out_its_symbols_and_buttons_before_a_word_wraps() {
+    // Each word that fit with no symbol and no buttons still fits: the names beside their swatches, "with chance"
+    // beside its field and "Use a parameter" beside the row's ×, and in the wider pane the state beside "with chance".
+    for (width, state_beside_chance) in [(884.0, false), (1117.0, true)] {
+        let Some(table) = sir_cells_table(width) else {
+            return;
+        };
+        assert!(
+            table.names_beside_swatches && table.chance_beside_field && table.parameter_beside_remove,
+            "at {width}: {table:?}"
+        );
+        assert!(
+            !state_beside_chance || table.state_beside_chance,
+            "at {width}: {table:?}"
+        );
+    }
+    let mut wider: Option<CellsTable> = None;
+    for width in [1900.0, 1600.0, 1400.0, 1280.0, 1117.0, 1000.0, 884.0, 800.0, 640.0] {
+        let Some(table) = sir_cells_table(width) else {
+            return;
+        };
+        if table.symbol || table.buttons {
+            assert!(
+                table.whole(),
+                "at {width}, a symbol or a button wraps a word: {table:?}"
+            );
+        }
+        match wider {
+            None => assert!(
+                table.symbol && table.buttons,
+                "a wide table shows its symbol and buttons"
+            ),
+            Some(wider) => assert!(
+                (!table.symbol || wider.symbol) && (!table.buttons || wider.buttons),
+                "at {width}, the table shows what a wider one leaves out: {table:?}, {wider:?}"
+            ),
+        }
+        wider = Some(table);
+    }
+}
+
+/// The symbols of the parameters' types never move Min, Max and Unit onto a second line: at every width the table of
+/// the SIR sheet's parameters lays its rows out as it does with the symbols hidden, and it leaves the symbols out where
+/// they would take room from a column.
+#[test]
+fn the_parameters_lay_out_their_rows_alike_with_and_without_symbols() {
+    use egui::accesskit::Role;
+    use henad_graph::sheet::sentence::{parameter_min_name, sheet_parameter_name_field, type_symbol_name};
+
+    use crate::ui::editor::sheet::widgets::show_type_symbols;
+
+    // Whether Min shares the line of the name of Infection rate, and whether a parameter's symbol shows.
+    let layout = |width: f32, symbols: bool| -> Option<(bool, bool)> {
+        let mut harness = Harness::new()?;
+        crate::init::setup_custom_fonts(&harness.context);
+        crate::init::setup_custom_styles(&harness.context);
+        show_type_symbols(&harness.context, symbols);
+        harness.screen = egui::vec2(width, 1600.0);
+        open_starter(&mut harness, "sir.toml");
+        let nodes = harness.settle();
+        let bounds = |name: &str| {
+            nodes
+                .iter()
+                .find(|node| node.label == name)
+                .and_then(|node| node.bounds)
+                .unwrap_or_else(|| panic!("the table shows {name}"))
+        };
+        let name = bounds(&sheet_parameter_name_field("Infection rate"));
+        let min = bounds(&parameter_min_name("Infection rate"));
+        let symbol = nodes
+            .iter()
+            .any(|node| node.role == Role::Image && node.label == type_symbol_name("Number"));
+        Some(((name.center().y - min.center().y).abs() < 4.0, symbol))
+    };
+    let mut hidden_on_one_line = false;
+    for width in (1100..=1500).step_by(25) {
+        let width = width as f32;
+        let (Some(shown), Some(plain)) = (layout(width, true), layout(width, false)) else {
+            return;
+        };
+        assert_eq!(shown.0, plain.0, "at {width}, the symbols change the rows");
+        hidden_on_one_line |= shown.0 && !shown.1;
+    }
+    assert!(
+        hidden_on_one_line,
+        "no width holds one line per parameter without room for the symbols"
+    );
+    assert_eq!(
+        layout(1900.0, true),
+        Some((true, true)),
+        "a wide table shows its symbols"
+    );
 }

@@ -1601,6 +1601,34 @@ pub fn chip_with_id(ui: &mut Ui, id: Option<Id>, chip: &SentenceChip, red: bool,
     chip_within(ui, id, chip, red, swatch, f32::INFINITY)
 }
 
+/// Returns the width in points of the chip of `chip` with no swatch, as [`chip_within`] lays it out with room for its
+/// whole name.
+pub fn chip_width(ui: &Ui, chip: &SentenceChip) -> f32 {
+    let body = TextStyle::Body.resolve(ui.style());
+    let font = if chip.kind == ChipKind::Literal {
+        FontId::monospace(body.size - 1.0)
+    } else {
+        body.clone()
+    };
+    let width = |text: &str, font: FontId| {
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER)
+            .size()
+            .x
+    };
+    let mark = if matches!(chip.kind, ChipKind::Parameter(_)) {
+        width(MDI_TUNE_VERTICAL, body.clone()) + CHIP_GAP
+    } else {
+        0.0
+    };
+    let lead = if chip.lead.is_empty() {
+        0.0
+    } else {
+        width(chip.lead, body) + CHIP_GAP
+    };
+    CHIP_PADDING * 2.0 + mark + lead + width(&chip.name, font)
+}
+
 /// Adds the chip of `chip` as [`chip_with_id`] does, at most `max_width` wide. A name too long for that width ends in
 /// an ellipsis, and the chip's whole text shows as its tooltip.
 pub fn chip_within(

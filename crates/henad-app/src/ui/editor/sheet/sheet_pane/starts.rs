@@ -2,7 +2,7 @@
 //! properties, the property form or "+ Add property" under it, each property's start with its select, its chance rows
 //! and its number fields, a number field that takes a parameter, and the New parameter dialog it opens.
 
-use egui::{Frame, Id, Label, Popup, RichText, Ui};
+use egui::{Align, Frame, Id, Label, Layout, Popup, RichText, Ui};
 use henad_graph::sheet::document::{
     CELLS_ID, GROUND_ID, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty,
     SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
@@ -31,10 +31,10 @@ use super::{
 };
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
 use crate::ui::editor::sheet::widgets::{
-    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, TypeSymbol, caption_width, chip_within,
-    color32, commit_number, escape_to_anchor, field_message, forget_field, menu_button, menu_group, menu_item,
-    message_ui, new_parameter_modal, overlay, parameter_names, placed, swatch_ui, text_control, text_control_width,
-    type_symbol_ui, type_symbol_width,
+    CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, TypeSymbol, caption_width, chip_width,
+    chip_within, color32, commit_number, escape_to_anchor, field_message, forget_field, menu_button, menu_group,
+    menu_item, message_ui, new_parameter_modal, overlay, parameter_names, placed, swatch_ui, text_control,
+    text_control_width, type_symbol_ui, type_symbol_width,
 };
 use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::{add_button, filled_button};
@@ -76,15 +76,17 @@ pub(super) fn cells(
 /// A delete that empties a formula the card cannot write again asks first, as the form's Delete property does, and a
 /// delete of the property the open form edits closes the form.
 ///
-/// A symbol of its type comes before each name while [`type_symbols_shown`] holds. A table that cannot hold every
-/// word whole draws a menu of Edit and Delete in place of the two buttons, and one that still cannot leaves the symbols
-/// out.
+/// A symbol of its type comes before each name while [`type_symbols_shown`] holds. The symbols and the buttons show
+/// while every column keeps its natural width. Short of room the table leaves them out before any column gives up width:
+/// first the two buttons, for a menu of both in a column of its own, then the symbols, which the Kind column names too,
+/// and last the menu's column, the menu moving into the Changed by column, beside or under the lines that change the
+/// property.
 ///
-/// Starts as takes the room left over, and the Edit and delete buttons keep their width. Short of room, Starts as gives
-/// up width down to 150 points, then Changed by, Kind and Name down to their longest words, wrapping at them, then
-/// Starts as down to the width of "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the
-/// longest word of a state's name without its swatch, the names wrapping under their swatches, and last Kind and Name
-/// down to their least widths, a word too long for them ending in an ellipsis.
+/// Starts as takes the room left over. Short of room, Starts as gives up width down to 150 points, then Changed by,
+/// Kind and Name down to their longest words, wrapping at them, then Starts as down to the width of "Use a parameter",
+/// its selects and chips ending in an ellipsis, then Kind down to the longest word of a state's name without its
+/// swatch, the names wrapping under their swatches, and last Kind and Name down to their least widths, a word too long
+/// for them ending in an ellipsis.
 ///
 /// [`type_symbols_shown`]: crate::ui::editor::sheet::widgets::type_symbols_shown
 pub(super) fn property_table(
@@ -98,19 +100,30 @@ pub(super) fn property_table(
     let properties = properties_of(document, thing);
     let changed = |property: &SheetProperty| changed_by(&changing_lines(document, &property.id));
     let id = ui.make_persistent_id(("henad_sheet_properties", thing));
-    // The table drops what it cannot hold with every word whole: first the Edit and delete buttons, for a menu of
-    // both, then the symbols of the types, which the Kind column names too.
     let symbol_width = type_symbol_width(ui.ctx());
     let available = ui.available_width();
-    let fits = |symbol: f32, buttons: bool| {
-        let (columns, give_up) = property_columns(ui, document, thing, symbol, buttons);
-        Table::new(id, columns, 2, &give_up[..give_up.len() - 2]).fits(available)
+    // Room for the symbols and the buttons leaves every column at its natural width, and Starts as with each of its
+    // lines whole.
+    let starts_whole = properties
+        .iter()
+        .map(|property| starts_line_width(ui, document, thing, property))
+        .fold(0.0, f32::max);
+    let roomy = |symbol: f32, actions: RowActions| {
+        let (mut columns, _) = property_columns(ui, document, thing, symbol, actions);
+        if let Some(starts) = columns.get_mut(2) {
+            starts.natural = starts.natural.max(starts_whole);
+        }
+        Table::new(id, columns, 2, &[]).fits(available)
     };
-    let (symbol, buttons) = [(symbol_width, true), (symbol_width, false), (0.0, false)]
-        .into_iter()
-        .find(|&(symbol, buttons)| fits(symbol, buttons))
-        .unwrap_or((0.0, false));
-    let (columns, give_up) = property_columns(ui, document, thing, symbol, buttons);
+    let (symbol, actions) = [
+        (symbol_width, RowActions::Buttons),
+        (symbol_width, RowActions::Menu),
+        (0.0, RowActions::Menu),
+    ]
+    .into_iter()
+    .find(|&(symbol, actions)| roomy(symbol, actions))
+    .unwrap_or((0.0, RowActions::MenuUnder));
+    let (columns, give_up) = property_columns(ui, document, thing, symbol, actions);
     Table::new(id, columns, 2, &give_up).show(ui, |ui, rows| {
         for property in properties {
             rows.row(ui, &property.id, |row| {
@@ -131,10 +144,30 @@ pub(super) fn property_table(
                         ui.weak(START_AGAIN_TO_SEE);
                     }
                 });
-                row.cell(3, |ui| {
-                    text_cell(ui, Label::new(changed(property)));
+                let in_column = row.cell(3, |ui| {
+                    let words = changed(property);
+                    if actions != RowActions::MenuUnder {
+                        text_cell(ui, Label::new(words));
+                        return None;
+                    }
+                    let menu = |ui: &mut Ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            row_actions_menu(ui, &property.name)
+                        })
+                        .inner
+                    };
+                    // The menu sits beside the words where they fit with it, and on a line under them otherwise.
+                    if text_width(ui, &words) + ITEM_GAP + ACTIONS_WIDTH <= ui.available_width() {
+                        line(ui, |ui| {
+                            ui.label(words);
+                            menu(ui)
+                        })
+                    } else {
+                        text_cell(ui, Label::new(words));
+                        line(ui, menu)
+                    }
                 });
-                let action = row_actions(row, buttons, &property.name);
+                let action = in_column.or_else(|| row_actions(row, actions, &property.name));
                 if let Some(action) = action {
                     run_row_action(action, document, thing, property, pane, pending);
                 }
@@ -144,8 +177,8 @@ pub(super) fn property_table(
 }
 
 /// Returns the columns of the table of the properties of `thing` and the steps they give up width in, as
-/// [`property_table`] orders them, where `symbol` is the width of the symbol before each name and `buttons` whether the
-/// last columns hold the Edit and delete buttons, or else the menu of both.
+/// [`property_table`] orders them, where `symbol` is the width of the symbol before each name and `actions` the place of
+/// the Edit and delete actions.
 ///
 /// The last two steps cut a word short. The steps before them keep every word whole.
 fn property_columns(
@@ -153,7 +186,7 @@ fn property_columns(
     document: &SheetDocument,
     thing: &str,
     symbol: f32,
-    buttons: bool,
+    actions: RowActions,
 ) -> (Vec<Column>, [(usize, f32); 8]) {
     let properties = properties_of(document, thing);
     let widest = |width: &dyn Fn(&SheetProperty) -> f32| properties.iter().map(width).fold(0.0, f32::max);
@@ -193,10 +226,10 @@ fn property_columns(
             change_words.max(header_word(3)),
         ),
     ];
-    if buttons {
-        columns.extend([Column::fixed(text_width(ui, EDIT) + 6.0), Column::fixed(DELETE_WIDTH)]);
-    } else {
-        columns.push(Column::fixed(ACTIONS_WIDTH));
+    match actions {
+        RowActions::Buttons => columns.extend([Column::fixed(text_width(ui, EDIT) + 6.0), Column::fixed(DELETE_WIDTH)]),
+        RowActions::Menu => columns.push(Column::fixed(ACTIONS_WIDTH)),
+        RowActions::MenuUnder => {}
     }
     let give_up = [
         (2, 150.0),
@@ -211,8 +244,20 @@ fn property_columns(
     (columns, give_up)
 }
 
-/// Width in points of the column of a property's menu of actions.
+/// Width in points of a property's menu button of actions, and of its column.
 const ACTIONS_WIDTH: f32 = 24.0;
+
+/// Place of the Edit and delete actions of each row of a table of properties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowActions {
+    /// An Edit button and a delete button, each in a column of its own.
+    Buttons,
+    /// A menu of both, in a column of its own.
+    Menu,
+    /// A menu of both at the right edge of the Changed by column, beside the lines that change the property where they
+    /// fit with it, and under them otherwise.
+    MenuUnder,
+}
 
 /// Action of a row of a table of properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,13 +268,14 @@ enum RowAction {
     Delete,
 }
 
-/// Draws the Edit and delete buttons of the row of the property named `name` in its last two cells while `buttons`
-/// holds, and the row's menu in its last cell otherwise, and returns the action chosen.
-fn row_actions(row: &mut TableRow<'_>, buttons: bool, name: &str) -> Option<RowAction> {
-    if !buttons {
-        let mut chosen = None;
-        row.cell(4, |ui| chosen = row_actions_menu(ui, name));
-        return chosen;
+/// Draws the Edit and delete buttons of the row of the property named `name` in its last two cells, or its menu in its
+/// last cell, as `actions` places them, and returns the action chosen. A menu under the Changed by column is drawn with
+/// that column and draws nothing here.
+fn row_actions(row: &mut TableRow<'_>, actions: RowActions, name: &str) -> Option<RowAction> {
+    match actions {
+        RowActions::Buttons => {}
+        RowActions::Menu => return row.cell(4, |ui| row_actions_menu(ui, name)),
+        RowActions::MenuUnder => return None,
     }
     let mut edit = false;
     row.cell(4, |ui| {
@@ -277,7 +323,7 @@ fn run_row_action(
 /// Draws the menu button of the row of the property named `name`, named `property_actions_name`, and returns the
 /// action chosen in its menu: "Edit property …" or "Delete property …".
 fn row_actions_menu(ui: &mut Ui, name: &str) -> Option<RowAction> {
-    let (id, rect) = ui.allocate_space(egui::vec2(ui.available_width(), LINE));
+    let (id, rect) = ui.allocate_space(egui::vec2(ACTIONS_WIDTH.min(ui.available_width()), LINE));
     let popup_id = id.with("popup");
     let response = menu_button(ui, id, popup_id, &property_actions_name(name), rect);
     let button = response.id;
@@ -374,6 +420,84 @@ fn starts_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &Sheet
 
 /// Width in points the Starts as column takes at most while the table fits.
 const STARTS_MOST: f32 = 280.0;
+
+/// Returns the width in points the Starts as of `property`, a property of `thing`, takes with each of its lines whole on
+/// one line: its select, each chance row with its delete button, the state of every other cell, the lead and numbers
+/// of a value, or its words.
+fn starts_line_width(ui: &Ui, document: &SheetDocument, thing: &str, property: &SheetProperty) -> f32 {
+    let selected = starts_text(document, property);
+    let Some(start) = &property.starts_as else {
+        return text_width(ui, &selected);
+    };
+    if property.property_type == PropertyType::Arrow {
+        return text_width(ui, &Sentences::new(document).slot(&start.value, Some(&property.id)));
+    }
+    let state = |state: Option<&str>| {
+        let name = state.and_then(|state| state_name(property, state)).unwrap_or_default();
+        select_width(ui, name)
+    };
+    let number = |slot: &Slot| number_width(ui, document, slot);
+    let lines = match start.rule {
+        StartRule::ByChance => {
+            let rows = start.rows.iter().map(|row| {
+                state(row.state.as_deref())
+                    + text_width(ui, WITH_CHANCE)
+                    + number(&row.chance)
+                    + text_control_width(ui, REMOVE_ROW_LABEL)
+                    + 3.0 * ITEM_GAP
+            });
+            let otherwise = text_width(ui, OTHERWISE) + ITEM_GAP + state(start.otherwise.as_deref());
+            rows.fold(otherwise, f32::max)
+        }
+        StartRule::Painted => {
+            let base = start
+                .base
+                .as_deref()
+                .and_then(|base| state_name(property, base))
+                .unwrap_or_default();
+            text_width(ui, &painted_shapes(base, start.shapes.len()))
+        }
+        StartRule::Value if !matches!(property.property_type, PropertyType::States | PropertyType::YesNo) => {
+            match start.value.value() {
+                Some(SheetValue::Phrase(phrase)) if holds_random_number(&start.value) => {
+                    text_width(ui, RANDOM_NUMBER_BETWEEN)
+                        + number(&phrase.low)
+                        + text_width(ui, RANDOM_NUMBER_AND)
+                        + number(&phrase.high)
+                        + 3.0 * ITEM_GAP
+                }
+                _ => {
+                    text_width(ui, &every_starts_at(&Sentences::new(document).thing_word(thing)))
+                        + ITEM_GAP
+                        + number(&start.value)
+                }
+            }
+        }
+        _ => 0.0,
+    };
+    select_width(ui, &selected).max(lines)
+}
+
+/// Returns the width in points of the number at `slot` of a start on one line: the chip of the parameter it holds, or
+/// its field with "Use a parameter" beside it.
+fn number_width(ui: &Ui, document: &SheetDocument, slot: &Slot) -> f32 {
+    match slot.value() {
+        Some(SheetValue::Chip(SheetChip::Param(parameter))) => {
+            let name = document
+                .parameters
+                .iter()
+                .find(|known| known.id == *parameter)
+                .map_or_else(|| parameter.clone(), |known| known.name.clone());
+            let chip = SentenceChip {
+                kind: ChipKind::Parameter(parameter.clone()),
+                lead: "",
+                name,
+            };
+            chip_width(ui, &chip)
+        }
+        _ => FIELD_WIDTH + ITEM_GAP + text_control_width(ui, USE_A_PARAMETER),
+    }
+}
 
 /// Draws the property form under the table of `thing` while it is open for that thing, or the button that opens it,
 /// named `add_name`. The button is the section's primary action while `primary` holds, and an add button otherwise.

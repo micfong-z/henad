@@ -103,7 +103,9 @@ the column empty for an item with no symbol, so it lines up with the symbols of 
 Colours select (`sheet_pane/colors.rs`) gives each property its symbol and None the empty column
 (`the_colours_select_shows_the_symbol_of_each_propertys_type`). In the Sheet pane `type_symbol_ui`
 draws it as an image named `type_symbol_name` ("Type: Vector"), so it never shares a name with a
-control. `type_symbols_shown` reads a persisted egui memory flag (`SHOW_TYPE_SYMBOLS_ID`, on until
-turned off) that the View menu's checkbox (`menu_bar::SHOW_TYPE_SYMBOLS`) sets through
+control, and a table leaves its symbols out before any of its columns gives up width
+(`agents/henad-app-sheet-pane.md`). `type_symbols_shown` reads a persisted egui memory flag
+(`SHOW_TYPE_SYMBOLS_ID`, on until turned off) that the View menu's checkbox
+(`menu_bar::SHOW_TYPE_SYMBOLS`) sets through
 `show_type_symbols` (`the_view_menu_hides_the_type_symbols_and_the_app_keeps_the_setting`,
 `the_type_symbols_show_before_properties_parameters_and_values_until_hidden`).

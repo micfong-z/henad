@@ -49,23 +49,33 @@ The deletes of an event, a measure or a button name nothing a formula reads
 (`a_delete_of_an_item_that_formulas_use_asks_first`, which also holds the ants' To food, read by
 the measure Total trail, and Undo after each delete). The tables and their orders:
 
-- Properties (`property_table`, of any thing): Starts as takes the room left over, and the Edit and
-  × columns are fixed, or the menu that holds both where they do not fit. Short of room it gives up
-  width down to 150, then Changed by, Kind and Name down to their longest words (Changed by to the
-  word "Changed" of its header), wrapping at them, then Starts as down to `text_control_width` of
-  "Use a parameter", its selects and chips ending in an ellipsis, then Kind down to the longest word
-  of a state's name without its swatch (`kind_under`, the name wrapping under its swatch in a
-  `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too long ending in an ellipsis
-  with the tooltip. Each name follows the symbol of its type (`type_symbol_ui`,
-  `agents/henad-app-picker.md`) while the symbols show. `property_columns` builds the columns for a
-  symbol width and a choice of buttons or menu, and the table takes the first of buttons with
-  symbols, the menu with symbols and the menu alone that holds every word whole.
+- Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
+  gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed by
+  to the word "Changed" of its header), wrapping at them, then Starts as down to
+  `text_control_width` of "Use a parameter", its selects and chips ending in an ellipsis, then Kind
+  down to the longest word of a state's name without its swatch (`kind_under`, the name wrapping
+  under its swatch in a `horizontal_wrapped`), then Kind and Name down to 56 and 40, a word too long
+  ending in an ellipsis with the tooltip. Each name follows the symbol of its type
+  (`type_symbol_ui`, `agents/henad-app-picker.md`) while the symbols show. The symbols and the row
+  actions (`RowActions`) never take room a word needs: `property_columns` builds the columns for a
+  symbol width and a place of the actions, and the table takes the first of the Edit and × columns
+  with symbols, the menu's column with symbols and the menu's column alone that fits with no step
+  run and Starts as at `starts_line_width`, the width that holds each of its lines whole (a chance
+  row with its ×, the otherwise row, a value's lead and numbers, `chip_width` for a parameter's
+  chip). Otherwise the menu goes into the Changed by column (`MenuUnder`), right-aligned beside its
+  words where they fit with it and on a line under them otherwise, and the table lays its words out
+  as it did before it had symbols or actions
+  (`a_property_table_leaves_out_its_symbols_and_buttons_before_a_word_wraps`, over the SIR sheet
+  at nine widths, `a_property_table_short_of_room_leaves_out_its_symbols_after_its_buttons`).
 - Parameters: the symbol of its type before each name (Number or Integer), its width in the Name
   column. One line per parameter (name, value as slider and field, Min, Max, Unit, ×) when the
-  section holds every column at its comfortable width, Value taking the room left over and Unit,
-  Value, Name, Min and Max giving up width in that order. Otherwise name, value and × on the first
-  line, Value giving up width before Name, and Min, Max and Unit on a second line after their
-  `caption`s. A refused field's message sits under its column.
+  section holds every column at its comfortable width without the symbols, Value taking the room
+  left over and Unit, Value, Name, Min and Max giving up width in that order. Otherwise name, value
+  and × on the first line, Value giving up width before Name, and Min, Max and Unit on a second
+  line after their `caption`s. The symbols show only while every column of the layout fits at its
+  natural width with them
+  (`the_parameters_lay_out_their_rows_alike_with_and_without_symbols`). A refused field's message
+  sits under its column.
 - Plotted measures (headed `PLOTTED`), buttons (`NAME_LABEL`, `BUTTON_DOES`) and events (no header):
   the words or the field take the room left over and give up width first.
 

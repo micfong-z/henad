@@ -97,6 +97,7 @@ Where the Sheet pane is too narrow for both, a menu at the end of each row holds
 A delete that would empty a formula the card cannot write again asks first.
 A symbol before each property and parameter, here and in the **Colours** selects, shows its type, such as a dot for a number and an arrow for a vector, as the Statistics tab shows them, and the type's name shows under the pointer.
 Uncheck **Show type symbols on sheets** in the View menu to hide them.
+A narrow Sheet pane leaves out the symbols and folds **Edit** and **×** into the menu before it wraps any words.
 
 **Parameters** lists the named numbers lines can use, each with its value, its range and an optional unit.
 The value on the sheet is the one the model keeps.

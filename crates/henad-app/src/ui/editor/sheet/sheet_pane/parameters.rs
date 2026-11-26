@@ -94,7 +94,8 @@ pub(super) fn typed_number(text: &str) -> Result<f64, String> {
 ///
 /// A table with room for every column at its comfortable width draws each parameter on one line, and Value takes the
 /// room left over. A narrower table draws Min, Max and Unit on a second line under each parameter, each after its small
-/// label, and short of room Value gives up width before Name.
+/// label, and short of room Value gives up width before Name. The symbol of each parameter's type shows while every
+/// column keeps its natural width with it, and never moves Min, Max and Unit to a second line.
 pub(super) fn parameters(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -108,36 +109,44 @@ pub(super) fn parameters(
             .iter()
             .map(|parameter| text_width(ui, &parameter.name) + 12.0)
             .fold(0.0, f32::max)
-            .min(PARAMETER_NAME_WIDTH + 20.0)
-            + type_symbol_width(ui.ctx());
-        let value = Column::new(
-            PARAMETER_COLUMNS[1],
-            SLIDER_WIDTH + ITEM_GAP + FIELD_WIDTH,
-            36.0 + ITEM_GAP + 48.0,
-        );
-        let name = Column::new(PARAMETER_COLUMNS[0], names, 64.0);
+            .min(PARAMETER_NAME_WIDTH + 20.0);
         let one_line = names + 120.0 + 2.0 * RANGE_WIDTH + UNIT_WIDTH + DELETE_WIDTH + 5.0 * super::layout::COLUMN_GAP;
         let wide = ui.available_width() >= one_line;
-        let (columns, give_up): (Vec<Column>, &[(usize, f32)]) = if wide {
-            (
-                vec![
-                    name,
-                    value,
-                    Column::new(PARAMETER_COLUMNS[2], RANGE_WIDTH, 36.0),
-                    Column::new(PARAMETER_COLUMNS[3], RANGE_WIDTH, 36.0),
-                    Column::new(PARAMETER_COLUMNS[4], UNIT_WIDTH, 44.0),
-                    Column::fixed(DELETE_WIDTH),
-                ],
-                &[(4, 0.0), (1, 0.0), (0, 0.0), (2, 0.0), (3, 0.0)],
-            )
-        } else {
-            (vec![name, value, Column::fixed(DELETE_WIDTH)], &[(1, 0.0), (0, 0.0)])
+        let columns = |names: f32| -> (Vec<Column>, &[(usize, f32)]) {
+            let value = Column::new(
+                PARAMETER_COLUMNS[1],
+                SLIDER_WIDTH + ITEM_GAP + FIELD_WIDTH,
+                36.0 + ITEM_GAP + 48.0,
+            );
+            let name = Column::new(PARAMETER_COLUMNS[0], names, 64.0);
+            if wide {
+                (
+                    vec![
+                        name,
+                        value,
+                        Column::new(PARAMETER_COLUMNS[2], RANGE_WIDTH, 36.0),
+                        Column::new(PARAMETER_COLUMNS[3], RANGE_WIDTH, 36.0),
+                        Column::new(PARAMETER_COLUMNS[4], UNIT_WIDTH, 44.0),
+                        Column::fixed(DELETE_WIDTH),
+                    ],
+                    &[(4, 0.0), (1, 0.0), (0, 0.0), (2, 0.0), (3, 0.0)],
+                )
+            } else {
+                (vec![name, value, Column::fixed(DELETE_WIDTH)], &[(1, 0.0), (0, 0.0)])
+            }
         };
         let id = ui.make_persistent_id("henad_sheet_parameters");
+        let symbol = type_symbol_width(ui.ctx());
+        let symbol = if symbol > 0.0 && Table::new(id, columns(names + symbol).0, 1, &[]).fits(ui.available_width()) {
+            symbol
+        } else {
+            0.0
+        };
+        let (columns, give_up) = columns(names + symbol);
         Table::new(id, columns, 1, give_up).show(ui, |ui, rows| {
             for parameter in &document.parameters {
                 rows.row(ui, &parameter.id, |row| {
-                    parameter_row(row, document, parameter, wide, pane, pending);
+                    parameter_row(row, document, parameter, wide, symbol > 0.0, pane, pending);
                     if let Some(trial) = trials.iter().find(|trial| trial.parameter == parameter.id) {
                         let kept = format_number(parameter.default).unwrap_or_default();
                         let tried = format_number(trial.value).unwrap_or_default();
@@ -332,14 +341,15 @@ impl ParameterFields<'_> {
     }
 }
 
-/// Draws the cells of `parameter` in `row`: its name, its value as a slider and a field, its Min, Max and Unit, and its
-/// delete button, with the message of a refused field under the field. Min, Max and Unit take columns of their own
-/// while `wide` holds, and a second line after their small labels otherwise.
+/// Draws the cells of `parameter` in `row`: the symbol of its type while `symbol` holds, its name, its value as a slider
+/// and a field, its Min, Max and Unit, and its delete button, with the message of a refused field under the field. Min,
+/// Max and Unit take columns of their own while `wide` holds, and a second line after their small labels otherwise.
 fn parameter_row(
     row: &mut super::layout::TableRow<'_>,
     document: &SheetDocument,
     parameter: &SheetParameter,
     wide: bool,
+    symbol: bool,
     pane: &mut PaneState,
     pending: &mut Vec<Pending>,
 ) {
@@ -351,7 +361,9 @@ fn parameter_row(
     let message = &mut pane.parameter_message;
     row.cell(0, |ui| {
         line(ui, |ui| {
-            type_symbol_ui(ui, TypeSymbol::of_parameter(parameter.parameter_type));
+            if symbol {
+                type_symbol_ui(ui, TypeSymbol::of_parameter(parameter.parameter_type));
+            }
             fields.name(ui, message, pending);
         });
     });

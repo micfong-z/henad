@@ -191,9 +191,12 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   each row, the theme's hover fill under the row under the pointer, and the delete button, a weak
   "×" text control, in a right-aligned last column. A table's columns give up width in an order
   its function's doc states, a long select or chip ends in an ellipsis with its words as the
-  tooltip, and a table that still does not fit scrolls sideways on its own. Every select of the
-  pane is the inline select with its list in an overlay (`select_within`, `select_list`), and the
-  pickers ("Choose a parameter", a chip's picker, "Choose a colour") are overlays too.
+  tooltip, and a table that still does not fit scrolls sideways on its own. A type's symbol and a
+  property row's Edit and × show only while every column keeps its natural width, so they never
+  wrap a word: short of room the row's ⋯ menu holds Edit and Delete, and the symbols go. Every
+  select of the pane is the inline select with its list in an overlay (`select_within`,
+  `select_list`), and the pickers ("Choose a parameter", a chip's picker, "Choose a colour") are
+  overlays too.
 - **A hue names a line's kind in one place.** The bar at the left of a card's row, and the square
   on its add button, take the kind's hue at step 500: Look around blue, Chance purple, Boolean
   yellow, Change green, Calculate gray, When and Repeat gray 100 (`widgets::kind_hue`, over
