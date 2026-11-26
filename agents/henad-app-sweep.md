@@ -71,7 +71,12 @@ fractions (`RangeFields::of`, `EditorSegment::of`), and a switch of form writes 
 (`the_editor_reads_percent_text_as_its_fractions`). The quick fills, the switches and the fields
 work from the row's descriptor: a `u32` or an `f32` marked integer (`takes_integers`) writes whole
 numbers (`number_text`, `quarter_step`), and its fields drag in whole steps
-(`an_integer_f32_fills_whole_numbers`). `SweepSession::start` refuses a sweep of the Editor's
+(`an_integer_f32_fills_whole_numbers`). Minimum, Maximum and Step (`range_fields`) read their
+numbers back from the row's text, which writes them rounded, so each takes its typed text once
+Enter or a loss of focus ends the edit (`update_while_editing(false)`). Under egui 0.36.2 a field
+that took each key lost a typed step of 0.05 at its first digit
+(`a_range_field_takes_a_number_typed_one_key_at_a_time`). `SweepSession::start` refuses a sweep
+of the Editor's
 sheet (`editor_sheet_of`) on native when a
 config of its plan, or a search's fixed values, is past a work budget (`sheet_capacity_refusal`):
 the

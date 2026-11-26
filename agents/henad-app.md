@@ -59,8 +59,11 @@ alone. The parser reads text such as "NaN" or "inf" as no number, and the value 
 `--set` refuses such text too. Each slider of the tab, `u32` included, takes its box's text when
 Enter or a loss of focus ends the edit (`update_while_editing(false)`). egui 0.36.2 drops a box's
 text once its value changes, and a snap per key would leave "9951" at World Width's minimum
-(`a_slider_takes_a_number_typed_one_key_at_a_time`). The app's other boxes read back the value
-they set, and keep egui's default. `seed.rs` draws the Seed row, `schedule.rs` the scheduled actions
+(`a_slider_takes_a_number_typed_one_key_at_a_time`). The Sweep tab's range fields do the same
+(`henad-app-sweep.md`). The app's other boxes read back the value they set and keep egui's
+default: the Pacing sliders, the History length box, the Sweep tab's fields, the graph editor's
+world, parameters, Repeat bound and literals, each set through its edit before the next frame.
+`seed.rs` draws the Seed row, `schedule.rs` the scheduled actions
 and `trial.rs` the preview mode. The Export
 tab's `mod.rs` draws the tab and writes the stat series and final state, `image.rs` captures the
 viewport and `metadata.rs` builds the run details. Save stats (`history_csv`) and Record

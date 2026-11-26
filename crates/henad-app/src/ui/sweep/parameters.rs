@@ -691,13 +691,21 @@ fn values_editor(ui: &mut egui::Ui, editor: &ValuesEditor<'_>, text: &mut String
 
 /// Draws the Minimum, Maximum and, for a stepped range, Step fields of the editor for parameter `descriptor`, writing
 /// a change into `text`.
+///
+/// A number typed into a field stays as typed while the field holds the focus, and goes into `text` when Enter or a
+/// loss of focus ends the edit.
 fn range_fields(ui: &mut egui::Ui, descriptor: &ParamDescriptor, segment: EditorSegment, text: &mut String) {
     let mut fields = RangeFields::of(text, descriptor);
     let (low, high) = kind_bounds(descriptor.kind());
     let whole = takes_integers(descriptor);
     let speed = ((high - low) / 200.0).max(if whole { 1.0 } else { 0.001 });
+    // A field reads its number back from `text`, which writes it rounded. egui drops the text of a field whose value
+    // changed since the last frame, so a field that took each key would lose a typed 0.05 at its first digit.
     fn number(value: &mut f64, range: std::ops::RangeInclusive<f64>, speed: f64, whole: bool) -> DragValue<'_> {
-        let drag = DragValue::new(value).range(range).speed(speed);
+        let drag = DragValue::new(value)
+            .range(range)
+            .speed(speed)
+            .update_while_editing(false);
         if whole { drag.fixed_decimals(0) } else { drag }
     }
     let mut changed = false;
@@ -838,8 +846,8 @@ mod tests {
 
     use super::{
         EditorSegment, LevelNoun, RangeFields, around_fill, both_ends_fill, bounds_text, format_hint,
-        options_button_text, options_text, picked_options, preview_note, preview_tooltip, row_note, segment_text,
-        values_editor_id, values_field_id, whole_range_fill,
+        options_button_text, options_text, picked_options, preview_note, preview_tooltip, range_fields, row_note,
+        segment_text, values_editor_id, values_field_id, whole_range_fill,
     };
     use crate::ui::sweep::draft::levels::levels_text;
     use crate::ui::sweep::draft::{DraftIssue, DraftSite, IssueKind, LevelPreview};
@@ -1184,5 +1192,48 @@ mod tests {
         let flag = ParamKind::Bool { default: false };
         assert_eq!(picked_options(&flag, "true"), [false, true]);
         assert_eq!(options_text(&super::option_names(&flag), &[true, false]), "false");
+    }
+
+    /// Returns `text` after `typed` is typed one key a frame into the range field that `tabs` presses of Tab reach,
+    /// Minimum first, of the range editor of a parameter of `kind`, and Enter pressed.
+    fn typed_into_range(kind: &ParamKind, text: &str, tabs: usize, typed: &str) -> String {
+        let descriptor = ParamDescriptor::new("rate", "Rate", kind.clone());
+        let context = egui::Context::default();
+        let mut text = text.to_owned();
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let frame = |text: &mut String, events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                events,
+                ..egui::RawInput::default()
+            };
+            let output = context.run_ui(input, |ui| range_fields(ui, &descriptor, EditorSegment::Range, text));
+            output.drop_without_applying_deltas();
+        };
+        frame(&mut text, Vec::new());
+        for _ in 0..tabs {
+            frame(&mut text, vec![key(egui::Key::Tab)]);
+        }
+        for character in typed.chars() {
+            frame(&mut text, vec![egui::Event::Text(character.to_string())]);
+        }
+        frame(&mut text, vec![key(egui::Key::Enter)]);
+        frame(&mut text, Vec::new());
+        text
+    }
+
+    /// A number typed one key a frame into Minimum, Maximum or Step stays as typed until Enter, though the text of the
+    /// range writes each number rounded: a step of 0.05 does not stop at the least step its first digit clamps to.
+    #[test]
+    fn a_range_field_takes_a_number_typed_one_key_at_a_time() {
+        assert_eq!(typed_into_range(&RATE, "0.1:0.5:0.1", 3, "0.05"), "0.1:0.5:0.05");
+        assert_eq!(typed_into_range(&RATE, "0.1:0.5:0.1", 2, "0.75"), "0.1:0.75:0.1");
+        assert_eq!(typed_into_range(&WIDTH, "100:1000:300", 1, "250"), "250:1000:300");
+        assert_eq!(typed_into_range(&WIDTH, "100:1000:300", 2, "2000"), "100:2000:300");
     }
 }

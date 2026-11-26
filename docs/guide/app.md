@@ -549,6 +549,7 @@ In the editor, **Values**, **Range** and **Range to draw from** pick a list, a r
 Only **Latin hypercube** and **Uniform random** enable **Range to draw from**.
 <span class="ui" markdown>Whole range</span>, <span class="ui" markdown>Both ends</span>, <span class="ui" markdown>Around current</span> and <span class="ui" markdown>Current value</span> fill in the whole range, its two ends, half, one and one and a half times the parameter's value in the <span class="ui" markdown>:material-tune: Parameters</span> tab, or that value alone.
 The editor writes into the field as you edit, and writes a list without spaces, as in `1,16384`.
+A number typed into **Minimum**, **Maximum** or **Step** takes effect when you press Enter or leave the box.
 For an integer parameter, including a sheet's whole number that can go below 0, the fills and the fields round to integers.
 A checkbox or dropdown parameter takes a menu of its options instead of the field, and writes `all` or the options checked.
 The menu's button reads **All options**, or lists the checked options.
