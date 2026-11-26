@@ -17,7 +17,8 @@
 use egui::{Context, Id, Modal, TextEdit};
 use henad_graph::sheet::ParsedSheet;
 use henad_graph::sheet::document::{
-    AgentKind, Edges, MadeOf, PropertyType, SheetDocument, SheetHeader, SheetWorld, StartRule, StartsAs,
+    AgentKind, ColorRule, ColorRuleKind, Edges, MadeOf, PropertyType, SheetDocument, SheetHeader, SheetWorld,
+    StartRule, StartsAs,
 };
 use henad_graph::sheet::edit::{IdSpace, SheetBuilder, SheetEdit, mint_id};
 use henad_graph::sheet::sentence::{
@@ -237,7 +238,7 @@ pub fn blank_model(name: &str) -> SheetDocument {
 }
 
 /// Returns a blank model of agents named `name`: 1000 agents called Agent in a world 100 by 100 that wraps around, each
-/// with a Position that starts anywhere at random and a Heading.
+/// with a Position that starts anywhere at random and a Heading, coloured by their heading.
 ///
 /// The model's id is minted from its name, as [`blank_model`] mints it.
 pub fn blank_agent_model(name: &str) -> SheetDocument {
@@ -262,12 +263,16 @@ pub fn blank_agent_model(name: &str) -> SheetDocument {
             starts_as: Some(Box::new(StartsAs::new(StartRule::Anywhere))),
         })?;
         builder.apply(SheetEdit::AddProperty {
-            thing: kind,
+            thing: kind.clone(),
             name: HEADING_KIND.to_owned(),
             property_type: PropertyType::Heading,
+        })?;
+        builder.apply(SheetEdit::SetColorRule {
+            thing: kind,
+            rule: Some(ColorRule::new(ColorRuleKind::ByHeading)),
         })
     })();
-    // The commands run on a fresh kind of agent, which takes all three.
+    // The commands run on a fresh kind of agent, which takes all four.
     match built {
         Ok(_) => builder.into_document(),
         Err(_) => document,

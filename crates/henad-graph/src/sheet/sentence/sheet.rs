@@ -920,6 +920,10 @@ pub const COLOR_GROUND_BY: &str = "Colour ground by";
 /// Note under agents coloured by their heading.
 pub const BY_HEADING_NOTE: &str = "Each agent takes one of eight hues by the direction it last moved in.";
 
+/// Option of a Colours select that colours by no property: the cells drawn black, the agents white, and the ground not
+/// drawn.
+pub const COLOR_BY_NOTHING: &str = "None";
+
 /// Kind of a measure that counts the agents in a state.
 pub const COUNT_AGENTS_MEASURE: &str = "Number of agents in a state";
 

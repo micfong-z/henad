@@ -164,7 +164,7 @@ and × named `remove_measure_name`, then the measure form (`MeasureForm`: `NEW_M
 `COUNT_MEASURE` and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME` and
 `MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages, and an average reads
 `{ my = <property> }` and takes the next of `MEASURE_COLORS`). Colours: "Colour cells by" a select
-of every property (the rule's, else the first States property, else the first), `color_rule_edit`
+of every property and None (`colors_of` in `agents/henad-app-sheet-pane.md`), `color_rule_edit`
 writing `by_state` or `shaded_rule` (blue from 0 to 1, or the previous shading's hue and ends),
 swatches under a States property, and `shading_ui` for a Number property: `SHADE` select of
 `SHADE_COLORS` over `ShadeHue::ALL`, a gradient of `ShadeHue::ends` in 16 bands, and `SHADE_FROM`

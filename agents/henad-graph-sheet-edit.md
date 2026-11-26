@@ -20,12 +20,15 @@ by `to_text` failing after it and not before, so the history's texts always writ
 text passes `MAX_SHEET_BYTES` when the text before it did not is refused, so they also read back.
 `SheetEditError` is `Missing`, `Invalid`, `Taken` (a name of the same kind, case aside, or an id)
 and `Reserved` (the id). Commands: the sheet's name and purpose, `SetWorld`, `SetTime`;
-`AddProperty` (the first States property of a kind of thing with no colour rule colours it by
-state), `SetPropertyType` (clears every reference to the property and its states as a delete does,
-drops a colour rule over it, empties its states, start and marks, keeps its place and id, and
-colours its thing by state again when it becomes a States property of a thing with no colour rule;
-the same type changes nothing), `AddState` (the next of `STATE_COLORS` after the property's states,
-dark grey, blue, orange, purple and on, and `PALETTE_COLORS` holds the same
+`AddProperty` (the first States property of a kind of thing with no colour rule, or of agents
+coloured by heading, colours it by state), `SetPropertyType` (clears every reference to the property
+and its states as a delete does, drops a colour rule over it, empties its states, start and marks,
+keeps its place and id, and colours its thing by state again when it becomes a States property of a
+thing with no colour rule or coloured by heading; the same type changes nothing; a Heading deleted
+or given another kind drops its agents' rule by heading, which names no property,
+`a_rule_by_heading_gives_way_to_states_and_goes_with_the_heading`), `AddState` (the next of
+`STATE_COLORS` after the property's states, dark grey, blue, orange, purple and on, and
+`PALETTE_COLORS` holds the same
 twelve in the order of `sentence::COLOR_NAMES`), `AddParameter`, `SetParameter` (min, max, default,
 step, unit and means as one edit), `AddMeasure` (a count in a state takes the state's colour, else
 the next of `MEASURE_COLORS`), `AddEvent`, `AddButton` (start again over a kind of thing, or run

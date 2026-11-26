@@ -16,11 +16,11 @@ use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_EVENT, ADD_GROUND_PROPERTY_NAME, ADD_MEASURE, ADD_PARAMETER, AGENT_COUNT_NAME, AGENT_MAX_NAME,
     AGENT_NAME_FIELD, AGENT_NAME_MISSING, AGENTS_IN_OPEN_SPACE, ANYWHERE_AT_RANDOM, ARROW_KIND, BUTTON_NAME_FIELD,
-    BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE, CREATE_PARAMETER, DONE,
-    EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START, KEPT_OUT_OF_RANGE, NEW_PARAMETER,
-    NUMBER_KIND, PAINTED, SHARE_LIMITS_OUTSIDE, START_AGAIN_FOR, STATES_KIND, YES_NO_KIND, add_property_name,
-    blocked_state_name, count_agents_measure, event_name_taken, integer_up_to, kept_limits_outside_note, marks_name,
-    run_once, value_field_name,
+    BY_HEADING_NOTE, CANCEL, COLOR_AGENTS_BY, COLOR_BY_NOTHING, COLOR_GROUND_BY, COUNT_AGENTS_MEASURE,
+    CREATE_PARAMETER, DONE, EVENT_NAME_FIELD, EVENT_NAME_MISSING, EVENTS_EMPTY, GROUND_EMPTY, HEADING_START,
+    KEPT_OUT_OF_RANGE, NEW_PARAMETER, NUMBER_KIND, PAINTED, SHARE_LIMITS_OUTSIDE, START_AGAIN_FOR, STATES_KIND,
+    YES_NO_KIND, add_property_name, blocked_state_name, count_agents_measure, event_name_taken, integer_up_to,
+    kept_limits_outside_note, marks_name, run_once, value_field_name,
 };
 use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP};
 
@@ -31,7 +31,8 @@ use crate::tests::panes::{
     new_blank_agents, sheet, sheet_mut, shows_or_notice, starter_document, text, type_into,
 };
 use crate::tests::support::{
-    Harness, Node, ScratchFolder, align_with_starter, set_of, wait_within, without_card_lines,
+    Harness, Node, ScratchFolder, align_with_starter, assert_built, set_of, settle_preview, step_past, wait_within,
+    without_card_lines,
 };
 use crate::ui::editor::EditorModel;
 use crate::ui::editor::sheet::SheetEditor;
@@ -134,6 +135,101 @@ fn a_blank_agent_model_builds_the_random_walk_sheet_by_accessible_names() {
         expected.to_text().expect("the starter writes"),
         "the rebuild equals the starter without its card lines"
     );
+}
+
+/// A blank model of agents is coloured by heading from the start, with no pick under Colours: the sheet holds the
+/// rule, the select shows Heading and its note, the lowered graph draws each agent by its heading, and the preview
+/// builds and steps with it on the device, the Heading not yet moved.
+#[test]
+fn a_blank_agent_model_is_coloured_by_heading_without_a_pick() {
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    let document = sheet(&harness).document();
+    let kind = document.agents[0].id.clone();
+    assert_eq!(
+        document.colors.get(&kind).map(|rule| rule.rule),
+        Some(ColorRuleKind::ByHeading)
+    );
+    assert_eq!(field_value(&mut harness, COLOR_AGENTS_BY), "Heading");
+    assert!(shows_or_notice(&mut harness, BY_HEADING_NOTE));
+    let text = sheet(&harness).document().to_text().expect("the sheet writes");
+    let lowered = SheetFile::parse(&text).expect("the sheet lowers");
+    // The palette of the eight compass colours that the lowering of a rule by heading adds.
+    assert!(
+        lowered
+            .lowered()
+            .document()
+            .palettes
+            .iter()
+            .any(|palette| palette.id == "by_heading"),
+        "the preview draws the agents by their heading"
+    );
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
+    assert_built(&harness.app, "the preview of a blank model of agents");
+    step_past(&mut harness.app, 0);
+    assert!(harness.app.fault.is_none(), "{:?}", harness.app.fault);
+}
+
+/// Returns whether the open select of the Sheet pane offers [`COLOR_BY_NOTHING`].
+fn offers_nothing(harness: &mut Harness) -> bool {
+    harness
+        .settle()
+        .iter()
+        .any(|node| node.label == COLOR_BY_NOTHING && node.role != Role::Label && node.bounds.is_some())
+}
+
+/// The Colours selects show what the world draws, None while no property colours a thing, and offer None wherever no
+/// rule leaves a thing coloured by no property. Choosing None takes the rule out.
+#[test]
+fn the_colours_selects_show_and_offer_none_where_no_property_colours() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    harness.open_sheet(&starter_document("boids.toml").to_text().expect("the starter writes"));
+    let rule = |harness: &Harness, thing: &str| sheet(harness).document().colors.get(thing).map(|rule| rule.rule);
+    assert_eq!(field_value(&mut harness, COLOR_AGENTS_BY), "Heading");
+    // With the rule taken out the birds are drawn white, and the select no longer shows the Heading.
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetColorRule {
+            thing: "bird".to_owned(),
+            rule: None,
+        },
+    );
+    assert_eq!(field_value(&mut harness, COLOR_AGENTS_BY), COLOR_BY_NOTHING);
+    assert!(!shows_or_notice(&mut harness, BY_HEADING_NOTE));
+    click(&mut harness, COLOR_AGENTS_BY);
+    click_control(&mut harness, "Heading");
+    assert_eq!(rule(&harness, "bird"), Some(ColorRuleKind::ByHeading));
+    assert!(shows_or_notice(&mut harness, BY_HEADING_NOTE));
+    click(&mut harness, COLOR_AGENTS_BY);
+    assert!(offers_nothing(&mut harness));
+    click_control(&mut harness, COLOR_BY_NOTHING);
+    assert_eq!(rule(&harness, "bird"), None);
+    assert_eq!(field_value(&mut harness, COLOR_AGENTS_BY), COLOR_BY_NOTHING);
+
+    // The ants take the colours of Cargo, their first States property, with no rule as with one, so None is not
+    // offered. The ground with no rule is not drawn, and its select offers None.
+    harness.open_sheet(&starter_document("ants.toml").to_text().expect("the starter writes"));
+    click(&mut harness, COLOR_AGENTS_BY);
+    assert!(!offers_nothing(&mut harness));
+    harness.press(Key::Escape, Modifiers::NONE);
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::SetColorRule {
+            thing: "ant".to_owned(),
+            rule: None,
+        },
+    );
+    assert_eq!(field_value(&mut harness, COLOR_AGENTS_BY), "Cargo");
+    assert_eq!(field_value(&mut harness, COLOR_GROUND_BY), "Ground");
+    click(&mut harness, COLOR_GROUND_BY);
+    assert!(offers_nothing(&mut harness));
+    click_control(&mut harness, COLOR_BY_NOTHING);
+    assert_eq!(rule(&harness, "ground"), None);
+    assert_eq!(field_value(&mut harness, COLOR_GROUND_BY), COLOR_BY_NOTHING);
 }
 
 #[test]

@@ -14,9 +14,9 @@ use super::sheet_writer::{RENAME_HUNKS, STEER_REORDER_HUNKS, WANING_HUNKS, asser
 use crate::keys::KeyStream;
 use crate::sheet::check;
 use crate::sheet::document::{
-    BlockedState, ButtonStepRule, CardRuns, ChooseRow, CompareTest, LineKind, Marks, MeasureRule, PaintedShape,
-    ParameterType, PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue,
-    Slot, StartRule, StartsAs, StartsAsRow,
+    BlockedState, ButtonStepRule, CardRuns, ChooseRow, ColorRuleKind, CompareTest, LineKind, Marks, MeasureRule,
+    PaintedShape, ParameterType, PropertyType, ShapeKind, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetTime,
+    SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
 };
 use crate::sheet::edit::{
     IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
@@ -1493,6 +1493,75 @@ fn colours_follow_their_states_and_new_states_take_the_defaults() {
         Some(STATE_COLORS[1])
     );
     assert_eq!(measure, ["infected"]);
+}
+
+/// A States property colours agents coloured by their heading, as it colours agents with no colour rule, and a Heading
+/// deleted or given another kind takes the agents' rule by heading with it. A rule by state stays.
+#[test]
+fn a_rule_by_heading_gives_way_to_states_and_goes_with_the_heading() {
+    let rule_of = |builder: &SheetBuilder| {
+        builder
+            .document()
+            .colors
+            .get("bird")
+            .map(|rule| (rule.rule, rule.property.clone()))
+    };
+    let mut builder = builder_of("boids.toml");
+    assert_eq!(rule_of(&builder), Some((ColorRuleKind::ByHeading, None)));
+    let made = run(
+        &mut builder,
+        SheetEdit::AddProperty {
+            thing: "bird".to_owned(),
+            name: "Mood".to_owned(),
+            property_type: PropertyType::States,
+        },
+    );
+    assert_eq!(rule_of(&builder), Some((ColorRuleKind::ByState, Some(made[0].clone()))));
+    run(
+        &mut builder,
+        SheetEdit::AddProperty {
+            thing: "bird".to_owned(),
+            name: "Age".to_owned(),
+            property_type: PropertyType::States,
+        },
+    );
+    assert_eq!(
+        rule_of(&builder),
+        Some((ColorRuleKind::ByState, Some(made[0].clone()))),
+        "a second States property leaves the first one's colours"
+    );
+    run(
+        &mut builder,
+        SheetEdit::Delete {
+            item: SheetItem::Property("heading".to_owned()),
+        },
+    );
+    assert_eq!(
+        rule_of(&builder),
+        Some((ColorRuleKind::ByState, Some(made[0].clone()))),
+        "a rule by state reads no Heading"
+    );
+
+    let mut builder = builder_of("boids.toml");
+    run(
+        &mut builder,
+        SheetEdit::Delete {
+            item: SheetItem::Property("heading".to_owned()),
+        },
+    );
+    assert_eq!(rule_of(&builder), None, "the agents have no Heading to colour them by");
+    // The boids lower with no Heading.
+    lowered(&write(builder.document()));
+
+    let mut builder = builder_of("boids.toml");
+    run(
+        &mut builder,
+        SheetEdit::SetPropertyType {
+            property: "heading".to_owned(),
+            property_type: PropertyType::Number,
+        },
+    );
+    assert_eq!(rule_of(&builder), None);
 }
 
 #[test]

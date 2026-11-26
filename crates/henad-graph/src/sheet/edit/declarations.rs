@@ -73,9 +73,15 @@ impl Draft {
         Ok(vec![id])
     }
 
-    /// Colours `thing` by the states of its property `property`, when `thing` has no colour rule.
+    /// Colours `thing` by the states of its property `property`, when `thing` has no colour rule or is coloured by its
+    /// heading.
     fn color_by_state(&mut self, thing: &str, property: &str) {
-        if !self.document.colors.contains_key(thing) {
+        let replaced = self
+            .document
+            .colors
+            .get(thing)
+            .is_none_or(|rule| rule.rule == ColorRuleKind::ByHeading);
+        if replaced {
             let mut rule = ColorRule::new(ColorRuleKind::ByState);
             rule.property = Some(property.to_owned());
             self.document.colors.insert(thing.to_owned(), rule);
@@ -83,7 +89,17 @@ impl Draft {
     }
 
     /// Clears every reference to the property `id` and to its states.
+    ///
+    /// For a Heading, it also drops the colour rule by heading of its kind of agents, which reads no other property.
     fn clear_property_references(&mut self, id: &str) {
+        let heading = self
+            .property(id)
+            .is_some_and(|property| property.property_type == PropertyType::Heading);
+        if heading && let Some(thing) = self.thing_of_property(id) {
+            self.document
+                .colors
+                .retain(|colored, rule| *colored != thing || rule.rule != ColorRuleKind::ByHeading);
+        }
         // The states go first, so every chip of a state of the property is cleared with them.
         let states: Vec<String> = self
             .property(id)

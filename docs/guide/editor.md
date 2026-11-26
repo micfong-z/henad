@@ -99,7 +99,8 @@ A parameter named after a column of sweep results, such as Population, takes the
 **Measures** plots a number worked out from every cell: turn on **Plot** beside a state to plot how many cells are in it.
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
-**Colours** chooses the property that colours the cells in the Viewport.
+**Colours** chooses the property that colours the cells in the Viewport, or **None** for black cells, white agents or no ground.
+With no other choice, cells and agents take the colours of their first States property, and a new model of agents is coloured by heading.
 **Buttons** adds a button beside the world, either to start again or to run its own short card of lines once on every cell.
 
 ### The Card pane

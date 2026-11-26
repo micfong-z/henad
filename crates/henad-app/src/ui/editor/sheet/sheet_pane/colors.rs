@@ -7,14 +7,13 @@ use henad_graph::sheet::document::{
 };
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::format_number;
-use henad_graph::sheet::sentence::{BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_GROUND_BY};
+use henad_graph::sheet::sentence::{BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_BY_NOTHING, COLOR_GROUND_BY};
 use henad_graph::sheet::sentence::{
     COLOR_CELLS_BY, DARKEST_NAME, LIGHTEST_NAME, SHADE, SHADE_COLORS, SHADE_DARK_TO, SHADE_ENDS_EQUAL, SHADE_FROM,
     SHADE_LIGHT,
 };
 
 use super::layout::{Form, ITEM_GAP, text_width, wrapped_line};
-use super::measures::property_select;
 use super::parameters::typed_number;
 use super::starts::STATE_SWATCH_WIDTH;
 use super::{FIELD_WIDTH, GRADIENT_BANDS, GRADIENT_WIDTH, Pending, SWATCH_SIDE, measured_thing, select};
@@ -85,11 +84,36 @@ pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending
     }
 }
 
+/// Returns the property that the world colours `thing` by, among `properties`, the properties of `thing` that can
+/// colour, or `None` when no property colours `thing`.
+///
+/// That is the property of the colour rule of `thing`, or the Heading for a rule by heading. With no rule, the cells
+/// and the agents take the colours of their first States property, and the ground is not drawn.
+fn drawn_by<'a>(document: &SheetDocument, thing: &str, properties: &[&'a SheetProperty]) -> Option<&'a SheetProperty> {
+    let first_of = |kind: PropertyType| {
+        properties
+            .iter()
+            .find(|property| property.property_type == kind)
+            .copied()
+    };
+    match document.colors.get(thing) {
+        Some(rule) if rule.rule == ColorRuleKind::ByHeading => first_of(PropertyType::Heading),
+        Some(rule) => {
+            let id = rule.property.as_deref()?;
+            properties.iter().find(|property| property.id == id).copied()
+        }
+        None if thing == GROUND_ID => None,
+        None => first_of(PropertyType::States),
+    }
+}
+
 /// Draws what colours `thing` as rows of `form`: `label` and a select of its properties, with the states' colours under
 /// a States property, the note on a heading, and the hue and the range of the shading of a Number property.
 ///
-/// With no rule, or a rule over no property of `thing`, the select shows the first States property, or else the first
-/// property that can colour.
+/// The select shows the property the world colours `thing` by ([`drawn_by`]), or [`COLOR_BY_NOTHING`]. It offers
+/// [`COLOR_BY_NOTHING`] first, which takes the rule out, wherever no rule leaves `thing` coloured by no property: on
+/// the ground, and on cells or agents with no States property. Nothing shows while `thing` has no property that can
+/// colour.
 fn colors_of(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -108,41 +132,49 @@ fn colors_of(
             )
         })
         .collect();
+    if properties.is_empty() {
+        return;
+    }
     let rule = document.colors.get(thing);
-    let ruled = rule.and_then(|rule| {
-        if rule.rule == ColorRuleKind::ByHeading {
-            return properties
-                .iter()
-                .find(|property| property.property_type == PropertyType::Heading);
+    let chosen = drawn_by(document, thing, &properties);
+    let nothing_offered = thing == GROUND_ID
+        || !properties
+            .iter()
+            .any(|property| property.property_type == PropertyType::States);
+    // The options in the order the list shows them, `None` for no property.
+    let options: Vec<Option<&SheetProperty>> = nothing_offered
+        .then_some(None)
+        .into_iter()
+        .chain(properties.iter().map(|property| Some(*property)))
+        .collect();
+    form.row(ui, label, |ui| {
+        let items: Vec<OverlayItem<'_>> = options
+            .iter()
+            .map(|option| OverlayItem {
+                label: option.map_or(COLOR_BY_NOTHING, |property| property.name.as_str()),
+                current: option.map(|property| &property.id) == chosen.map(|property| &property.id),
+                ..OverlayItem::default()
+            })
+            .collect();
+        let shown = chosen.map_or(COLOR_BY_NOTHING, |property| property.name.as_str());
+        let (_, picked) = select(ui, ("henad_sheet_color_by", thing), label, shown, &items);
+        let Some(&picked) = picked.and_then(|index| options.get(index)) else {
+            return;
+        };
+        if picked.map(|property| &property.id) == chosen.map(|property| &property.id) {
+            return;
         }
-        let id = rule.property.as_deref()?;
-        properties.iter().find(|property| property.id == id)
+        pending.push(Pending::one(match picked {
+            Some(property) => color_rule_edit(thing, property, rule),
+            None => SheetEdit::SetColorRule {
+                thing: thing.to_owned(),
+                rule: None,
+            },
+        }));
     });
-    let chosen = ruled
-        .or_else(|| {
-            properties
-                .iter()
-                .find(|property| property.property_type == PropertyType::States)
-        })
-        .or(properties.first());
-    let Some(&chosen) = chosen else {
+    let Some(chosen) = chosen else {
         return;
     };
-    form.row(ui, label, |ui| {
-        let picked = property_select(
-            ui,
-            &format!("henad_sheet_color_by_{thing}"),
-            label,
-            &properties,
-            ruled.map(|property| property.id.as_str()),
-            &chosen.name,
-        );
-        if let Some(picked) = picked
-            && let Some(property) = properties.iter().find(|property| property.id == picked)
-        {
-            pending.push(Pending::one(color_rule_edit(thing, property, rule)));
-        }
-    });
     match chosen.property_type {
         PropertyType::States => {
             form.under(ui, |ui| {

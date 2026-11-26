@@ -11,9 +11,9 @@ use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::relations::CardRelations;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ADD_MEASURE, ADD_PROPERTY, ADD_STATE, AGENT_COUNT_NAME, AGENT_NAME_FIELD, AGENTS_IN_OPEN_SPACE,
-    AVERAGE_MEASURE, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, COLOR_AGENTS_BY, COLOR_CELLS_BY,
-    CREATE_PARAMETER, DONE, DrawKind, MEASURE_PROPERTY_NAME, NEW_PARAMETER, START_AGAIN_FOR, Sentences, TICK_UNIT_NAME,
-    run_once, start_again_for, tick_unit_choice,
+    AVERAGE_MEASURE, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, COLOR_CELLS_BY, CREATE_PARAMETER, DONE,
+    DrawKind, MEASURE_PROPERTY_NAME, NEW_PARAMETER, START_AGAIN_FOR, Sentences, TICK_UNIT_NAME, run_once,
+    start_again_for, tick_unit_choice,
 };
 use henad_graph::sheet::{ParsedSheet, SheetFile};
 
@@ -566,15 +566,15 @@ pub fn add_new_outbreak(harness: &mut Harness, seen: &mut Seen) {
     pick(harness, seen, "Choose a chance", "Initial infected");
 }
 
-/// Sets the world to 1000 by 1000, names the agents `agents` with `count` of them at the start, colours them by
-/// heading and types the purpose of `starter`.
+/// Sets the world to 1000 by 1000, names the agents `agents` with `count` of them at the start and types the purpose
+/// of `starter`.
+///
+/// A blank model of agents is coloured by heading from the start, as the starters of agents with no states are.
 pub fn agent_sheet(harness: &mut Harness, starter: &SheetDocument, agents: &str, count: &str) {
     enter_into(harness, "Width in cells", "1000");
     enter_into(harness, "Height in cells", "1000");
     enter_into(harness, AGENT_NAME_FIELD, agents);
     enter_into(harness, AGENT_COUNT_NAME, count);
-    click(harness, COLOR_AGENTS_BY);
-    click_control(harness, "Heading");
     type_into(harness, "Purpose", starter.sheet.purpose.as_deref().unwrap_or_default());
     harness.press(Key::Escape, Modifiers::NONE);
     harness.settle();

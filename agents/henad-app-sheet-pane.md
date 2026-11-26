@@ -118,10 +118,14 @@ Enter). Measures count agents (`COUNT_AGENTS_MEASURE`, `COUNT_AGENTS_LEAD`,
 `count_agents_measure`) and average a Number, Integer or Position. Colours draw `colors_of` for
 the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the ground
 (`COLOR_GROUND_BY`, once it has a property), offering States, Number, Integer and Heading
-(`ByHeading` with `BY_HEADING_NOTE`). The select's choice compares with the rule's own property, so
-a thing with no rule takes one from the property it shows. Buttons act on `measured_thing`: Run once
-reads `run_once(thing_word)`, Start again offers the thing's properties with a start and the
-ground's, `button_edit` keeps a button's set everywhere steps and puts its start-again step in the
-old one's place, and `button_does` joins steps that set to one value
+(`ByHeading` with `BY_HEADING_NOTE`). The select shows what the world draws (`drawn_by`): the rule's
+property, or with no rule the first States property of the cells or the agents, and otherwise
+`COLOR_BY_NOTHING` ("None"). It offers None first, which takes the rule out, on the ground and on
+cells or agents with no States property, where no rule draws them black, white or not at all. The
+current item is the one shown, and choosing it changes nothing
+(`the_colours_selects_show_and_offer_none_where_no_property_colours`). Buttons act on
+`measured_thing`: Run once reads `run_once(thing_word)`, Start again offers the thing's properties
+with a start and the ground's, `button_edit` keeps a button's set everywhere steps and puts its
+start-again step in the old one's place, and `button_does` joins steps that set to one value
 (`set_everywhere`, "Set To food and To home to 0 everywhere").
 

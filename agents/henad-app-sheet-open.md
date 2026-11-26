@@ -79,4 +79,6 @@ loads `blank_model(name)`: 100 by 100 cells that wrap, the id minted from the na
 card. `create_blank_agent_model` loads
 `blank_agent_model(name)`: the same world made of agents, one kind `agent` named `BLANK_AGENT_NAME`
 with 1000 agents and room for a million, a Position that starts anywhere at random (through
-`SheetBuilder`, so its start takes a key) and a Heading.
+`SheetBuilder`, so its start takes a key) and a Heading, and a colour rule by heading, so the
+preview draws the agents by heading with no pick under Colours
+(`a_blank_agent_model_is_coloured_by_heading_without_a_pick`).
