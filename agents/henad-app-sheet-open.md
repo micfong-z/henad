@@ -21,12 +21,12 @@ report lacks, each an error or a warning notice (`NoticeKind::of`) of the messag
 and column point into the sheet's text, which sheet mode never shows. A waiting preview reads the
 sheet's `PREVIEW_WAITS`, which names Offload. A problem of a line the card shows sits under it on
 the card. With no outcome, the list says to press Apply only while Apply would take the sheet: a
-sheet that shows nothing reads `WORLD_EMPTY` alone, and a sheet with an error reads
-`FIX_THEN_APPLY`, or `FIX_CARD_THEN_APPLY` when no error is listed below and one sits on the card. A
-refusal whose every error sits on the card reads `NOT_APPLIED_FIX_CARD` in place of the refused
-line. After an `installed` outcome, `lines_left_out` gives the lines the report skips, each with its
-card's button and its number there, and `sentence::lines_not_run` names them as a warning ("Line 2
-is not run yet. The model runs without it.").
+sheet that shows nothing reads `WORLD_EMPTY` alone, with Apply disabled (`apply_refusal`), and a
+sheet with an error reads `FIX_THEN_APPLY`, or `FIX_CARD_THEN_APPLY` when no error is listed below
+and one sits on the card. A refusal whose every error sits on the card reads `NOT_APPLIED_FIX_CARD`
+in place of the refused line. After an `installed` outcome, `lines_left_out` gives the lines the
+report skips, each with its card's button and its number there, and `sentence::lines_not_run` names
+them as a warning ("Line 2 is not run yet. The model runs without it.").
 (`the_apply_line_asks_for_fixes_while_apply_would_refuse`,
 `applying_a_sheet_with_a_line_not_run_names_the_line`,
 `a_preview_at_the_model_s_own_size_names_no_size_for_apply`.) While `build_replays_preview` holds,

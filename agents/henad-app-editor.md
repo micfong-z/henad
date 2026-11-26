@@ -95,12 +95,14 @@ from a detached run or from rendering. Apply returns before `poll_build`'s frame
 only when the Editor claims a fault during the call, as it can for a browser's inline build. In a
 browser `catching_on` pushes no scopes, and the device reports a refused rule through the
 `FaultSink` a frame or more after the build. Without compute, Apply is disabled and the tab reads
-`NO_COMPUTE`. Apply builds no model that Build refuses (`build_refusal`: the sizes the device
-lacks at the next build's values, a Seed field that does not parse, values the setup rejects), and
-reports the reason as `ApplyOutcome::BuildRefused`, which reads as a fault does ("Model build
-failed. Fix the problem below."). An outcome that would ask for a Rebuild or a Build that is
-disabled (`rebuild_refusal`, `build_refusal`) reads `BuildRefused` with the reason as well, the
-Rebuild model modal still open (`an_apply_that_build_refuses_names_the_reason`).
+`NO_COMPUTE`. `apply_refusal` also disables Apply while the Editor is empty (`EMPTY_EDITOR`) and
+for a sheet that shows nothing (`WORLD_EMPTY`), a world of cells with no property, which
+`ModelFile::parse` always refuses. Apply builds no model that Build refuses (`build_refusal`: the
+sizes the device lacks at the next build's values, a Seed field that does not parse, values the
+setup rejects), and reports the reason as `ApplyOutcome::BuildRefused`, which reads as a fault does
+("Model build failed. Fix the problem below."). An outcome that would ask for a Rebuild or a Build
+that is disabled (`rebuild_refusal`, `build_refusal`) reads `BuildRefused` with the reason as well,
+the Rebuild model modal still open (`an_apply_that_build_refuses_names_the_reason`).
 `settle_outcome` takes the reason the button gives now (`rebuild_refusal` while the modal is open,
 else `build_refusal`, read only for a `BuildRefused` outcome): it names a new reason, turns
 `AwaitingRebuild` or `Installed` once the reason is gone, is dropped once Build builds another

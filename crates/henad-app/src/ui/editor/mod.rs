@@ -940,7 +940,7 @@ struct HeaderShown<'a> {
 /// Draws the header of the Editor tab: its buttons with Apply at the right end, the name row of the model, and the
 /// banner of a copy converted from a sheet. A pressed button sets `request`.
 fn header_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>, request: &mut Option<EditorRequest>) {
-    let compute = shown.compute;
+    let refusal = apply_refusal(shown.compute, &panel.model);
     Panel::top("henad_editor_header")
         .resizable(false)
         .frame(Frame::NONE.inner_margin(Margin {
@@ -950,7 +950,7 @@ fn header_ui(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>
             bottom: 6,
         }))
         .show(ui, |ui| {
-            header_buttons(ui, compute, shown.empty, request);
+            header_buttons(ui, refusal, shown.empty, request);
             ui.add_space(4.0);
             name_row(ui, panel, shown, request);
         });
@@ -1073,8 +1073,9 @@ fn name_row(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>,
 /// Draws the header buttons, each setting `request` when pressed.
 ///
 /// The buttons are New model, a hairline, Open model and Save model, then Apply, the one primary button, at the right
-/// end. The first three wrap onto a second row when the tab is too narrow for them.
-fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut Option<EditorRequest>) {
+/// end. The first three wrap onto a second row when the tab is too narrow for them. Apply is disabled with `refusal`
+/// as its tooltip, and Save model while the Editor is `empty`.
+fn header_buttons(ui: &mut egui::Ui, refusal: Option<&'static str>, empty: bool, request: &mut Option<EditorRequest>) {
     let apply_text = format!("{MDI_CHECK} Apply");
     let apply_width = button_width(ui, &apply_text);
     ui.horizontal_top(|ui| {
@@ -1085,7 +1086,7 @@ fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut O
             |ui| file_buttons(ui, empty, request),
         );
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-            apply_button(ui, compute, empty, apply_text, request);
+            apply_button(ui, refusal, apply_text, request);
         });
     });
 }
@@ -1137,16 +1138,23 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
     }
 }
 
-/// Draws Apply, the primary button of the header, showing `text` and setting `request` when pressed. It is disabled
-/// with its reason as the tooltip without compute or while the Editor holds no model.
-fn apply_button(ui: &mut egui::Ui, compute: bool, empty: bool, text: String, request: &mut Option<EditorRequest>) {
-    let refusal = if !compute {
+/// Returns the reason Apply is disabled, `None` while it is enabled: a device without compute, an Editor that holds no
+/// model, or a sheet that shows nothing, a world of cells with no property, which Apply always refuses.
+fn apply_refusal(compute: bool, model: &EditorModel) -> Option<&'static str> {
+    if !compute {
         Some(NO_COMPUTE)
-    } else if empty {
+    } else if model.is_empty() {
         Some(EMPTY_EDITOR)
+    } else if model.sheet().is_some_and(sheet::SheetEditor::shows_nothing) {
+        Some(WORLD_EMPTY)
     } else {
         None
-    };
+    }
+}
+
+/// Draws Apply, the primary button of the header, showing `text` and setting `request` when pressed. It is disabled
+/// with `refusal` as the tooltip, as [`apply_refusal`] returns it.
+fn apply_button(ui: &mut egui::Ui, refusal: Option<&'static str>, text: String, request: &mut Option<EditorRequest>) {
     let apply = add_button(ui, refusal.is_none(), filled_button(text), "Apply")
         .on_hover_or_focus_text("Check model and install it")
         .on_disabled_hover_text(refusal.unwrap_or_default());

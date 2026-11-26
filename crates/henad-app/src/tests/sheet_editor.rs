@@ -20,9 +20,10 @@ use henad_explore::result_set::ResultSet;
 use henad_explore::sweep::{Provenance, SweepOptions, run_spec};
 use henad_graph::sheet::check::check;
 use henad_graph::sheet::document::{
-    LineKind, MadeOf, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, StartRule,
-    StartsAs,
+    CELLS_ID, LineKind, MadeOf, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty,
+    SheetValue, Slot, StartRule, StartsAs,
 };
+use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{
     A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, ADVANCED_HEADING, BY_CHANCE, CANCEL, CREATE, FIX_CARD_THEN_APPLY,
     FIX_THEN_APPLY, GRID_RULE_HEADING, GRID_RULE_STARTER, NEW_MODEL, NODE_GRAPH_HEADING, NOT_APPLIED_FIX_CARD,
@@ -32,7 +33,8 @@ use henad_graph::sheet::{ParsedSheet, starters};
 
 use crate::state::{AppState, PreviewRun};
 use crate::tests::panes::{
-    Seen, assert_control_holds, assert_controls_hold_their_words, assert_no_forbidden_word, shows, shows_or_notice,
+    Seen, apply_sheet_edit, assert_control_holds, assert_controls_hold_their_words, assert_no_forbidden_word,
+    sheet_mut, shows, shows_or_notice,
 };
 use crate::tests::support::{
     Harness, Node, ScratchFolder, assert_built, edited, forbidden_words, headless_app, life_with_a_skipped_line,
@@ -374,11 +376,35 @@ fn the_apply_line_asks_for_fixes_while_apply_would_refuse() {
         "Model not applied. Fix the problems below."
     ));
 
+    // Blank of cells shows nothing, and Apply, which always refuses it, is disabled.
     harness.click(NEW_MODEL);
     harness.click_in(NEW_MODEL, CREATE);
     assert!(sheet(&harness.app).shows_nothing(), "Blank of cells shows nothing");
+    let apply_button = |harness: &mut Harness| {
+        harness
+            .settle()
+            .into_iter()
+            .find(|node| node.label == "Apply" && node.role == egui::accesskit::Role::Button)
+            .expect("Apply")
+    };
+    assert!(apply_button(&mut harness).disabled, "Apply is disabled");
+    let position = apply_button(&mut harness).bounds.expect("bounds").center();
+    harness.click_at(position);
+    assert_eq!(harness.app.editor.outcome, None, "a press on Apply applies nothing");
     assert!(shows_or_notice(&mut harness, WORLD_EMPTY));
     assert!(!shows_or_notice(&mut harness, PRESS_APPLY));
+    assert!(!shows_or_notice(&mut harness, FIX_THEN_APPLY));
+
+    // A first property enables Apply.
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddProperty {
+            thing: CELLS_ID.to_owned(),
+            name: "Status".to_owned(),
+            property_type: PropertyType::States,
+        },
+    );
+    assert!(!apply_button(&mut harness).disabled, "Apply is enabled");
 }
 
 /// After Apply of a sheet with a line that does not run, the list names the line under the outcome.

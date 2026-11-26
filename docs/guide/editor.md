@@ -413,6 +413,7 @@ A note under the slider then reads "Trying this value. The model keeps 0.3.", an
 <span class="ui">Reset</span> under the slider returns to the value the sheet keeps, and <span class="ui">Keep</span> makes the tried value the sheet's own, widening its range to hold it, as one step of Undo.
 Press <span class="ui" markdown>:material-check: Apply</span> to install the model at its own size, and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> to save the sheet as a model file.
 While Apply would refuse the sheet, the line under the panes reads **Fix the problems below, then press Apply.**, or **Fix the problems on the card, then press Apply.** when each problem sits under its line.
+A sheet of cells with no property disables Apply until you add one, as the line under the panes says.
 After Apply, a line that does not run yet is named under the outcome, as in **Line 2 is not run yet. The model runs without it.**
 While the preview runs, the Model tab names it, as in **Preview of Ant foraging**, and shows its model, as the Parameters tab does.
 Select a model in its list, the one selected before included, to make Build build that model again.
