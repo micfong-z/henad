@@ -72,7 +72,7 @@ use henad_graph::sheet::sentence::{
     CHANGE_TO_RATE, COMPETING_WORD, DELETE_LINE_HEADING, FORMULA_PART_TOOLTIP, RANDOM_VALUE_GROUP,
     REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
     comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
-    long_tick_note, rate_grow_prompt, tick_set_notice,
+    long_tick_note, phrase_part_tooltip, rate_grow_prompt, tick_set_notice,
 };
 use henad_graph::sheet::sentence::{
     DUPLICATE_BLOCK_TOOLTIP, NOTE_FIELD_HINT, REMOVE_CHOOSE_ROW, add_above_name, add_below_name, add_line_above,
@@ -2220,12 +2220,17 @@ fn chip_part_ui(
         .map(|(_, color)| *color);
     let shown = draft_chip(drawing, state, chip);
     let response = chip_with_id(ui, id, &shown, red.is_some(), swatch);
-    // A chip no edit sets is a value inside a formula, and says how to change it under the pointer.
+    // A chip no edit sets is a value inside a formula, and says how to change it under the pointer: through the first
+    // words of a value a picker put in its slot whole, as "length of" before "my Velocity", or else not on the card.
+    let fixed = || match line.parts.get(drawing.index.wrapping_sub(1)) {
+        Some(SentencePart::PhraseLead(words)) => phrase_part_tooltip(words.trim()),
+        _ => FORMULA_PART_TOOLTIP.to_owned(),
+    };
     let response = match (red, id) {
         (Some(tooltip), Some(_)) => response.on_hover_or_focus_text(tooltip.as_str()),
-        (Some(tooltip), None) => response.on_hover_text(format!("{tooltip}\n{FORMULA_PART_TOOLTIP}")),
+        (Some(tooltip), None) => response.on_hover_text(format!("{tooltip}\n{}", fixed())),
         (None, Some(_)) => response,
-        (None, None) => response.on_hover_text(FORMULA_PART_TOOLTIP),
+        (None, None) => response.on_hover_text(fixed()),
     };
     if let ChipKind::Result(result) = &shown.kind
         && (response.contains_pointer() || response.has_focus())

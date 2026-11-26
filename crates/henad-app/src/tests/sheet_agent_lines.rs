@@ -1342,6 +1342,26 @@ fn a_value_inside_a_formula_opens_nothing_and_says_how_to_change_it() {
     assert_eq!(text(&harness), before);
     assert_ne!(harness.focused, "Trail falloff", "the chip takes no focus");
     assert_controls_hold_their_words(&mut harness);
+
+    // The Velocity inside boids' "length of my Velocity" points at the words before it, which open its slot's picker.
+    open_starter(&mut harness, "boids.toml");
+    let nodes = harness.settle();
+    let chip = nodes
+        .iter()
+        .find(|node| node.value == "my Velocity" && node.role == Role::Label && node.bounds.is_some())
+        .and_then(|node| node.bounds)
+        .expect("the Velocity of length of my Velocity");
+    harness.frame(vec![egui::Event::PointerMoved(chip.center())]);
+    for _ in 0..60 {
+        harness.frame(Vec::new());
+    }
+    let texts = harness.accessible_texts();
+    let tooltip = texts
+        .iter()
+        .find(|text| text.ends_with("\" to choose another value."))
+        .unwrap_or_else(|| panic!("the chip points at the words before it: {texts:?}"));
+    assert!(tooltip.contains("length of"), "{tooltip}");
+    assert!(!texts.iter().any(|text| text == FORMULA_PART_TOOLTIP));
 }
 
 #[test]

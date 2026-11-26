@@ -739,6 +739,10 @@ fn every_wording_table_entry_equals_the_final_words() {
              lines.",
             fixed(sentence::FORMULA_PART_TOOLTIP),
         ),
+        (
+            "Press \"length of\" to choose another value.",
+            sentence::phrase_part_tooltip("length of"),
+        ),
         ("Add another value", fixed(sentence::ADD_VALUE_TOOLTIP)),
         ("Add another row", fixed(sentence::ADD_ROW_TOOLTIP)),
         ("Add another summary", fixed(sentence::ADD_SUMMARY_TOOLTIP)),

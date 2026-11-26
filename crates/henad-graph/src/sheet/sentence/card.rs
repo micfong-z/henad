@@ -708,6 +708,12 @@ pub fn phrase_lead_name(prefix: &str, words: &str) -> String {
 /// Tooltip of the words that open a value a picker put in a slot whole, such as "a random number between".
 pub const PHRASE_LEAD_TOOLTIP: &str = "Press to choose another value, such as a typed number.";
 
+/// Returns the tooltip of a value inside a value a picker put in a slot whole, such as "my Velocity" in "length of my
+/// Velocity", where `words` are the first words that open the slot's picker.
+pub fn phrase_part_tooltip(words: &str) -> String {
+    format!("Press \"{words}\" to choose another value.")
+}
+
 /// Tooltip of a value inside a formula of a line, which the card cannot change: a value of a formula of more than one
 /// operation, or of a formula inside a slot.
 pub const FORMULA_PART_TOOLTIP: &str =
