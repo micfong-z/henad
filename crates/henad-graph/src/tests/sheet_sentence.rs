@@ -1343,6 +1343,21 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
             "That measure is already plotted.",
             fixed(sentence::MEASURE_ALREADY_PLOTTED),
         ),
+        (
+            "Number of times an event happened",
+            fixed(sentence::EVENT_COUNT_MEASURE),
+        ),
+        ("Number of times", fixed(sentence::EVENT_COUNT_LEAD)),
+        ("happened", fixed(sentence::EVENT_COUNT_TAIL)),
+        ("Measure event", fixed(sentence::MEASURE_EVENT_NAME)),
+        ("event", fixed(sentence::MEASURE_EVENT_EMPTY)),
+        ("Choose an event.", fixed(sentence::MEASURE_NEEDS_EVENT)),
+        (
+            "Number of times Delivery happened",
+            sentence::event_count_measure("Delivery"),
+        ),
+        ("Deliveries", sentence::event_count_name("Delivery")),
+        ("Nest visits", sentence::event_count_name("Nest visit")),
         // Colours.
         ("Colour cells by", fixed(sentence::COLOR_CELLS_BY)),
         ("Shade", fixed(sentence::SHADE)),
@@ -1932,6 +1947,8 @@ const FIXED_WORDING: &[&str] = &[
     sentence::WORLD_EMPTY,
     sentence::DIAGRAM_TOOLTIP,
     sentence::DIAGRAM_NOTE,
+    sentence::EVENT_COUNT_MEASURE,
+    sentence::MEASURE_NEEDS_EVENT,
 ];
 
 #[test]

@@ -131,7 +131,8 @@ in 0 to 1 (the checker warns at any other share or parameter range), `KEPT_TAIL`
 `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the two checks, × named
 `delete_event_name`, and `EventForm` (`NEW_EVENT`, `EVENT_NAME_FIELD`, Done or
 Enter). Measures count agents (`COUNT_AGENTS_MEASURE`, `COUNT_AGENTS_LEAD`,
-`count_agents_measure`) and average a Number, Integer or Position. Colours draw `colors_of` for
+`count_agents_measure`), average a Number, Integer or Position, and count the times an event
+happened (`an_event_count_is_plotted_from_the_measure_form`). Colours draw `colors_of` for
 the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the ground
 (`COLOR_GROUND_BY`, once it has a property), offering States, Number, Integer and Heading
 (`ByHeading` with `BY_HEADING_NOTE`). The select shows what the world draws (`drawn_by`): the rule's

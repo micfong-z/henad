@@ -16,7 +16,8 @@ parameter dialogs, the top bar, the world tabs and the Diagram, `convert.rs` the
 types and `sentences.rs` the `Parts` builder, `Sentences` and `competing_parts`.
 `agents/henad-graph-sheet.md` holds the rest of the sheet module, and `agents/henad-app-card.md` the
 card that draws the parts. The drag of a line takes `drag_line_tooltip`, `more_lines`,
-`DROP_ON_OTHER_CARD`, `DROP_INTO_BLOCK` and `DROP_MISSED` from `card.rs`.
+`DROP_ON_OTHER_CARD`, `DROP_INTO_BLOCK` and `DROP_MISSED` from `card.rs`. An event count takes
+`event_count_measure` and `event_count_name` (the event's plural, "Deliveries") in `sheet.rs`.
 
 **The wording table.** `sheet::sentence` holds every word the sheet editor shows: constants for
 fixed text and functions for templates, each named for what it

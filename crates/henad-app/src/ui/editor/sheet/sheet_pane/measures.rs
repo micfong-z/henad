@@ -1,5 +1,5 @@
-//! The Measures section of the Sheet pane: the plotted measures, each a count of a state or an average of a number,
-//! and the measure form that adds one.
+//! The Measures section of the Sheet pane: the plotted measures, each a count of a state, an average of a number or
+//! the number of times an event happened, and the measure form that adds one.
 
 use egui::{Label, RichText, Ui};
 use henad_graph::sheet::document::{
@@ -14,11 +14,16 @@ use henad_graph::sheet::sentence::{
     average_measure, count_measure, measure_color_name, plot_state, remove_measure_name,
 };
 use henad_graph::sheet::sentence::{COUNT_AGENTS_LEAD, COUNT_AGENTS_MEASURE, count_agents_measure};
+use henad_graph::sheet::sentence::{
+    EVENT_COUNT_LEAD, EVENT_COUNT_MEASURE, EVENT_COUNT_TAIL, MEASURE_EVENT_EMPTY, MEASURE_EVENT_NAME,
+    MEASURE_NEEDS_EVENT, NO_EVENT, event_count_measure, event_count_name,
+};
 
 use super::layout::{Column, Form, Table, line, text_cell, wrapped_line};
 use super::starts::{STATE_SWATCH_WIDTH, state_name};
 use super::{
-    DELETE_WIDTH, FormKind, MeasureForm, PaneState, Pending, form_buttons, form_heading, measured_thing, select,
+    DELETE_WIDTH, FormKind, MeasureForm, MeasureKind, PaneState, Pending, form_buttons, form_heading, measured_thing,
+    select,
 };
 use crate::ui::editor::sheet::widgets::{
     OverlayItem, color_button, color_name, color32, message_ui, set_name, swatch_ui,
@@ -117,6 +122,11 @@ fn measure_words(document: &SheetDocument, measure: &SheetMeasure) -> String {
             }
             _ => measure.name.clone(),
         },
+        MeasureRule::EventCount => document
+            .events
+            .iter()
+            .find(|event| measure.event.as_deref() == Some(event.id.as_str()))
+            .map_or_else(|| measure.name.clone(), |event| event_count_measure(&event.name)),
         _ => measure.name.clone(),
     }
 }
@@ -265,25 +275,11 @@ fn measure_form(
     // An average of agents' positions is their centre.
     let numbers = of_kind(&[PropertyType::Number, PropertyType::WholeNumber, PropertyType::Position]);
     form_heading(ui, NEW_MEASURE);
-    let average = form.average;
-    line(ui, |ui| {
-        ui.radio_value(
-            &mut form.average,
-            false,
-            if agents { COUNT_AGENTS_MEASURE } else { COUNT_MEASURE },
-        );
-    });
-    line(ui, |ui| {
-        ui.radio_value(&mut form.average, true, AVERAGE_MEASURE);
-    });
-    if form.average != average {
-        *form = MeasureForm {
-            average: form.average,
-            ..MeasureForm::default()
-        };
-    }
+    kind_radios(ui, document, form, agents);
     wrapped_line(ui, |ui| {
-        if form.average {
+        if form.kind == MeasureKind::EventCount {
+            event_count_row(ui, document, form);
+        } else if form.kind == MeasureKind::Average {
             ui.label(AVERAGE_MEASURE_LEAD);
             if let Some(chosen) = property_select(
                 ui,
@@ -351,19 +347,120 @@ fn measure_form(
     *close |= cancel;
 }
 
+/// Draws a radio button for each kind of measure the form adds, on a world of agents when `agents` holds, and starts
+/// `form` afresh when another kind is chosen.
+fn kind_radios(ui: &mut Ui, document: &SheetDocument, form: &mut MeasureForm, agents: bool) {
+    let kind = form.kind;
+    line(ui, |ui| {
+        ui.radio_value(
+            &mut form.kind,
+            MeasureKind::Count,
+            if agents { COUNT_AGENTS_MEASURE } else { COUNT_MEASURE },
+        );
+    });
+    line(ui, |ui| {
+        ui.radio_value(&mut form.kind, MeasureKind::Average, AVERAGE_MEASURE);
+    });
+    // Only agents record events. With none to count, the choice shows greyed with what to do first.
+    if agents {
+        line(ui, |ui| {
+            let events = !document.events.is_empty();
+            let radio = ui
+                .add_enabled_ui(events, |ui| {
+                    ui.radio_value(&mut form.kind, MeasureKind::EventCount, EVENT_COUNT_MEASURE)
+                })
+                .inner;
+            if !events {
+                radio.on_disabled_hover_text(NO_EVENT);
+            }
+        });
+    }
+    if form.kind != kind {
+        *form = MeasureForm {
+            kind: form.kind,
+            ..MeasureForm::default()
+        };
+    }
+}
+
+/// Draws the words and the event select of an event count, "Number of times [event] happened", in `form`.
+fn event_count_row(ui: &mut Ui, document: &SheetDocument, form: &mut MeasureForm) {
+    ui.label(EVENT_COUNT_LEAD);
+    let shown = document
+        .events
+        .iter()
+        .find(|event| form.event.as_deref() == Some(event.id.as_str()))
+        .map_or(MEASURE_EVENT_EMPTY, |event| event.name.as_str());
+    let items: Vec<OverlayItem<'_>> = document
+        .events
+        .iter()
+        .map(|event| OverlayItem {
+            label: &event.name,
+            current: form.event.as_deref() == Some(event.id.as_str()),
+            ..OverlayItem::default()
+        })
+        .collect();
+    let (_, chosen) = select(ui, "henad_sheet_measure_event", MEASURE_EVENT_NAME, shown, &items);
+    if let Some(event) = chosen.and_then(|index| document.events.get(index)) {
+        form.event = Some(event.id.clone());
+    }
+    ui.label(EVENT_COUNT_TAIL);
+}
+
+/// Returns the command that adds a measure counting the times the event of id `event` happened, named by the
+/// event's plural, or by the measure's words when another measure holds that name.
+///
+/// # Errors
+///
+/// Returns the message on an event the sheet does not hold or one already counted.
+fn event_count_edit(document: &SheetDocument, event: Option<&str>) -> Result<SheetEdit, String> {
+    let Some(event) = event.and_then(|id| document.events.iter().find(|known| known.id == id)) else {
+        return Err(MEASURE_NEEDS_EVENT.to_owned());
+    };
+    let counted = document
+        .measures
+        .iter()
+        .any(|measure| measure.rule == MeasureRule::EventCount && measure.event.as_deref() == Some(&event.id));
+    if counted {
+        return Err(MEASURE_ALREADY_PLOTTED.to_owned());
+    }
+    let plural = event_count_name(&event.name);
+    let taken = document
+        .measures
+        .iter()
+        .any(|measure| measure.name.eq_ignore_ascii_case(&plural));
+    Ok(SheetEdit::AddMeasure {
+        name: if taken {
+            event_count_measure(&event.name)
+        } else {
+            plural
+        },
+        rule: MeasureRule::EventCount,
+        over: None,
+        property: None,
+        state: None,
+        event: Some(event.id.clone()),
+        value: Slot::Blank,
+        color: None,
+    })
+}
+
 /// Returns the command Done of the measure form makes, or the message for the first check that fails.
 ///
 /// # Errors
 ///
-/// Returns the message on a count with no property or no state, an average with no number property, or a measure
-/// already plotted.
+/// Returns the message on a count with no property or no state, an average with no number property, an event count
+/// with no event, or a measure already plotted.
 fn measure_edit(document: &SheetDocument, form: &MeasureForm) -> Result<SheetEdit, String> {
+    if form.kind == MeasureKind::EventCount {
+        return event_count_edit(document, form.event.as_deref());
+    }
     let property = form.property.as_deref().and_then(|id| {
         properties_of(document, measured_thing(document))
             .iter()
             .find(|known| known.id == id)
     });
-    if form.average {
+    if form.kind == MeasureKind::Average {
         let Some(property) = property else {
             return Err(MEASURE_NEEDS_NUMBER_PROPERTY.to_owned());
         };

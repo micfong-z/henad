@@ -193,15 +193,29 @@ impl PaneState {
     }
 }
 
+/// Kind of the measure the measure form adds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum MeasureKind {
+    /// The number of cells or agents in a state.
+    #[default]
+    Count,
+    /// The average of a number property.
+    Average,
+    /// The number of times an event happened, in a world of agents.
+    EventCount,
+}
+
 /// The form that adds a measure.
 #[derive(Debug, Clone, Default)]
 struct MeasureForm {
-    /// Whether the measure averages a number property. Otherwise it counts the cells in a state.
-    average: bool,
+    /// Kind of the measure.
+    kind: MeasureKind,
     /// Id of the property chosen, `None` before one is chosen.
     property: Option<String>,
     /// Id of the state chosen for a count, `None` before one is chosen.
     state: Option<String>,
+    /// Id of the event chosen for an event count, `None` before one is chosen.
+    event: Option<String>,
     /// Message of the last refused Done, `None` while none shows.
     message: Option<String>,
 }
@@ -214,8 +228,13 @@ impl MeasureForm {
         let first = properties
             .iter()
             .find(|property| property.property_type == PropertyType::States);
+        let kind = if first.is_none() && !properties.is_empty() {
+            MeasureKind::Average
+        } else {
+            MeasureKind::Count
+        };
         Self {
-            average: first.is_none() && !properties.is_empty(),
+            kind,
             property: first.map(|property| property.id.clone()),
             ..Self::default()
         }

@@ -9,8 +9,8 @@ use henad_compute::entry::ModelEntry;
 use henad_core::params::ParamValue;
 use henad_graph::sheet::SheetFile;
 use henad_graph::sheet::document::{
-    BlockedState, ButtonStep, ButtonStepRule, ColorRuleKind, MadeOf, Marks, ParameterType, PropertyType, SheetLiteral,
-    SheetValue, Slot, StartRule,
+    BlockedState, ButtonStep, ButtonStepRule, ColorRuleKind, MadeOf, Marks, MeasureRule, ParameterType, PropertyType,
+    SheetLiteral, SheetValue, Slot, StartRule,
 };
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{
@@ -22,12 +22,15 @@ use henad_graph::sheet::sentence::{
     YES_NO_KIND, add_property_name, blocked_state_name, count_agents_measure, event_name_taken, integer_up_to,
     kept_limits_outside_note, marks_name, run_once, value_field_name,
 };
+use henad_graph::sheet::sentence::{
+    EVENT_COUNT_MEASURE, MEASURE_ALREADY_PLOTTED, MEASURE_EVENT_NAME, MEASURE_NEEDS_EVENT, event_count_measure,
+};
 use henad_graph::sheet::sentence::{MARKS_ADD_UP, MARKS_LARGEST, MARKS_NONE, MARKS_TOOLTIP};
 
 use crate::state::default_values;
 use crate::tests::panes::{
     Seen, add_average_measure, add_property, add_states_property, agent_sheet, apply_sheet_edit, assert_control_holds,
-    assert_no_forbidden_word, center_of, choose, click, click_control, enter_into, field_value, named,
+    assert_no_forbidden_word, center_of, choose, click, click_control, click_last, enter_into, field_value, named,
     new_blank_agents, sheet, sheet_mut, shows_or_notice, starter_document, text, type_into,
 };
 use crate::tests::support::{
@@ -666,6 +669,85 @@ fn events_are_added_renamed_and_deleted_on_the_sheet() {
     harness.settle();
     assert!(events(&harness).is_empty());
     assert!(shows_or_notice(&mut harness, EVENTS_EMPTY));
+}
+
+/// The measure form plots the number of times an event happened. The ants' Deliveries, removed and made again, equals
+/// the starter's but for its colour and its place, and the lowered sheet plots it. A second count of the event is
+/// refused, a world of agents with no event shows the choice greyed, and a world of cells does not offer it.
+#[test]
+fn an_event_count_is_plotted_from_the_measure_form() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    new_from_starter(&mut harness, "Ant foraging");
+    let deliveries = |harness: &Harness| {
+        sheet(harness)
+            .document()
+            .measures
+            .iter()
+            .find(|measure| measure.rule == MeasureRule::EventCount)
+            .cloned()
+    };
+    let starter = deliveries(&harness).expect("the starter's Deliveries");
+    assert!(shows_or_notice(&mut harness, &event_count_measure("Delivery")));
+    click(&mut harness, "Remove measure Deliveries");
+    harness.settle();
+    assert_eq!(deliveries(&harness), None);
+    click(&mut harness, ADD_MEASURE);
+    click(&mut harness, EVENT_COUNT_MEASURE);
+    click(&mut harness, DONE);
+    assert!(shows_or_notice(&mut harness, MEASURE_NEEDS_EVENT));
+    // The card's Record line shows Delivery too, above the select's list.
+    click(&mut harness, MEASURE_EVENT_NAME);
+    click_last(&mut harness, "Delivery");
+    click(&mut harness, DONE);
+    harness.settle();
+    let made = deliveries(&harness).expect("a count of Delivery");
+    assert_eq!(
+        (&made.id, &made.name, made.rule, &made.over, &made.event, &made.value),
+        (
+            &starter.id,
+            &starter.name,
+            starter.rule,
+            &starter.over,
+            &starter.event,
+            &starter.value
+        )
+    );
+    assert!(shows_or_notice(&mut harness, &event_count_measure("Delivery")));
+    let lowered = SheetFile::parse(&text(&harness)).expect("the sheet lowers");
+    assert!(
+        lowered
+            .lowered()
+            .document()
+            .stats
+            .iter()
+            .any(|stat| stat.label == "Deliveries"),
+        "the lowered sheet plots Deliveries"
+    );
+    click(&mut harness, ADD_MEASURE);
+    click(&mut harness, EVENT_COUNT_MEASURE);
+    // The card's Record line shows Delivery too, above the select's list.
+    click(&mut harness, MEASURE_EVENT_NAME);
+    click_last(&mut harness, "Delivery");
+    click(&mut harness, DONE);
+    assert!(shows_or_notice(&mut harness, MEASURE_ALREADY_PLOTTED));
+
+    let Some(mut harness) = blank_agents() else {
+        return;
+    };
+    click(&mut harness, ADD_MEASURE);
+    let radio = named(&mut harness, EVENT_COUNT_MEASURE);
+    assert!(
+        radio.len() == 1 && radio[0].disabled,
+        "the event count is greyed with no event: {radio:?}"
+    );
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    new_from_starter(&mut harness, "Game of Life");
+    click(&mut harness, ADD_MEASURE);
+    assert!(named(&mut harness, EVENT_COUNT_MEASURE).is_empty());
 }
 
 /// The button form keeps the steps that set a property everywhere. It shows them, and Done neither drops nor rewrites

@@ -169,10 +169,14 @@ wraps no nested group, and a row of groups ran past a narrow pane) with a "Plot"
 count named by the state (`add_count`, the property's name before it when the name is taken) or
 deleting the counts of that state, then a table headed `PLOTTED` of a `color_button` named
 `measure_color_name` (`Recolor`), `measure_words` (`count_measure`, `average_measure`, or the name)
-and × named `remove_measure_name`, then the measure form (`MeasureForm`: `NEW_MEASURE`, radios
-`COUNT_MEASURE` and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME` and
-`MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages, and an average reads
-`{ my = <property> }` and takes the next of `MEASURE_COLORS`). Colours: "Colour cells by" a select
+and × named `remove_measure_name`, then the measure form (`MeasureForm`: `NEW_MEASURE`, radios of
+its `MeasureKind`, `COUNT_MEASURE` and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME`
+and `MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages, and an average
+reads `{ my = <property> }` and takes the next of `MEASURE_COLORS`; in a world of agents
+`EVENT_COUNT_MEASURE` too, greyed with `NO_EVENT` while the sheet has no event, a select named
+`MEASURE_EVENT_NAME` and `event_count_edit`: an `event_count` with no `over`, as the ants'
+Deliveries, named `event_count_name` or `event_count_measure` when that is taken, and plotted as
+`event_count_measure`). Colours: "Colour cells by" a select
 of every property and None (`colors_of` in `agents/henad-app-sheet-pane.md`), `color_rule_edit`
 writing `by_state` or `shaded_rule` (blue from 0 to 1, or the previous shading's hue and ends),
 swatches under a States property, and `shading_ui` for a Number property: `SHADE` select of

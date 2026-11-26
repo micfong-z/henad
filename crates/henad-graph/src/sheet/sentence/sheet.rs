@@ -5,7 +5,7 @@ use henad_core::metadata::TimeUnit;
 
 use super::card::OTHERWISE;
 use super::editor::{MAX_LABEL, MIN_LABEL, UNIT_LABEL};
-use super::grammar::word_list;
+use super::grammar::{plural, word_list};
 use crate::sheet::document::MadeOf;
 
 // The sheet
@@ -627,6 +627,36 @@ pub const MEASURE_NEEDS_NUMBER_PROPERTY: &str = "Choose a Number property.";
 
 /// Message on a measure that is already on the plot.
 pub const MEASURE_ALREADY_PLOTTED: &str = "That measure is already plotted.";
+
+/// Kind of a measure that counts the times an event happened, in a world of agents.
+pub const EVENT_COUNT_MEASURE: &str = "Number of times an event happened";
+
+/// Words before the event of a measure that counts the times an event happened.
+pub const EVENT_COUNT_LEAD: &str = "Number of times";
+
+/// Words after the event of a measure that counts the times an event happened.
+pub const EVENT_COUNT_TAIL: &str = "happened";
+
+/// Accessible name of the event of a new measure.
+pub const MEASURE_EVENT_NAME: &str = "Measure event";
+
+/// Words of the event select of a new measure before an event is chosen.
+pub const MEASURE_EVENT_EMPTY: &str = "event";
+
+/// Message on an event count measure with no event.
+pub const MEASURE_NEEDS_EVENT: &str = "Choose an event.";
+
+/// Returns the words of a measure that counts the times `event` happened since the start, such as "Number of times
+/// Delivery happened".
+pub fn event_count_measure(event: &str) -> String {
+    format!("{EVENT_COUNT_LEAD} {event} {EVENT_COUNT_TAIL}")
+}
+
+/// Returns the name a measure that counts the times `event` happened takes, the plural of the event's name, such as
+/// "Deliveries".
+pub fn event_count_name(event: &str) -> String {
+    plural(event)
+}
 
 // Colours
 
