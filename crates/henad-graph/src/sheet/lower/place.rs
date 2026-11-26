@@ -122,12 +122,17 @@ impl<'a> CardLowering<'_, 'a> {
         part: &str,
     ) -> Result<Operand, String> {
         match part {
-            "amount" => place
-                .amount
-                .clone()
-                .ok_or_else(|| format!("line {line} returns a place that no pick ranked, so it has no amount")),
+            "amount" => place.amount.clone().ok_or_else(|| {
+                format!(
+                    "{} returns a place that no pick ranked, so it has no amount",
+                    self.relations.line_word(line)
+                )
+            }),
             "open" => self.place_open(site, place),
-            other => Err(format!("line {line} has no part '{other}' to read")),
+            other => Err(format!(
+                "{} has no part '{other}' to read",
+                self.relations.line_word(line)
+            )),
         }
     }
 

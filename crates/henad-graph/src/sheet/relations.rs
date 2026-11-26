@@ -23,13 +23,13 @@
 use std::collections::HashMap;
 
 use super::document::{
-    Around, CompareTest, LineKind, LineMode, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine,
+    Around, CardRuns, CompareTest, LineKind, LineMode, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine,
     SheetProperty, SheetValue, Slot, SummaryKind,
 };
 use super::edit::automatic_name;
 use super::sentence::{
-    ANY_STATE_ID, BLANK_TEXT, NOTHING_INSIDE, Sentences, coverage_note, gap_note, only_one_inside_note, only_when_note,
-    order_note, steer_in_repeat_note, when_repeats_note, worked_out_everywhere_note,
+    ANY_STATE_ID, BLANK_TEXT, NOTHING_INSIDE, Sentences, coverage_note, gap_note, line_word, only_one_inside_note,
+    only_when_note, order_note, steer_in_repeat_note, when_repeats_note, worked_out_everywhere_note,
 };
 
 /// Allowance of the comparisons of the "otherwise" rule, so that two tests of one listed number agree on it.
@@ -121,6 +121,33 @@ impl<'a> CardRelations<'a> {
     /// Returns the number of line `line_id` as the card shows it, counted from 1 in display order.
     pub fn number(&self, line_id: &str) -> Option<usize> {
         self.index(line_id).map(|index| index + 1)
+    }
+
+    /// Returns the name of the button that runs the card once, `None` for a card that runs every tick or that no
+    /// button runs.
+    pub fn button(&self) -> Option<&'a str> {
+        if self.card.runs == CardRuns::EachTick {
+            return None;
+        }
+        self.document
+            .buttons
+            .iter()
+            .find(|button| {
+                button
+                    .does
+                    .iter()
+                    .any(|step| step.card.as_deref() == Some(self.card.id.as_str()))
+            })
+            .map(|button| button.name.as_str())
+    }
+
+    /// Returns the words that name line `line_id` in a message, as the card names it: "line 2", or "Clear line 1" on
+    /// the card of the button Clear. A line the card does not show is named by its id in quotes, as "line 'l9'".
+    pub fn line_word(&self, line_id: &str) -> String {
+        match self.number(line_id) {
+            Some(number) => line_word(self.button(), number),
+            None => format!("line '{line_id}'"),
+        }
     }
 
     /// Returns the line `line_id` of the card.

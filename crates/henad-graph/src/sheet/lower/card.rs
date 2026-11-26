@@ -176,16 +176,16 @@ impl Way {
         }
     }
 
-    /// Returns the error on a line that changes `property` another way than line `number`.
+    /// Returns the error on a line that changes `property` another way than the line whose line prefix is `prefix`,
+    /// such as "Line 3".
     ///
-    /// Line `number` changes the property this way.
-    fn conflict(self, number: usize, property: &str) -> String {
-        let prefix = format!("Line {number}");
+    /// That line changes the property this way.
+    fn conflict(self, prefix: &str, property: &str) -> String {
         match self {
-            Self::Set => sentence::set_already(&prefix, property),
-            Self::Steer => sentence::steered_already(&prefix, property),
-            Self::MoveBy => sentence::moved_by_already(&prefix),
-            Self::MoveTo => sentence::moved_to_already(&prefix),
+            Self::Set => sentence::set_already(prefix, property),
+            Self::Steer => sentence::steered_already(prefix, property),
+            Self::MoveBy => sentence::moved_by_already(prefix),
+            Self::MoveTo => sentence::moved_to_already(prefix),
         }
     }
 
@@ -335,7 +335,7 @@ impl<'a> CardLowering<'_, 'a> {
             };
             if let Err(message) = self.line(id, line) {
                 self.builder.problem(
-                    format!("line {id}: {message}"),
+                    format!("{}: {message}", self.relations.line_word(id)),
                     Place::Line(self.card_index, id.to_owned()),
                 );
             }
@@ -378,7 +378,9 @@ impl<'a> CardLowering<'_, 'a> {
                         .property(id)
                         .map_or_else(|| id.to_owned(), |(_, found)| found.name.clone())
                 });
-                Some(Refusal::Conflict(known.conflict(at, &name)))
+                Some(Refusal::Conflict(
+                    known.conflict(&sentence::line_prefix(self.relations.button(), at), &name),
+                ))
             });
             let in_repeat = agents && self.repeat_of(id).is_some();
             let Some(reason) = conflict.or_else(|| refusal(line, agents, in_repeat)) else {
@@ -388,9 +390,10 @@ impl<'a> CardLowering<'_, 'a> {
             let message = match reason {
                 Refusal::NotYet(words) => words.to_owned(),
                 Refusal::Conflict(words) => words,
-                Refusal::Record => format!("line {id}: Record cannot count events on a grid"),
+                Refusal::Record => format!("{}: Record cannot count events on a grid", self.relations.line_word(id)),
                 Refusal::Agents(kind) => format!(
-                    "line {id}: a {} line runs on agents and cannot be used in a card that runs on the cells",
+                    "{}: a {} line runs on agents and cannot be used in a card that runs on the cells",
+                    self.relations.line_word(id),
                     kind.as_str()
                 ),
             };
@@ -589,11 +592,12 @@ impl<'a> CardLowering<'_, 'a> {
                 .line(block)
                 .is_some_and(|line| line.kind == LineKind::When)
             {
-                let outer = self
-                    .conditions
-                    .get(block)
-                    .cloned()
-                    .ok_or_else(|| format!("the When line {block} around the line did not lower"))?;
+                let outer = self.conditions.get(block).cloned().ok_or_else(|| {
+                    format!(
+                        "the When of {} around the line did not lower",
+                        self.relations.line_word(block)
+                    )
+                })?;
                 return self.builder.join(&site.at("when"), "logic.and", &outer, &own);
             }
             parent = self.relations.parent(block);
@@ -631,7 +635,7 @@ impl<'a> CardLowering<'_, 'a> {
                 .results
                 .get(line.as_str())
                 .cloned()
-                .ok_or_else(|| format!("the result of line {line} did not lower")),
+                .ok_or_else(|| format!("the result of {} did not lower", self.relations.line_word(line))),
             SheetChip::Result {
                 line,
                 part: Some(part),
@@ -642,7 +646,10 @@ impl<'a> CardLowering<'_, 'a> {
                 }
                 match self.results.get(line.as_str()).cloned() {
                     Some(Operand::Place(place)) => self.place_part(site, line, &place, part),
-                    _ => Err(format!("line {line} has no part '{part}' to read")),
+                    _ => Err(format!(
+                        "{} has no part '{part}' to read",
+                        self.relations.line_word(line)
+                    )),
                 }
             }
             SheetChip::Result {
@@ -651,7 +658,10 @@ impl<'a> CardLowering<'_, 'a> {
                 ..
             } => match self.results.get(line.as_str()).cloned() {
                 Some(Operand::Place(place)) => self.place_property(site, &place, property),
-                _ => Err(format!("line {line} does not return a place, so it has no properties")),
+                _ => Err(format!(
+                    "{} does not return a place, so it has no properties",
+                    self.relations.line_word(line)
+                )),
             },
             SheetChip::My(property) => self.builder.read(self.pass, property),
             SheetChip::MyNew(property) => {
@@ -977,7 +987,10 @@ impl<'a> CardLowering<'_, 'a> {
         let mut inputs = vec![("state".to_owned(), self.builder.input_as(site, current, &lane_type)?)];
         for change in changes {
             let ChangeKind::Become { old_state, new_state } = &change.kind else {
-                return Err(format!("line {}: a Set cannot change a States property", change.line));
+                return Err(format!(
+                    "{}: a Set cannot change a States property",
+                    self.relations.line_word(change.line)
+                ));
             };
             let old_states: Vec<&str> = match old_state {
                 Some(old_state) => vec![old_state.as_str()],

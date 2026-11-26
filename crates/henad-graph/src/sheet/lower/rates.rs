@@ -350,7 +350,12 @@ impl<'a> CardLowering<'_, 'a> {
                 .values_mut()
                 .flatten()
                 .find(|change| change.line == line.line)
-                .ok_or_else(|| format!("line {} of a competing group made no change", line.line))?;
+                .ok_or_else(|| {
+                    format!(
+                        "{} of a competing group made no change",
+                        self.relations.line_word(line.line)
+                    )
+                })?;
             change.condition = condition;
         }
         Ok(())

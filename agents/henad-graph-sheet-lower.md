@@ -191,7 +191,11 @@ line table in the author's words, whatever the line's skip: on a cells card `NOT
 the line's kind or a phrase in any slot. The refusals of chances, looks, Calculate, Choose,
 Depending on, Random number, rates and the world of agents were lifted with their lowering, and
 their words removed from `sheet::sentence`. Record on a cells card is an error,
-and so is an agents-only line kind or a look at agents within a distance.
+and so is an agents-only line kind or a look at agents within a distance. A problem of a line, and a
+message that names another line, names it by `CardRelations::line_word`, the number the card shows
+("line 1", "Clear line 2" on a button's card, a line the card does not show by its quoted id), never
+by its id, and a conflict between two ways of changing a property by `sentence::line_prefix`
+(`a_refusal_names_its_line_by_the_number_the_card_shows`). Node, buffer and key names keep the id.
 
 Grid lowering tests sit in four files, on the host evaluator. `src/tests/sheet_lower.rs` holds
 `every_grid_sheet_lowers_checks_and_compiles` (the four grid starters and `sir_chance.toml`: no

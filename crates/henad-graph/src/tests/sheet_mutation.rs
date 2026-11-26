@@ -233,6 +233,46 @@ fn a_number_in_a_condition_is_an_error() {
     );
 }
 
+/// A refusal about a line names it by the number the card shows, never by its id: "line 1" for a line `l5` listed
+/// first, and "Clear line 2" on the card the button Clear runs.
+#[test]
+fn a_refusal_names_its_line_by_the_number_the_card_shows() {
+    let text = edited_sheet(
+        "game_of_life.toml",
+        &[
+            ("next_line = 5", "next_line = 7"),
+            (
+                "lines = [\"l1\", \"l2\", \"l3\"]",
+                "lines = [\"l5\", \"l1\", \"l2\", \"l3\"]",
+            ),
+            (
+                "# Lines of Clear",
+                "[card.line.l5]\nkind = \"random_direction\"\nlength = 1\n\n# Lines of Clear",
+            ),
+            ("lines = [\"l4\"]", "lines = [\"l4\", \"l6\"]"),
+        ],
+    );
+    let text = format!("{text}\n[card.line.l6]\nkind = \"count\"\naround = \"cells_8\"\n");
+    assert_reported(
+        &text,
+        Expected::Error,
+        "Clear line 2: a card that runs once cannot look around",
+        "[card.line.l6]",
+    );
+    let without_count = text.replace("\"l4\", \"l6\"", "\"l4\"");
+    let without_count = &without_count[..without_count.find("[card.line.l6]").expect("the count")];
+    let parsed = crate::sheet::ParsedSheet::parse(without_count).expect("the sheet reads");
+    let problems = crate::sheet::SheetFile::lowering_problems(&parsed, &parsed.check());
+    let messages: Vec<&str> = problems
+        .iter()
+        .map(|problem| problem.diagnostic.message.as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        ["line 1: a random_direction line runs on agents and cannot be used in a card that runs on the cells"]
+    );
+}
+
 #[test]
 fn a_count_in_a_button_card_is_an_error() {
     let text = edited_sheet(
@@ -245,7 +285,7 @@ fn a_count_in_a_button_card_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "line l1: a card that runs once cannot look around",
+        "line 1: a card that runs once cannot look around",
         "[card.line.l1]",
     );
 }

@@ -174,10 +174,12 @@ differs. The graph starters stay graph files in `starters/`.
 
 **Relations.** `CardRelations::new(&document, &card)` holds a card's display order (a block's lines
 after the block line, an id listed twice or inside its own block taken once at its first place, an
-id with no table left out), each line's block (`parent`, `is_within`) and number (`number`, from 1).
-Two changes collide when both are Become or both Set, on one property, and for Become both name a
-start state (`any_state` counts, a blank does not), or when both are Move to, since the first whose
-condition holds decides (Move by lines add up and never collide). `can_both_apply(a, b)` is false
+id with no table left out), each line's block (`parent`, `is_within`) and number (`number`, from 1),
+the button that runs the card once (`button`) and the words a message names a line by (`line_word`,
+"line 2" or "Clear line 1"). Two changes collide when both are Become or both Set, on one property,
+and for Become both name a start state (`any_state` counts, a blank does not), or when both are Move
+to, since the first whose condition holds decides (Move by lines add up and never collide).
+`can_both_apply(a, b)` is false
 when a test of `a` and a test of `b` read one value and no value passes both. A line's tests: its
 own condition, the condition of each When around it, and a Become's named start state as "my X is S"
 (a state reads as its index). An all of gives each item, nested all of included, and any of, none

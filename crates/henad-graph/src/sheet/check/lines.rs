@@ -322,27 +322,23 @@ fn check_line<'a>(
         condition: false,
         whose: false,
     };
+    // The card's words for the line, such as "line 3" or "Clear line 1".
+    let word = checker.relations[owner.card].line_word(owner.id);
     if line.kind == LineKind::Always {
         checker.error(
-            format!("line {}: always is a condition and cannot be a line kind", owner.id),
+            format!("{word}: always is a condition and cannot be a line kind"),
             &place,
         );
         return None;
     }
     if line.name.is_some() && !line.kind.works_out_result() {
-        checker.error(
-            format!("line {}: a line that makes a change cannot have a name", owner.id),
-            &place,
-        );
+        checker.error(format!("{word}: a line that makes a change cannot have a name"), &place);
     }
     if owner.in_repeat && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
         checker.error(sentence::LOOK_IN_REPEAT.to_owned(), &place);
     }
     if owner.runs_once && matches!(line.kind, LineKind::Count | LineKind::LookAround | LineKind::PickCell) {
-        checker.error(
-            format!("line {}: a card that runs once cannot look around", owner.id),
-            &place,
-        );
+        checker.error(format!("{word}: a card that runs once cannot look around"), &place);
     }
     let mut state = LineState::default();
     checker.body(line, &context, &mut state);

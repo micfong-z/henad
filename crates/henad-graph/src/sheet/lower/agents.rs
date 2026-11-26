@@ -86,7 +86,10 @@ impl<'a> CardLowering<'_, 'a> {
                 _ => None,
             }
             .ok_or_else(|| {
-                format!("the distance of line {id} must be a number or a parameter, the same for every agent")
+                format!(
+                    "the distance of {} must be a number or a parameter, the same for every agent",
+                    self.relations.line_word(id)
+                )
             })?;
             distance.insert(id, operand);
         }
@@ -296,7 +299,7 @@ impl<'a> CardLowering<'_, 'a> {
         let index = *looks
             .fold_of
             .get(id)
-            .ok_or_else(|| format!("line {id} has no fold of its own"))?;
+            .ok_or_else(|| format!("{} has no fold of its own", self.relations.line_word(id)))?;
         let fold = &looks.folds[index];
         let node = fold.node;
         let filtered = fold.filtered;
