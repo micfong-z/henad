@@ -313,6 +313,23 @@ Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 
 A line moved above the result it uses says "Uses Alive neighbours, which is below this line" and does not run, and moving it back runs it again.
 
+### Dragging a line
+
+Drag a line by its number to move it.
+A grip shows beside the number of the line under the pointer.
+While you drag, a copy of the line follows the pointer and the line fades in its place.
+A blue line across the card marks where the line will go, indented to the level it will take: inside a When or a Repeat, at its end above its **+ Add inside** row, or after it.
+A When or a Repeat moves with all its lines.
+A red line marks a place the line cannot go, and the copy says why:
+
+- Another card. A line moves only within its own card.
+- Inside another When or Repeat, for a When or a Repeat.
+- Inside a Repeat, for a look around, a count or a pick of a cell.
+
+A drop makes the same moves as **Move line 2 up** and **Move line 2 down**, and one Undo takes it back.
+Press <span class="ui">Escape</span> to end a drag and leave the line where it was.
+The Card pane scrolls while the pointer is near its top or bottom edge.
+
 ### Notes under a line
 
 A line that cannot run yet keeps its place on the card and says why under it, such as "Not run yet: choose a state", and the rest of the model runs without it.
