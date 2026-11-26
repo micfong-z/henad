@@ -39,7 +39,8 @@ until the drag ends, with the pointer's offset in the row where the drag started
 the moves reach can take the line, except a slot inside a Repeat or a block inside one for a line
 henad-graph's `refusals::in_repeat` refuses there (a Count, Look around or Pick a cell with
 `LOOK_IN_REPEAT`, a Keep between, Leave, Record or Move to with `NOT_YET_REPEAT_CHANGE`), refused
-with its words as the Repeat's add menu refuses them. A When or Repeat passes no slot inside another block, so
+with its words as the Repeat's add menu refuses them. A When or Repeat passes no slot inside another
+block, so
 those read `DROP_INTO_BLOCK`. Over another card the copy reads `DROP_ON_OTHER_CARD`.
 
 **A drop.** On release over a slot that can take the line, `DragFrame::place_ui` returns a

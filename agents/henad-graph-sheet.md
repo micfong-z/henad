@@ -24,7 +24,8 @@ returning the refusal in the author's words: `looks_around` and `in_repeat` (a l
 `LOOK_IN_REPEAT`, a change `changes_outside_repeat` with `NOT_YET_REPEAT_CHANGE`), `walls`,
 `blocked_state`, `cell_ahead`, `first_move_by`, `moves_to_cells` and `change` (a change beside the
 card's other lines, in a line's place or at the card's end: one property changed two ways through
-the crate-visible `Way`, a Move by behind walls or over a ground that blocks a state, a line inside a
+the crate-visible `Way`, a Move by behind walls or over a ground that blocks a state, a line inside
+a
 Repeat, and the last Move to of a sheet whose line looks at the cell ahead). The checker and the
 lowering refuse through the same tests, so an editor and the build never disagree
 (`src/tests/sheet_refusals.rs`: every line and Move offered on each agent sheet, in and out of the

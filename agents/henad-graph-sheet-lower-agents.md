@@ -32,7 +32,8 @@ the second line, naming the first in display order: Steer below a Set (`set_alre
 Steer (`steered_already`), Move to below Move by (`moved_by_already`) and Move by below Move to
 (`moved_to_already`), through `refusals::Way` and `refusals::changes_outside_repeat`. That error
 takes the place of the line's own interim refusal, so a refusal gives one located error. The cell
-ahead lowers only while `refusals::cell_ahead` lets it. The checker refuses a Count, Look around or Pick a
+ahead lowers only while `refusals::cell_ahead` lets it. The checker refuses a Count, Look around or
+Pick a
 cell inside a Repeat. A Count over agents in a slot is an error ("must be on a line of its own").
 
 Looks (`agents.rs`): at the card's first look at agents, `open_looks` takes every look that runs,

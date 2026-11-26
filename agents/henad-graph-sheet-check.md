@@ -56,7 +56,8 @@ order on states or yes or no, and "is within" over numbers and worked-out yes or
 both types are known, and only what the lowering refuses too), formulas, keys held twice (each
 owner named as the card and the Sheet pane name it, "line 5" or "the start of Status"), Count,
 Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card
-(`refusals::looks_around`), `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording
+(`refusals::looks_around`), `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and
+the ranges from the wording
 table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
 `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields (a Steer or Move
 mode, a pick rule, `which`, `agent_kind`, `include_me`) are errors

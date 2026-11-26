@@ -120,7 +120,8 @@ Number box put a number back in its place
 (`a_random_value_returns_to_a_typed_number_from_its_first_words`). After the last item of a list,
 `add_value_ui` draws "+" named `add_value_name`, which opens the list's picker for one item past the
 end. Each "+" of the card shows what it adds under the pointer and on keyboard focus:
-`ADD_VALUE_TOOLTIP`, `ADD_ROW_TOOLTIP` and `ADD_SUMMARY_TOOLTIP`. `CardLine::control` returns each control's visible words and name, which the
+`ADD_VALUE_TOOLTIP`, `ADD_ROW_TOOLTIP` and `ADD_SUMMARY_TOOLTIP`. `CardLine::control` returns each
+control's visible words and name, which the
 label-in-name tests read. Hovering or focusing a result chip or "otherwise" highlights the lines it
 names on the next frame. Notes are `NOTE_SIZE` 11.5 in their three colours, a note's button a
 `note_button`. The add buttons (`add_buttons_ui`) are `add_row_button`s, each with a square of its
@@ -183,7 +184,8 @@ after the card's edits as a `starts_only` edit, so a played preview runs on), `a
 `add_line_below` (`CardState::inserting`: `insert_menu_ui` under the menu's button, a `menu_dialog`
 titled `add_above_name` or `add_below_name` of `add_inside_groups` through `add_items_ui`, greying
 each item `add_refusal` refuses, inside a Repeat around the line too, whose item runs `InsertLine`
-and opens the new line's first blank), `duplicate_line` (`DuplicateLine`, `DUPLICATE_BLOCK_TOOLTIP` on a When or a Repeat),
+and opens the new line's first blank), `duplicate_line` (`DuplicateLine`, `DUPLICATE_BLOCK_TOOLTIP`
+on a When or a Repeat),
 `move_line_up` and `move_line_down` (`MoveLine`, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as tooltip where `can_move` finds the outline's edge: only the
 card's first line stays at the top, and only a top-level line with no top-level line after it at
