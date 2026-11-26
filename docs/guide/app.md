@@ -50,7 +50,7 @@ An app built on Henad shows its own name there, and adds a **Built on** row with
 Henad has two layouts, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists them under the tabs.
 
 <figure markdown="span">
-  ![The View menu, listing the 13 tabs with the open ones highlighted, then Default layout, Editor layout, the Open models in the Editor layout checkbox and Reset layout](../assets/app/view-menu.png){ width="232" }
+  ![The View menu, listing the 13 tabs with the open ones highlighted, then Default layout, Editor layout, the Open models in the Editor layout and Show type symbols on sheets checkboxes, and Reset layout](../assets/app/view-menu.png){ width="232" }
 <figcaption>The View menu in the default layout.</figcaption>
 </figure>
 
