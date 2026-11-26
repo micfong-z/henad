@@ -10,6 +10,7 @@ use henad_graph::sheet::document::{
     LineKind, ParameterType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetParameter, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{SheetBuilder, SheetEdit};
+use henad_graph::sheet::sentence::remove_choose_row_name;
 use henad_graph::sheet::sentence::{
     ADD_BUTTON, ARROW_KIND, AddButton, BUTTON_NAME_FIELD, Blank, CHOOSE_WHEN, CREATE_PARAMETER, DONE, DrawKind,
     LOOK_IN_REPEAT, NEW_PARAMETER, NO_AGENT_OR_GROUND_STATES, NO_AGENT_STATES, NO_STATES, NUMBER_BOX_HINT,
@@ -21,7 +22,7 @@ use crate::tests::panes::{
     Seen, add_average_measure, add_property, agent_sheet, apply_sheet_edit, assert_controls_hold_their_words,
     assert_no_forbidden_word, click, click_in, click_last, click_on_line, document_of, field_value, is_open, labels_of,
     line_picker, line_text, named, new_blank_agents, open_starter, pick, picker_labels, picker_offers, sheet,
-    sheet_mut, shows, starter_document, text_and_code, type_and_enter, type_into,
+    sheet_mut, shows, starter_document, text, text_and_code, type_and_enter, type_into,
 };
 use crate::tests::support::{Harness, align_with_starter, edited, starter_text};
 use crate::ui::editor::sheet::card_pane::{NoteColor, card_lines};
@@ -473,6 +474,31 @@ fn opened_notes(harness: &mut Harness, document: &SheetDocument, line_id: &str) 
     harness.open_sheet(&document.to_text().expect("the sheet writes"));
     let editor = sheet(harness);
     notes_of(editor.document(), editor.report(), line_id)
+}
+
+/// A row of a Choose line is removed by the "×" after it while two or more rows are left, one step of Undo. The last row
+/// has none.
+#[test]
+fn a_choose_row_is_removed_by_its_cross_while_two_rows_are_left() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "ants.toml");
+    let rows = |harness: &Harness| sheet(harness).document().cards[0].line_tables["l7"].rows.clone();
+    let before = rows(&harness);
+    assert_eq!(before.len(), 2);
+    let starter = text(&harness);
+    assert_eq!(named(&mut harness, &remove_choose_row_name("Line 7", 2)).len(), 1);
+    click(&mut harness, &remove_choose_row_name("Line 7", 1));
+    harness.settle();
+    assert_eq!(rows(&harness), before[1..]);
+    assert!(
+        named(&mut harness, &remove_choose_row_name("Line 7", 1)).is_empty(),
+        "the last row stays"
+    );
+    assert!(line_text(&mut harness, "Line 7").starts_with("Next cell = choose, first that applies: a random"));
+    click(&mut harness, "Undo");
+    assert_eq!(text(&harness), starter, "one step of Undo");
 }
 
 #[test]

@@ -19,7 +19,7 @@ use crate::sheet::document::{
     SheetValue, Slot, StartRule, StartsAs, StartsAsRow,
 };
 use crate::sheet::edit::{
-    IdSpace, LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
+    IdSpace, LineField, LineSide, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem,
     automatic_name, lines_losing_formulas, measures_losing_formulas, mint_id, unit_in_text,
 };
 use crate::sheet::limits::MAX_NESTING;
@@ -887,6 +887,161 @@ fn a_change_added_inside_a_when_starts_always_and_takes_the_tested_state() {
         line: Box::new(SheetLine::new(LineKind::Become)),
     });
     assert!(matches!(refused, Err(SheetEditError::Invalid(_))), "{refused:?}");
+}
+
+/// Runs [`SheetEdit::InsertLine`] of a new line of `kind` beside line `anchor` on `side`, and returns the new id.
+fn insert(builder: &mut SheetBuilder, anchor: &str, side: LineSide, kind: LineKind) -> String {
+    let made = run(
+        builder,
+        SheetEdit::InsertLine {
+            anchor: anchor.to_owned(),
+            side,
+            line: Box::new(SheetLine::new(kind)),
+        },
+    );
+    made.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn a_line_goes_above_or_below_another_in_its_own_block() {
+    let mut builder = builder_of("game_of_life.toml");
+    let mut when = SheetLine::new(LineKind::When);
+    let mut test = SheetLine::new(LineKind::Compare);
+    test.left = chip(SheetChip::My("status".to_owned()));
+    test.test = Some(CompareTest::Is);
+    test.right = chip(SheetChip::State("alive".to_owned()));
+    when.condition = phrase(test);
+    add_line(&mut builder, "cell_tick", None, when);
+    add_line(&mut builder, "cell_tick", Some("l5"), SheetLine::new(LineKind::Become));
+    let shape = |builder: &SheetBuilder| outline(builder.document(), 0);
+    assert_eq!(shape(&builder), "l1 l2 l3 l5[l6]");
+    assert_eq!(insert(&mut builder, "l2", LineSide::Above, LineKind::Calculate), "l7");
+    assert_eq!(shape(&builder), "l1 l7 l2 l3 l5[l6]");
+    assert_eq!(insert(&mut builder, "l1", LineSide::Above, LineKind::Calculate), "l8");
+    assert_eq!(shape(&builder), "l8 l1 l7 l2 l3 l5[l6]");
+    // A change that goes beside a line inside a When takes the When's defaults, as one added at its end does.
+    assert_eq!(insert(&mut builder, "l6", LineSide::Above, LineKind::Become), "l9");
+    assert_eq!(shape(&builder), "l8 l1 l7 l2 l3 l5[l9 l6]");
+    assert_eq!(condition(&builder, "l9").kind, LineKind::Always);
+    assert_eq!(line(&builder, "l9").start_state.as_deref(), Some("alive"));
+    // Below a When is after its lines, and above it is before the When.
+    assert_eq!(insert(&mut builder, "l5", LineSide::Below, LineKind::Set), "l10");
+    assert_eq!(insert(&mut builder, "l5", LineSide::Above, LineKind::Set), "l11");
+    assert_eq!(shape(&builder), "l8 l1 l7 l2 l3 l11 l5[l9 l6] l10");
+    assert!(
+        condition_is_blank(&builder, "l10"),
+        "a line outside the When takes no condition"
+    );
+    assert_eq!(insert(&mut builder, "l6", LineSide::Below, LineKind::Set), "l12");
+    assert_eq!(shape(&builder), "l8 l1 l7 l2 l3 l11 l5[l9 l6 l12] l10");
+    // Clear's card takes a line beside its own.
+    let clear = builder.document().cards[1].lines[0].clone();
+    let below_clear = insert(&mut builder, &clear, LineSide::Below, LineKind::Become);
+    assert_eq!(builder.document().cards[1].lines, [clear, below_clear]);
+    let refused = builder.apply(SheetEdit::InsertLine {
+        anchor: "l99".to_owned(),
+        side: LineSide::Below,
+        line: Box::new(SheetLine::new(LineKind::Become)),
+    });
+    assert!(matches!(refused, Err(SheetEditError::Missing(_))), "{refused:?}");
+    assert_eq!(read(&write(builder.document())), *builder.document());
+}
+
+/// Returns whether line `line_id` of `builder` has a blank condition.
+fn condition_is_blank(builder: &SheetBuilder, line_id: &str) -> bool {
+    line(builder, line_id).condition.is_blank()
+}
+
+#[test]
+fn a_duplicate_copies_a_block_with_new_ids_keys_and_names_and_reads_its_own_copies() {
+    let mut builder = builder_of("game_of_life.toml");
+    add_line(&mut builder, "cell_tick", None, SheetLine::new(LineKind::When));
+    // Line 6 sums the cells around, line 7 reads it and line 1, and line 8 compares line 6's total.
+    let mut total = SheetLine::new(LineKind::LookAround);
+    total.around = Some(crate::sheet::document::Around::Cells8);
+    let mut summary = crate::sheet::document::LookSummary::new("total", "Total");
+    summary.summary = Some(crate::sheet::document::SummaryKind::Total);
+    summary.value = chip(SheetChip::My("status".to_owned()));
+    total.summaries = vec![summary];
+    add_line(&mut builder, "cell_tick", Some("l5"), total);
+    let mut calculate = SheetLine::new(LineKind::Calculate);
+    calculate.formula = Some("l6.total + l1".to_owned());
+    add_line(&mut builder, "cell_tick", Some("l5"), calculate);
+    run(
+        &mut builder,
+        SheetEdit::RenameResult {
+            line: "l7".to_owned(),
+            name: "Food way".to_owned(),
+        },
+    );
+    let mut compare = SheetLine::new(LineKind::Compare);
+    compare.left = chip(SheetChip::Result {
+        line: "l6".to_owned(),
+        part: Some("total".to_owned()),
+        property: None,
+    });
+    compare.test = Some(CompareTest::Is);
+    compare.right = Slot::Filled(SheetValue::Literal(SheetLiteral::Number(3.0)));
+    add_line(&mut builder, "cell_tick", Some("l5"), compare);
+    let made = run(&mut builder, SheetEdit::DuplicateLine { line: "l5".to_owned() });
+    assert_eq!(made, ["l9", "l10", "l11", "l12"]);
+    assert_eq!(outline(builder.document(), 0), "l1 l2 l3 l5[l6 l7 l8] l9[l10 l11 l12]");
+    assert_eq!(line(&builder, "l11").formula.as_deref(), Some("l10.total + l1"));
+    assert_eq!(
+        line(&builder, "l12").left.value(),
+        Some(&SheetValue::Chip(SheetChip::Result {
+            line: "l10".to_owned(),
+            part: Some("total".to_owned()),
+            property: None,
+        }))
+    );
+    assert_eq!(line(&builder, "l11").name.as_deref(), Some("Food way 2"));
+    assert_eq!(line(&builder, "l7").name.as_deref(), Some("Food way"));
+    let names: Vec<String> = builder.document().cards[0]
+        .line_tables
+        .values()
+        .filter_map(|line| line.name.as_deref().map(str::to_lowercase))
+        .collect();
+    let unique: BTreeSet<&String> = names.iter().collect();
+    assert_eq!(unique.len(), names.len(), "{names:?}");
+    assert_eq!(read(&write(builder.document())), *builder.document());
+
+    // A copy of a line that draws takes a key of its own, and a line copied twice numbers its name on.
+    let mut builder = builder_of("ants.toml");
+    let made = run(&mut builder, SheetEdit::DuplicateLine { line: "l7".to_owned() });
+    assert_eq!(
+        builder.document().cards[0].lines.iter().position(|id| *id == made[0]),
+        Some(7)
+    );
+    assert_ne!(line(&builder, &made[0]).key, line(&builder, "l7").key);
+    assert!(line(&builder, &made[0]).key.is_some());
+    let again = run(&mut builder, SheetEdit::DuplicateLine { line: "l1".to_owned() });
+    let third = run(&mut builder, SheetEdit::DuplicateLine { line: "l1".to_owned() });
+    assert_eq!(line(&builder, &third[0]).name.as_deref(), Some("Food way 3"));
+    assert_eq!(line(&builder, &again[0]).name.as_deref(), Some("Food way 2"));
+    let refused = builder.apply(SheetEdit::DuplicateLine { line: "l99".to_owned() });
+    assert!(matches!(refused, Err(SheetEditError::Missing(_))), "{refused:?}");
+}
+
+#[test]
+fn a_choose_row_is_removed_and_the_last_row_stays() {
+    let mut builder = builder_of("ants.toml");
+    let delete = |builder: &mut SheetBuilder, line: &str, index: usize| {
+        builder.apply(SheetEdit::DeleteRow {
+            line: line.to_owned(),
+            index,
+        })
+    };
+    let second = line(&builder, "l7").rows[1].clone();
+    let refused = delete(&mut builder, "l7", 2);
+    assert!(matches!(refused, Err(SheetEditError::Missing(_))), "{refused:?}");
+    delete(&mut builder, "l7", 0).expect("the first row goes");
+    assert_eq!(line(&builder, "l7").rows, [second]);
+    let refused = delete(&mut builder, "l7", 0);
+    assert!(matches!(refused, Err(SheetEditError::Invalid(_))), "{refused:?}");
+    let refused = delete(&mut builder, "l8", 0);
+    assert!(matches!(refused, Err(SheetEditError::Invalid(_))), "{refused:?}");
+    assert_eq!(read(&write(builder.document())), *builder.document());
 }
 
 #[test]

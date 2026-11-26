@@ -273,6 +273,8 @@ A world of agents runs a card over its kind of agent, such as "Each tick, every 
   Each time, the changes of one property inside it are tried from the top, and the first time a change applies decides.
   With "Become A from S, with chance 0.1" above "otherwise become B from S, with chance 0.5", repeated 4 times, 0.174 of the agents in S become A and 0.785 become B.
 
+**+** after the rows of a Choose adds a row, and **×** after a row removes it while two or more rows are left.
+
 A look at agents starts with one summary, an average.
 The select before each summary changes it to a total, the largest, the smallest or a count, or removes it, and **+** after the summaries adds another.
 A summary names itself after what it sums up, such as "average velocity" for the average of their Velocity, "centre" for the average offset to them and "push" for the total offset away from them.
@@ -313,6 +315,14 @@ The **+ Add inside** menu of a Repeat shows Count, Look around and Pick a cell g
 Each line has a menu, "Line 2 actions", always drawn at the end of the line:
 
 - **Rename line 2**, on a result line.
+- **Add a note to line 2…**, or **Edit the note of line 2…** once the line has one, which opens a field under the line.
+  Press <kbd>Enter</kbd> or move away from the field to keep the note, empty the field to remove it, and press <kbd>Escape</kbd> to leave the note as it was.
+  A note leaves the running world alone.
+- **Add a line above line 2…** and **Add a line below line 2…**, which open a menu of every kind of line and add the one you choose right above or below line 2, inside the same When or Repeat.
+  Below a When or a Repeat is after its lines.
+- **Duplicate line 2**, which copies the line right below it.
+  A When or a Repeat is copied with its lines, and a copied line that uses another line copied with it uses that line's copy.
+  A copied result takes a number after its name, as in "Food way 2".
 - **Move line 2 up** and **Move line 2 down**, which follow the outline.
   The first line inside a block moves up out of it, the last moves down out of it, a line beside a block moves into it, and a When moves with all its lines.
 - **Draw new numbers**, on a line that draws by chance, which gives the line new random numbers.
@@ -360,6 +370,7 @@ Grey notes explain how lines work together:
 - A rate shows the chance per tick it gives, as [Rates](#rates) describes.
 
 A note the model's author wrote under a line comes last, in grey, as the ant foraging model's note on its slower trail formation does.
+The line menu's **Add a note to line 2…** writes one.
 
 ### Running a sheet
 

@@ -461,9 +461,20 @@ fn summary_names(
     names
 }
 
+/// Returns the lower case of every name a line of `document` holds.
+pub(super) fn result_names(document: &SheetDocument) -> HashSet<String> {
+    document
+        .cards
+        .iter()
+        .flat_map(|card| card.line_tables.values())
+        .filter_map(|line| line.name.as_deref())
+        .map(str::to_lowercase)
+        .collect()
+}
+
 /// Returns the first of `base`, `base 2`, `base 3` and so on whose lower case `taken` does not hold, and adds its lower
 /// case to `taken`.
-fn free_name(base: &str, taken: &mut HashSet<String>) -> String {
+pub(super) fn free_name(base: &str, taken: &mut HashSet<String>) -> String {
     let mut count = 1;
     let mut name = sentence::repeated_result_name(base, count);
     while taken.contains(&name.to_lowercase()) {

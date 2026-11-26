@@ -146,6 +146,59 @@ pub const DELETE_WHEN_TOOLTIP: &str = "Delete. Lines inside will be kept.";
 /// Item of a line's menu that mints a new key for its draws.
 pub const DRAW_NEW_NUMBERS: &str = "Draw new numbers";
 
+/// Returns the tool that opens the menu of a line to add above a line, such as "Add a line above line 2…", where
+/// `word` is the line word.
+pub fn add_line_above(word: &str) -> String {
+    format!("{}…", add_above_name(word))
+}
+
+/// Returns the tool that opens the menu of a line to add below a line, after the lines inside it for a When or a
+/// Repeat, such as "Add a line below line 2…", where `word` is the line word.
+pub fn add_line_below(word: &str) -> String {
+    format!("{}…", add_below_name(word))
+}
+
+/// Returns the title of the menu of a line to add above a line, such as "Add a line above line 2", where `word` is
+/// the line word.
+pub fn add_above_name(word: &str) -> String {
+    format!("Add a line above {word}")
+}
+
+/// Returns the title of the menu of a line to add below a line, such as "Add a line below line 2", where `word` is
+/// the line word.
+pub fn add_below_name(word: &str) -> String {
+    format!("Add a line below {word}")
+}
+
+/// Returns the tool that copies a line below it, such as "Duplicate line 2", where `word` is the line word.
+pub fn duplicate_line(word: &str) -> String {
+    format!("Duplicate {word}")
+}
+
+/// Tooltip of the tool that copies a When or a Repeat line.
+pub const DUPLICATE_BLOCK_TOOLTIP: &str = "Duplicate. Lines inside will be copied too.";
+
+/// Returns the tool that opens the field of a new note under a line, such as "Add a note to line 2…", where `word` is
+/// the line word.
+pub fn add_note_tool(word: &str) -> String {
+    format!("Add a note to {word}…")
+}
+
+/// Returns the tool that opens the field of the note under a line, such as "Edit the note of line 2…", where `word`
+/// is the line word.
+pub fn edit_note_tool(word: &str) -> String {
+    format!("Edit the note of {word}…")
+}
+
+/// Returns the accessible name of the field of the note under a line, such as "Line 2: note", where `prefix` is the
+/// line prefix.
+pub fn note_field_name(prefix: &str) -> String {
+    format!("{prefix}: note")
+}
+
+/// Hint of an empty note field. A note left empty is removed.
+pub const NOTE_FIELD_HINT: &str = "Type a note";
+
 /// Returns the message for a rename to `name`, which another result already holds.
 pub fn result_name_taken(name: &str) -> String {
     format!("Another result is already called {name}.")

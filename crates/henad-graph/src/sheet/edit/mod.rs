@@ -57,7 +57,7 @@ mod names;
 mod references;
 
 pub use colors::{MEASURE_COLORS, PALETTE_COLORS, STATE_COLORS, suggested_state_color};
-pub use command::{LineField, MoveDirection, SheetEdit, SheetEditError, SheetItem};
+pub use command::{LineField, LineSide, MoveDirection, SheetEdit, SheetEditError, SheetItem};
 pub use formulas::{lines_losing_formulas, measures_losing_formulas};
 pub use ids::{IdSpace, is_reserved_name, mint_id};
 pub(crate) use line_commands::unit_in_text;
@@ -398,6 +398,8 @@ impl Draft {
                 blocked,
             } => self.set_blocked(&property, &state, blocked)?,
             SheetEdit::AddLine { card, inside, line } => return self.add_line(&card, inside.as_deref(), *line),
+            SheetEdit::InsertLine { anchor, side, line } => return self.insert_line(&anchor, side, *line),
+            SheetEdit::DuplicateLine { line } => return self.duplicate_line(&line),
             SheetEdit::SetSlot { line, path, value } => self.set_slot(&line, &path, value)?,
             SheetEdit::SetField { line, phrase, field } => self.set_field(&line, &phrase, field)?,
             SheetEdit::ChooseCondition { line, item } => self.choose_condition(&line, item)?,
@@ -408,6 +410,7 @@ impl Draft {
             SheetEdit::RenameResult { line, name } => self.rename_result(&line, &name)?,
             SheetEdit::AddSummary { line, summary } => self.add_summary(&line, summary)?,
             SheetEdit::DeleteSummary { line, index } => self.delete_summary(&line, index)?,
+            SheetEdit::DeleteRow { line, index } => self.delete_row(&line, index)?,
             SheetEdit::SetNote { line, note } => {
                 self.line_mut(&line)?.note = note.filter(|note| !note.trim().is_empty());
             }

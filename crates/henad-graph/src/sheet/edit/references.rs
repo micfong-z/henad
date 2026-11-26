@@ -28,7 +28,7 @@ pub(super) enum Target {
         /// Id of the state.
         state: String,
     },
-    /// A line, by id. A line takes no new id.
+    /// A line, by id. A line keeps its id, and only the references inside a copy of a line take a new one.
     Line(String),
     /// An event, by id.
     Event(String),
@@ -62,6 +62,13 @@ pub(super) enum Change<'a> {
 pub(super) fn change_references(document: &mut SheetDocument, target: &Target, change: Change<'_>) {
     let walker = Walker::new(document, target, change);
     walker.document(document);
+}
+
+/// Makes every reference to line `old` in `line`, a line that `document` does not hold yet, and the phrases inside it
+/// name line `new`, a part of its result included.
+pub(super) fn rename_line_in(document: &SheetDocument, line: &mut SheetLine, old: &str, new: &str) {
+    let target = Target::Line(old.to_owned());
+    Walker::new(document, &target, Change::Rename(new)).line(line);
 }
 
 /// Returns every property of `document`: the cells', each kind of agent's, then the ground's.
@@ -317,6 +324,11 @@ impl<'a> Walker<'a> {
             named = true;
             match (self.change, self.target) {
                 (Change::Rename(new), Target::Property(_) | Target::Summary { .. }) => Some(format!("{head}.{new}")),
+                // A line's new id keeps the part of its result after it, as in `l4.centre`.
+                (Change::Rename(new), Target::Line(_)) => Some(match tail {
+                    Some(tail) => format!("{new}.{tail}"),
+                    None => new.to_owned(),
+                }),
                 (Change::Rename(new), _) => Some(new.to_owned()),
                 (Change::Clear, _) => None,
             }

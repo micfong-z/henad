@@ -107,6 +107,15 @@ pub fn add_choose_row_name(prefix: &str) -> String {
     format!("{prefix}: add another row")
 }
 
+/// Returns the accessible name of the "×" after row `row` of a Choose line, counted from 1, such as "Line 7: remove
+/// row 2".
+pub fn remove_choose_row_name(prefix: &str, row: usize) -> String {
+    format!("{prefix}: remove row {row}")
+}
+
+/// Tooltip of the "×" after a row of a Choose line.
+pub const REMOVE_CHOOSE_ROW: &str = "Remove this row";
+
 /// Returns an item of the picker of a new summary, such as "average of …" or "count".
 pub fn summary_item(kind: SummaryKind) -> String {
     match kind {

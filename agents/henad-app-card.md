@@ -165,7 +165,15 @@ accessibility tree.
 `new_line` gives each item's line with its blanks empty: a Count's `whose` a comparison "is", a
 Total or average one summary "total", a change from "+ Change" an empty condition, from "+ Chance" a
 chance or a rate phrase. The line menu (`line_menu_ui`, "Line 2 actions", always drawn) holds
-`rename_line` on a result line, `move_line_up` and `move_line_down` (`MoveLine`, disabled with
+`rename_line` on a result line, `add_note_tool` or `edit_note_tool` (`CardState::noting`: a
+multiline field named `note_field_name` in the note's place under the line, hint `NOTE_FIELD_HINT`,
+Enter or leaving it keeps, Escape cancels, empty removes the note, and `keep_note` runs `SetNote`
+after the card's edits as a `starts_only` edit, so a played preview runs on), `add_line_above` and
+`add_line_below` (`CardState::inserting`: `insert_menu_ui` under the menu's button, a `menu_dialog`
+titled `add_above_name` or `add_below_name` of `add_inside_groups` through `add_items_ui`, a Repeat
+around the line greying the looks, whose item runs `InsertLine` and opens the new line's first
+blank), `duplicate_line` (`DuplicateLine`, `DUPLICATE_BLOCK_TOOLTIP` on a When or a Repeat),
+`move_line_up` and `move_line_down` (`MoveLine`, disabled with
 `MOVE_UP_FIRST` or `MOVE_DOWN_LAST` as tooltip where `can_move` finds the outline's edge: only the
 card's first line stays at the top, and only a top-level line with no top-level line after it at
 the bottom), `DRAW_NEW_NUMBERS` on a line
@@ -271,6 +279,9 @@ every menu, picker and select opened, every control's name holding its visible w
 `a_single_blank_given_a_list_says_choose_is_one_of`, `a_chance_of_1_5_is_refused_in_the_field`,
 `chips_and_pickers_name_the_property_when_two_share_a_state_name`,
 `the_line_menu_renames_a_result_and_deletes_a_line`,
+`the_line_menu_adds_a_line_beside_another_and_duplicates_a_line`,
+`the_line_menu_writes_a_note_that_leaves_a_played_preview_running`,
+`the_menu_that_adds_a_line_offers_what_its_place_takes`,
 `add_menus_line_menus_and_pickers_hold_menu_items_in_menus` (each item a `MenuItem` in its named
 menu, a titled overlay's heading, through `Node::menu`),
 `arrow_keys_move_round_an_open_menu_and_escape_returns_to_its_button` (an add menu, the line menu
@@ -347,7 +358,9 @@ card cannot write again waits on the delete dialog titled `REMOVE_SUMMARY_HEADIN
 `src/tests/sheet_agent_lines.rs`). `add_summary_ui` draws "+" named
 `add_summary_name` after a look's summaries, opening `summary_picker` (`CHOOSE_A_SUMMARY`), whose
 choice runs `AddSummary` and opens the new summary's value. `add_row_ui` draws "+" named
-`add_choose_row_name` after a Choose line, a value picker at `row.N.value` that `SetSlot` appends.
+`add_choose_row_name` after a Choose line, a value picker at `row.N.value` that `SetSlot` appends,
+and `remove_row_ui` a "×" named `remove_choose_row_name` after each row while two or more are left,
+`DeleteRow` with `REMOVE_CHOOSE_ROW` as its tooltip.
 A Choose row's condition takes `ChooseRowCondition` (`row_of_condition` in `slot_choice`). Leave and
 Record take the condition arrow too (`takes_condition`).
 
@@ -369,6 +382,7 @@ last, in grey (`author_note`).
 `boids_as_the_editor_builds_it`, the starter with Velocity starting as a new Arrow does and no
 measures), `my_new_velocity_is_offered_below_the_last_change_to_velocity_and_nowhere_above`,
 `a_property_changed_two_ways_and_a_look_inside_a_repeat_show_their_refusals_on_the_line`,
+`a_choose_row_is_removed_by_its_cross_while_two_rows_are_left`,
 `opening_boids_leaves_a_default_off_its_slider_steps_as_it_is`,
 `each_agent_slot_offers_what_fits_it` (the picker table, a test per slot kind),
 `a_state_picker_offers_the_ground_only_where_a_cell_is_compared`,

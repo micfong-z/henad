@@ -49,6 +49,7 @@ use henad_graph::sheet::document::{
     Around, CELLS_ID, CardRuns, CellWhich, ChooseRow, CompareTest, GROUND_ID, LineKind, LineMode, LookSummary, MadeOf,
     PickRule, PropertyType, SheetCard, SheetChip, SheetDocument, SheetLine, SheetValue, Slot, SummaryKind,
 };
+use henad_graph::sheet::edit::LineSide;
 use henad_graph::sheet::edit::{
     LineField, MoveDirection, SheetBuilder, SheetEdit, SheetEditError, automatic_name, slot_value,
 };
@@ -70,6 +71,10 @@ use henad_graph::sheet::sentence::{
     REMOVE_SUMMARY_HEADING, add_choose_row_name, add_for_each_label, add_for_each_name, add_summary_name,
     comparison_words, drag_line_tooltip, fire_count, fire_count_description, include_me_tool, leave_me_out_tool,
     long_tick_note, rate_grow_prompt, tick_set_notice,
+};
+use henad_graph::sheet::sentence::{
+    DUPLICATE_BLOCK_TOOLTIP, NOTE_FIELD_HINT, REMOVE_CHOOSE_ROW, add_above_name, add_below_name, add_line_above,
+    add_line_below, add_note_tool, duplicate_line, edit_note_tool, note_field_name, remove_choose_row_name,
 };
 
 use super::card_drag::{DragFrame, DrawnCard, DrawnRow, LineDrag, RowOf, faded, handle_ui};
@@ -166,6 +171,10 @@ pub struct CardState {
     widgets: Id,
     /// Rename field of a result line, `None` while none is open.
     renaming: Option<Renaming>,
+    /// Field of the note under a line, `None` while none is open.
+    noting: Option<Noting>,
+    /// Menu that adds a line beside another, `None` while none is open.
+    inserting: Option<Inserting>,
     /// Values chosen for each Calculate line whose formula is not written yet, by line id.
     drafts: BTreeMap<String, CalcDraft>,
     /// Ids of the lines whose "is less than … or more than …" is being filled. The one-side offer waits on them.
@@ -199,6 +208,8 @@ impl CardState {
         Self {
             widgets: Id::new(("henad_card_pane", identity)),
             renaming: None,
+            noting: None,
+            inserting: None,
             drafts: BTreeMap::new(),
             filling: BTreeSet::new(),
             new_parameter: None,
@@ -225,6 +236,8 @@ impl CardState {
     /// and message, and ends every range being filled, as an undo or a redo does.
     pub fn close(&mut self) {
         self.renaming = None;
+        self.noting = None;
+        self.inserting = None;
         self.drafts.clear();
         self.filling.clear();
         self.new_parameter = None;
@@ -265,6 +278,28 @@ struct Renaming {
     message: Option<String>,
     /// Whether the field has taken the focus once.
     focused: bool,
+}
+
+/// The field of the note under a line.
+#[derive(Debug, Clone)]
+struct Noting {
+    /// Id of the line.
+    line: String,
+    /// Text in the field.
+    text: String,
+    /// Whether the field has taken the focus once.
+    focused: bool,
+    /// Whether the text is to be kept as the note once the card is drawn.
+    keep: bool,
+}
+
+/// The menu that adds a line right above or below another, opened from the line menu.
+#[derive(Debug, Clone)]
+struct Inserting {
+    /// Id of the line the new line goes beside.
+    line: String,
+    /// Side of that line the new line goes on.
+    side: LineSide,
 }
 
 /// A place of a line: the line's id and the place in it.
@@ -395,6 +430,28 @@ pub fn card_pane(
     // the edit before it left it.
     for edit in pending {
         run_card_edit(sheet, past_start, edit);
+    }
+    keep_note(sheet, past_start);
+}
+
+/// Keeps the text of the note field as the note under its line, once the field asked for it, and closes the field.
+///
+/// A note leaves the running world alone, as the sheet's purpose does.
+fn keep_note(sheet: &mut SheetEditor, past_start: bool) {
+    let Some(noting) = sheet.card.noting.take_if(|noting| noting.keep) else {
+        return;
+    };
+    let text = noting.text.trim().to_owned();
+    let edit = SheetEdit::SetNote {
+        line: noting.line.clone(),
+        note: (!text.is_empty()).then_some(text),
+    };
+    match sheet.edit(past_start, true, |builder| builder.apply(edit).map(drop)) {
+        Ok(()) => sheet.card.refusal = None,
+        Err(error) => {
+            sheet.card.refusal = Some(refusal_text(&error));
+            sheet.card.noting = Some(Noting { keep: false, ..noting });
+        }
     }
 }
 
@@ -1676,6 +1733,7 @@ fn line_ui(
             .layout(Layout::left_to_right(Align::Center)),
     );
     let menu = line_menu_ui(&tail, drawing.document, relations, line, line_data, state, pending);
+    insert_menu_ui(&tail, drawing, relations, line, &menu, state, pending);
     let sentence_rect = Rect::from_min_max(pos2(left, top), pos2(right, sentence_bottom));
     end_filling(ui, state, &line.id, sentence_rect, &gathered);
     // The rename field and the notes sit under the sentence, where the columns of the fire count and the menu end, so
@@ -1693,13 +1751,17 @@ fn line_ui(
         gathered.focused |= rename_ui(&mut under, line, state, pending);
     }
     let filling = state.filling.contains(&line.id);
-    gathered.focused |= notes_ui(
-        &mut under,
-        line,
-        line_data,
-        card_notes(drawing, line, line_data, relation_notes, filling),
-        pending,
-    );
+    let mut notes = card_notes(drawing, line, line_data, relation_notes, filling);
+    let noting = state.noting.as_ref().is_some_and(|noting| noting.line == line.id);
+    if noting {
+        // The field of the note shows the note in its place.
+        let note = author_note(line_data);
+        notes.retain(|shown| Some(shown) != note.as_ref());
+    }
+    gathered.focused |= notes_ui(&mut under, line, line_data, notes, pending);
+    if noting {
+        gathered.focused |= note_ui(&mut under, line, state);
+    }
     let bottom = under.min_rect().bottom().max(sentence_bottom) + ROW_PADDING;
     let rect = Rect::from_min_max(pos2(left, top), pos2(right, bottom));
     number_ui(
@@ -1768,6 +1830,9 @@ fn sentence_ui(
     }
     segments.push((start, line.parts.len()));
     let last = segments.len() - 1;
+    // The segments between the first and the last are the rows of a Choose, and each takes a "×" while two are left.
+    let removable_rows =
+        line_data.kind == LineKind::Choose && line_data.rows.len() >= 2 && segments.len() == line_data.rows.len() + 2;
     for (segment, &(from, until)) in segments.iter().enumerate() {
         let mut draw = |ui: &mut Ui| {
             ui.spacing_mut().interact_size.y = SENTENCE_ROW;
@@ -1792,6 +1857,9 @@ fn sentence_ui(
                         };
                         add_value_ui(ui, &plus, state, gathered, pending);
                     }
+                }
+                if removable_rows && segment > 0 && segment < last {
+                    remove_row_ui(ui, context, line, segment - 1, state, gathered, pending);
                 }
                 if segment != last {
                     return;
@@ -2424,6 +2492,32 @@ fn add_row_ui(
     );
 }
 
+/// Draws "×" after row `row` of a Choose line, counted from 0, named "Line 7: remove row 1". A click removes the row
+/// with its value and its condition.
+fn remove_row_ui(
+    ui: &mut Ui,
+    context: &LineContext<'_>,
+    line: &CardLine,
+    row: usize,
+    state: &CardState,
+    gathered: &mut LineDrawing<'_>,
+    pending: &mut Vec<CardEdit>,
+) {
+    let target = PlaceTarget::Slot(format!("row.{row}"));
+    let id = state.control_id(context.line_id, &target, 4);
+    ui.add_space(4.0);
+    let name = remove_choose_row_name(&line.prefix, row + 1);
+    let response = text_control(ui, Some(id), "×", &name, SENTENCE_ROW).on_hover_or_focus_text(REMOVE_CHOOSE_ROW);
+    gathered.focused |= response.has_focus();
+    if response.clicked() {
+        let edit = SheetEdit::DeleteRow {
+            line: context.line_id.to_owned(),
+            index: row,
+        };
+        pending.push(CardEdit::commands(vec![edit], After::Stay));
+    }
+}
+
 /// Draws "+" after the summaries of a look at agents, named "Line 1: add another summary". A click opens the picker of
 /// a new summary, and a choice adds it with its value empty.
 fn add_summary_ui(
@@ -2867,6 +2961,14 @@ enum LineTool {
     Rename,
     /// Count the agent itself among the agents a look at agents looks at, or leave it out.
     IncludeMe,
+    /// Add, change or remove the author's note under the line.
+    Note,
+    /// Add a line right above the line.
+    AddAbove,
+    /// Add a line right below the line, after the lines inside it.
+    AddBelow,
+    /// Copy the line, with the lines inside it, right below it.
+    Duplicate,
     /// Move the line up.
     MoveUp,
     /// Move the line down.
@@ -2881,9 +2983,9 @@ enum LineTool {
     Delete,
 }
 
-/// Draws the menu of `line`, "Line 2 actions": Rename on a result line, Move up and Move down, Draw new numbers on a
-/// line that draws, Convert to a rate or Convert to a chance on a line whose typed chance or rate can change, and
-/// Delete.
+/// Draws the menu of `line`, "Line 2 actions": Rename on a result line, the note, Add a line above and below,
+/// Duplicate, Move up and Move down, Draw new numbers on a line that draws, Convert to a rate or Convert to a chance on
+/// a line whose typed chance or rate can change, and Delete.
 /// Returns the response of its button. The button fills the place `ui` gives it.
 ///
 /// The tools form a menu labelled by the button. Move up and Move down stay in the menu where the outline keeps the
@@ -2930,6 +3032,25 @@ fn line_menu_ui(
                 field: LineField::IncludeMe(Some(!includes_me)),
             }));
         }
+        Some(LineTool::Note) => {
+            state.noting = Some(Noting {
+                line: line_id,
+                text: line_data.note.clone().unwrap_or_default(),
+                focused: false,
+                keep: false,
+            });
+        }
+        Some(tool @ (LineTool::AddAbove | LineTool::AddBelow)) => {
+            let side = if tool == LineTool::AddAbove {
+                LineSide::Above
+            } else {
+                LineSide::Below
+            };
+            state.inserting = Some(Inserting { line: line_id, side });
+            // The menu that adds the line replaces the line menu, under the same button.
+            Popup::open_id(ui.ctx(), insert_popup_id(&response));
+        }
+        Some(LineTool::Duplicate) => pending.push(edit(SheetEdit::DuplicateLine { line: line_id })),
         Some(LineTool::MoveUp) => {
             pending.push(edit(SheetEdit::MoveLine {
                 line: line_id,
@@ -3008,6 +3129,26 @@ fn line_tools_ui(
     };
     let looks_at_agents = line_data.around == Some(Around::AgentsWithin);
     tool(ui, looks_at_agents, None, include, LineTool::IncludeMe);
+    let note = if line_data.note.is_some() {
+        edit_note_tool(&line.word)
+    } else {
+        add_note_tool(&line.word)
+    };
+    tool(ui, true, None, note, LineTool::Note);
+    tool(ui, true, None, add_line_above(&line.word), LineTool::AddAbove);
+    tool(ui, true, None, add_line_below(&line.word), LineTool::AddBelow);
+    let words = duplicate_line(&line.word);
+    let row = OverlayItem {
+        label: &words,
+        ..OverlayItem::default()
+    };
+    let duplicate = menu_item(ui, &row);
+    let duplicate = if line_data.kind.is_block() {
+        duplicate.on_hover_text(DUPLICATE_BLOCK_TOOLTIP)
+    } else {
+        duplicate
+    };
+    let duplicated = duplicate.clicked();
     let refusal = (!up).then_some(MOVE_UP_FIRST);
     tool(ui, true, refusal, move_line_up(&line.word), LineTool::MoveUp);
     let refusal = (!down).then_some(MOVE_DOWN_LAST);
@@ -3036,6 +3177,9 @@ fn line_tools_ui(
     } else {
         delete
     };
+    if duplicated {
+        chosen = Some(LineTool::Duplicate);
+    }
     if delete.clicked() {
         chosen = Some(LineTool::Delete);
     }
@@ -3107,6 +3251,115 @@ fn rename_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState, pending: &mut 
     );
     edit.rename = true;
     pending.push(edit);
+    focused
+}
+
+/// Returns the id of the menu that adds a line beside the line whose menu button is `button`.
+fn insert_popup_id(button: &Response) -> Id {
+    button.id.with("insert")
+}
+
+/// Draws the menu that adds a line above or below `line`, under the button of its line menu, `button`, while the line
+/// menu chose it. It lists every kind of line in groups, as the add row of a block does, and an item adds its line
+/// beside `line`, inside the same block.
+fn insert_menu_ui(
+    ui: &Ui,
+    drawing: &CardDrawing<'_>,
+    relations: &CardRelations<'_>,
+    line: &CardLine,
+    button: &Response,
+    state: &mut CardState,
+    pending: &mut Vec<CardEdit>,
+) {
+    let Some(side) = state
+        .inserting
+        .as_ref()
+        .filter(|inserting| inserting.line == line.id)
+        .map(|inserting| inserting.side)
+    else {
+        return;
+    };
+    let popup_id = insert_popup_id(button);
+    if !Popup::is_id_open(ui.ctx(), popup_id) {
+        state.inserting = None;
+        return;
+    }
+    let title = match side {
+        LineSide::Above => add_above_name(&line.word),
+        _ => add_below_name(&line.word),
+    };
+    let states = pattern_states(drawing.document, &drawing.card.every);
+    let states = states.as_ref().map(|(new, old)| (new.as_str(), old.as_str()));
+    let agents = over_agents(&drawing.card.every);
+    // The new line sits in the block that holds `line`, so a Repeat around `line` holds it too.
+    let in_repeat = relations.repeat_of(&line.id).is_some();
+    let popup = Popup::menu(button)
+        .id(popup_id)
+        .open_memory(None)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .frame(Frame::NONE);
+    let (popup, _) = placed(ui.ctx(), popup);
+    let chosen = popup
+        .show(|ui| {
+            menu_dialog(ui, &title, |ui, _| {
+                overlay_items(ui, |ui| {
+                    let mut chosen = None;
+                    for (index, &group) in add_inside_groups(drawing.card).iter().enumerate() {
+                        let label = overlay_group(ui, group.group(), index == 0).id;
+                        if let Some(item) = add_items_ui(ui, label, group, agents, states, in_repeat) {
+                            chosen = Some(item);
+                        }
+                    }
+                    chosen
+                })
+            })
+        })
+        .and_then(|popup| popup.inner);
+    escape_to_anchor(ui, button, popup_id, true);
+    if let Some(item) = chosen {
+        Popup::close_id(ui.ctx(), popup_id);
+        state.inserting = None;
+        let edit = SheetEdit::InsertLine {
+            anchor: line.id.clone(),
+            side,
+            line: Box::new(new_line(item, &drawing.card.every)),
+        };
+        pending.push(CardEdit::commands(vec![edit], After::NewLine));
+    } else if !Popup::is_id_open(ui.ctx(), popup_id) {
+        state.inserting = None;
+    }
+}
+
+/// Draws the field of the note under `line`, and returns whether the field holds the keyboard focus. Enter or leaving
+/// the field keeps the note, an empty field removes it, and Escape cancels.
+fn note_ui(ui: &mut Ui, line: &CardLine, state: &mut CardState) -> bool {
+    let Some(noting) = state.noting.as_mut().filter(|noting| noting.line == line.id) else {
+        return false;
+    };
+    ui.add_space(4.0);
+    let field = ui.add(
+        TextEdit::multiline(&mut noting.text)
+            .desired_rows(1)
+            .desired_width(ui.available_width())
+            .hint_text(NOTE_FIELD_HINT)
+            .return_key(None),
+    );
+    set_name(ui, field.id, &note_field_name(&line.prefix));
+    if !noting.focused {
+        field.request_focus();
+        noting.focused = true;
+    }
+    let focused = field.has_focus();
+    if focused && ui.input(|input| input.key_pressed(Key::Enter)) {
+        noting.keep = true;
+        field.surrender_focus();
+    } else if field.lost_focus() {
+        if ui.input(|input| input.key_pressed(Key::Escape)) {
+            state.noting = None;
+        } else {
+            noting.keep = true;
+        }
+    }
     focused
 }
 

@@ -8,7 +8,7 @@
 use egui::accesskit::Role;
 use egui::{Key, Modifiers};
 use henad_graph::sheet::ParsedSheet;
-use henad_graph::sheet::document::{SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
+use henad_graph::sheet::document::{LineKind, SheetChip, SheetDocument, SheetLiteral, SheetValue, Slot};
 use henad_graph::sheet::sentence::{
     ADD_AT_END_NOTE, ADD_BUTTON, ADD_PARAMETER, ADD_PROPERTY, AddButton, BUTTON_NAME_FIELD, CHANCE_OUT_OF_RANGE,
     CHOOSE_WHEN, COLOR_CELLS_BY, CONDITIONS, DONE, DRAW_NEW_NUMBERS, LIST_HINT, LIST_IN_ONE_NUMBER, NEW_PARAMETER,
@@ -17,6 +17,11 @@ use henad_graph::sheet::sentence::{
 };
 
 use henad_graph::sheet::sentence::{Blank, DrawKind, Sentences};
+use henad_graph::sheet::sentence::{
+    add_above_name, add_below_name, add_line_above, add_line_below, add_note_tool, duplicate_line, edit_note_tool,
+    note_field_name,
+};
+use henad_graph::sheet::starters;
 
 use crate::tests::panes::{
     Seen, add, add_new_outbreak, add_states_property, add_to_first, assert_controls_hold_their_words,
@@ -25,7 +30,9 @@ use crate::tests::panes::{
     open_starter, pick, picker_labels, sheet, shows, shows_notice, start_infected_by_chance, starter_document, text,
     text_and_code, type_and_enter, type_into,
 };
-use crate::tests::support::{Harness, SIR_CHANCE, align_with_starter, edited, starter_text};
+use crate::tests::support::{
+    Harness, Node, SIR_CHANCE, align_with_starter, edited, settle_preview, starter_text, wait_for_snapshot,
+};
 use crate::ui::editor::sheet::widgets::{OVERLAY_PADDING, OVERLAY_SCREEN_GAP};
 
 /// Chooses `item` in the select named `select`, after recording what its open list shows.
@@ -404,6 +411,204 @@ fn the_line_menu_renames_a_result_and_deletes_a_line() {
         matches!(condition_right(&harness, "l2").value(), Some(SheetValue::Literal(_))),
         "the number stays"
     );
+}
+
+/// Returns the kind of the line at `index` of the top level of card `card` of the sheet in the harness.
+fn kind_at(harness: &Harness, card: usize, index: usize) -> LineKind {
+    let document = sheet(harness).document();
+    let id = &document.cards[card].lines[index];
+    document.cards[card].line_tables[id].kind
+}
+
+/// The line menu adds a line right above or below another, from a menu of every kind of line, and copies a line, each
+/// one step of Undo. Below a When is after its lines, and a copy of a When copies them too.
+#[test]
+fn the_line_menu_adds_a_line_beside_another_and_duplicates_a_line() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    open_starter(&mut harness, "sir.toml");
+    let lines = |harness: &Harness| sheet(harness).document().cards[0].lines.clone();
+    let before = lines(&harness);
+    let starter = text(&harness);
+    click(&mut harness, "Line 1 actions");
+    click(&mut harness, &add_line_below("line 1"));
+    assert!(is_open(&mut harness, &add_below_name("line 1")), "the menu opens");
+    click_in(&mut harness, &add_below_name("line 1"), "Set");
+    harness.press(Key::Escape, Modifiers::NONE);
+    let after = lines(&harness);
+    assert_eq!(after.len(), 4);
+    assert_eq!((&after[0], &after[2..]), (&before[0], &before[1..]));
+    assert_eq!(kind_at(&harness, 0, 1), LineKind::Set);
+    click(&mut harness, "Undo");
+    assert_eq!(text(&harness), starter, "one step of Undo");
+    click(&mut harness, "Line 1 actions");
+    click(&mut harness, &add_line_above("line 1"));
+    click_in(&mut harness, &add_above_name("line 1"), "Become");
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert_eq!(lines(&harness)[1..], before[..]);
+    assert_eq!(kind_at(&harness, 0, 0), LineKind::Become);
+    // Escape closes the menu and adds nothing.
+    click(&mut harness, "Undo");
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, &add_line_below("line 2"));
+    harness.press(Key::Escape, Modifiers::NONE);
+    assert!(!is_open(&mut harness, &add_below_name("line 2")));
+    assert_eq!(text(&harness), starter);
+
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, &duplicate_line("line 2"));
+    let after = lines(&harness);
+    assert_eq!((after.len(), &after[..2], &after[3..]), (4, &before[..2], &before[2..]));
+    let document = sheet(&harness).document();
+    let (original, copy) = (
+        &document.cards[0].line_tables[&after[1]],
+        &document.cards[0].line_tables[&after[2]],
+    );
+    assert_eq!(
+        (copy.kind, &copy.property, &copy.condition),
+        (original.kind, &original.property, &original.condition)
+    );
+    assert_ne!(copy.key, original.key, "the copy draws its own numbers");
+    click(&mut harness, "Undo");
+    assert_eq!(text(&harness), starter, "one step of Undo");
+
+    open_starter(&mut harness, "ants.toml");
+    let before = lines(&harness);
+    let when = before.iter().position(|id| *id == "l9").expect("the ants' When l9");
+    click(&mut harness, "Line 9 actions");
+    click(&mut harness, &add_line_below("line 9"));
+    click_in(&mut harness, &add_below_name("line 9"), "Set");
+    harness.press(Key::Escape, Modifiers::NONE);
+    let after = lines(&harness);
+    assert_eq!(after.len(), before.len() + 1);
+    assert_eq!(after[when], "l9");
+    assert_eq!(
+        kind_at(&harness, 0, when + 1),
+        LineKind::Set,
+        "the new line follows the When's lines"
+    );
+    click(&mut harness, "Undo");
+    click(&mut harness, "Line 9 actions");
+    let item = named(&mut harness, &duplicate_line("line 9"));
+    assert!(item.len() == 1 && item[0].role == Role::MenuItem, "{item:?}");
+    click(&mut harness, &duplicate_line("line 9"));
+    let document = sheet(&harness).document();
+    let copy = &document.cards[0].lines[when + 1];
+    assert_eq!(
+        document.cards[0].line_tables[copy].lines.len(),
+        2,
+        "the copy holds copies of both lines"
+    );
+}
+
+/// The menu that adds a line beside another offers what the line's place takes: the Change group alone on a card that
+/// runs once, and every look greyed inside a Repeat, where a click adds nothing. Escape closes it and returns the focus
+/// to the line's menu button.
+#[test]
+fn the_menu_that_adds_a_line_offers_what_its_place_takes() {
+    let Some(mut harness) = Harness::tall() else {
+        return;
+    };
+    let items = |harness: &mut Harness, menu: &str| -> Vec<Node> {
+        harness
+            .settle()
+            .into_iter()
+            .filter(|node| node.dialog == menu && node.role == Role::MenuItem)
+            .collect()
+    };
+    open_starter(&mut harness, "game_of_life.toml");
+    click(&mut harness, "Clear line 1 actions");
+    click(&mut harness, &add_line_below("Clear line 1"));
+    let menu = add_below_name("Clear line 1");
+    let offered: Vec<String> = items(&mut harness, &menu).into_iter().map(|node| node.label).collect();
+    assert!(offered.contains(&"Become".to_owned()), "{offered:?}");
+    assert!(
+        !offered.contains(&"Count".to_owned()),
+        "a card that runs once takes changes alone: {offered:?}"
+    );
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    assert!(!is_open(&mut harness, &menu));
+    assert_eq!(
+        harness.focused, "Clear line 1 actions",
+        "Escape returns the focus to the menu button"
+    );
+
+    open_starter(&mut harness, "random_walk.toml");
+    let starter = text(&harness);
+    for (actions, tool, menu, inside) in [
+        (
+            "Line 2 actions",
+            add_line_above("line 2"),
+            add_above_name("line 2"),
+            true,
+        ),
+        (
+            "Line 1 actions",
+            add_line_below("line 1"),
+            add_below_name("line 1"),
+            false,
+        ),
+    ] {
+        click(&mut harness, actions);
+        click(&mut harness, &tool);
+        let count = items(&mut harness, &menu)
+            .into_iter()
+            .find(|node| node.label == "Count")
+            .unwrap_or_else(|| panic!("{menu} offers Count"));
+        assert_eq!(count.disabled, inside, "{menu}: a look is greyed inside a Repeat alone");
+        if inside {
+            harness.click_at(count.bounds.expect("bounds").center());
+            harness.settle();
+            assert_eq!(text(&harness), starter, "a greyed item adds nothing");
+        }
+        harness.press(Key::Escape, Modifiers::NONE);
+        harness.settle();
+    }
+}
+
+/// The line menu writes the note under a line: a new note, a changed one, and an empty field that removes it, each one
+/// step of Undo. Escape keeps the note as it was, and a note leaves a played preview running.
+#[test]
+fn the_line_menu_writes_a_note_that_leaves_a_played_preview_running() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.open_sheet(starters()[0].text);
+    settle_preview(&mut harness.app);
+    harness.app.wait_for_build();
+    harness.app.play();
+    wait_for_snapshot(&mut harness.app, |tick| tick > 0);
+    assert!(harness.app.sheet_preview_past_start());
+    let key = sheet(&harness).preview_key();
+    let note = |harness: &Harness| sheet(harness).document().cards[0].line_tables["l2"].note.clone();
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, &add_note_tool("line 2"));
+    harness.settle();
+    assert_eq!(harness.focused, note_field_name("Line 2"), "the field takes the focus");
+    type_and_enter(&mut harness, "Birth needs exactly three.");
+    assert_eq!(note(&harness).as_deref(), Some("Birth needs exactly three."));
+    assert!(shows(&mut harness, "Birth needs exactly three."));
+    assert_eq!(sheet(&harness).preview_key(), key, "the world keeps running");
+    click(&mut harness, "Undo");
+    assert_eq!(note(&harness), None);
+    assert_eq!(sheet(&harness).preview_key(), key, "the undo leaves the world running");
+    click(&mut harness, "Redo");
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, &edit_note_tool("line 2"));
+    harness.replace_text("Not this.");
+    harness.press(Key::Escape, Modifiers::NONE);
+    harness.settle();
+    assert_eq!(
+        note(&harness).as_deref(),
+        Some("Birth needs exactly three."),
+        "Escape keeps the note"
+    );
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, &edit_note_tool("line 2"));
+    type_and_enter(&mut harness, "  ");
+    assert_eq!(note(&harness), None, "an empty field removes the note");
 }
 
 /// Asserts that a settled frame shows each item of `items`, an item and the name of its menu, as a menu item inside

@@ -380,6 +380,33 @@ pub(super) fn list_mut<'a>(card: &'a mut SheetCard, parent: Option<&str>) -> Opt
     }
 }
 
+/// Returns the list of line ids that holds the lines inside `parent`, or the card's top-level list for `None`.
+pub(super) fn list_of<'a>(card: &'a SheetCard, parent: Option<&str>) -> Option<&'a [String]> {
+    match parent {
+        None => Some(&card.lines),
+        Some(parent) => card.line_tables.get(parent).map(|line| line.lines.as_slice()),
+    }
+}
+
+/// Returns the ids of line `line_id` of `card` and of every line inside it, in display order.
+///
+/// Note that a card whose blocks list each other in a cycle takes each line once, and at most as many lines as the
+/// card has.
+pub(super) fn lines_within(card: &SheetCard, line_id: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut waiting = vec![line_id.to_owned()];
+    while let Some(id) = waiting.pop() {
+        if found.contains(&id) || found.len() >= card.line_tables.len() || !card.line_tables.contains_key(&id) {
+            continue;
+        }
+        if let Some(line) = card.line_tables.get(&id) {
+            waiting.extend(line.lines.iter().rev().cloned());
+        }
+        found.push(id);
+    }
+    found
+}
+
 /// Returns whether the line `line_id` of `card` holds lines.
 fn holds_lines(card: &SheetCard, line_id: &str) -> bool {
     card.line_tables.get(line_id).is_some_and(|line| line.kind.is_block())

@@ -48,6 +48,16 @@ pub enum MoveDirection {
     Down,
 }
 
+/// A side of a line in the outline of a card, where [`SheetEdit::InsertLine`] puts a new line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineSide {
+    /// Right above the line.
+    Above,
+    /// Right below the line, after the lines inside it when it is a When or a Repeat.
+    Below,
+}
+
 /// A field of a line or a phrase that holds no value of a slot, with its new content.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -327,6 +337,28 @@ pub enum SheetEdit {
         /// The new line. Its lines, if any, are dropped.
         line: Box<SheetLine>,
     },
+    /// Adds a line right above or below another line, in the same block or at the top level of the same card, and
+    /// returns its id.
+    ///
+    /// The new line takes an id, a key and the defaults of a block as [`SheetEdit::AddLine`] gives them.
+    InsertLine {
+        /// Id of the line the new line goes beside.
+        anchor: String,
+        /// Side of that line the new line goes on.
+        side: LineSide,
+        /// The new line. Its lines, if any, are dropped.
+        line: Box<SheetLine>,
+    },
+    /// Copies a line, with the lines inside a When or a Repeat, right below it, and returns the ids of the copies, the
+    /// copy of the line first.
+    ///
+    /// Each copy takes the next line id, and a key of its own when it draws. A copy that reads the result of another
+    /// line copied with it reads that line's copy. A copied result keeps its name with a number after it, such as
+    /// "Food way 2", and an automatic name keeps following its line.
+    DuplicateLine {
+        /// Id of the line.
+        line: String,
+    },
     /// Puts a value in a slot of a line or of a phrase inside it, or leaves the slot blank.
     ///
     /// A rate put in with no unit takes the unit of one tick, marked. A parameter put into a rate whose unit is empty
@@ -408,6 +440,13 @@ pub enum SheetEdit {
         /// Id of the line.
         line: String,
         /// Index of the summary, from 0.
+        index: usize,
+    },
+    /// Removes the row at an index of a Choose line, with its value and its condition. The last row is not removed.
+    DeleteRow {
+        /// Id of the line.
+        line: String,
+        /// Index of the row, from 0.
         index: usize,
     },
     /// Sets or clears the author's note under a line.

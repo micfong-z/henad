@@ -42,13 +42,19 @@ commit, the old key kept), `SetColorRule`; `SetAgentKind` (the number of agents 
 to the largest number, and that largest number), `SetMarks` (a Number property of the ground: how
 marks combine, and the share kept per tick, which no marks rule clears), `SetBlocked` (a state of a
 States property of the ground kept from agents or let in, held once); and the line commands
-`AddLine` (a `Box<SheetLine>` template at the end of a card or a When or Repeat), `SetSlot` and
-`SetField` (a `LineField`) at a slot path, `ChooseCondition` (a `ConditionItem`),
-`ChooseRowCondition` (a Choose row's condition, both through `condition_phrase`), `UseOneSide`,
-`UseCountForEach`, `MoveConditionInto`, `RenameResult`, `SetNote`, `MoveLine`, `DeleteLine`,
-`DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`, and for a look at agents `AddSummary` (a
-summary of a kind with its value blank, refused on a line that looks at no agents) and
-`DeleteSummary` (refused on the last summary, its users' slots cleared through `Target::Summary`).
+`AddLine` (a `Box<SheetLine>` template at the end of a card or a When or Repeat), `InsertLine`
+(a template right above or below a line, `LineSide`, in the list that holds it, so below a block is
+after its lines, through `place_line` with `AddLine`'s defaults and limit), `DuplicateLine` (the
+line and the lines inside it, `lines::lines_within`, copied right below it with new ids, the
+references among the copies renamed through `references::rename_line_in`, whose line rename keeps a
+formula's tail as in `l4.centre`, each copied name made free by `names::free_name`, "Food way 2",
+and each copied key minted again), `SetSlot` and `SetField` (a `LineField`) at a slot path,
+`ChooseCondition` (a `ConditionItem`), `ChooseRowCondition` (a Choose row's condition, both
+through `condition_phrase`), `UseOneSide`, `UseCountForEach`, `MoveConditionInto`, `RenameResult`,
+`SetNote`, `MoveLine`, `DeleteLine`, `DrawNewNumbers`, `ChangeToRate` and `ChangeToChance`, for a
+look at agents `AddSummary` (a summary of a kind with its value blank, refused on a line that looks
+at no agents) and `DeleteSummary` (refused on the last summary, its users' slots cleared through
+`Target::Summary`), and `DeleteRow` of a Choose (refused on the last row and on another kind).
 "Remove this When" is `DeleteLine` on the When, and "Add for each [count]" is `SetSlot` of `tries`.
 
 Ids: `mint_id(name, space, is_taken)` lower-cases the name, turns each run of other characters than
@@ -186,6 +192,9 @@ Tests sit in `src/tests/sheet_edit.rs`: the author format's three diffs built by
 sheets (the waning line through `AddParameter`, `SetParameter`, `AddLine` with the diff's key,
 `SetField` and `SetSlot`; two `MoveLine`; a `Rename`),
 `outline_moves_and_deletes_follow_the_when_blocks`,
+`a_line_goes_above_or_below_another_in_its_own_block`,
+`a_duplicate_copies_a_block_with_new_ids_keys_and_names_and_reads_its_own_copies`,
+`a_choose_row_is_removed_and_the_last_row_stays`,
 `a_rename_changes_one_name_and_the_comments_that_show_it`,
 `change_id_rewrites_every_reference_and_nothing_else` (a parameter, a property, a button and its
 card, a state and a parameter in formulas, each the old text with the quoted id replaced),

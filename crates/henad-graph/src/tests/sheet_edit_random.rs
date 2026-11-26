@@ -14,7 +14,7 @@ use crate::sheet::document::{
     Around, ButtonStepRule, CompareTest, Edges, LineKind, Marks, MeasureRule, ParameterType, PropertyType, SheetChip,
     SheetDocument, SheetLine, SheetLiteral, SheetTime, SheetValue, Slot, SummaryKind,
 };
-use crate::sheet::edit::{LineField, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetItem};
+use crate::sheet::edit::{LineField, LineSide, MoveDirection, STATE_COLORS, SheetBuilder, SheetEdit, SheetItem};
 use crate::sheet::sentence::ConditionItem;
 
 /// Returns one of `choices` from `rng`.
@@ -142,7 +142,7 @@ fn random_edit(rng: &mut u64, document: &SheetDocument) -> SheetEdit {
         "items.0",
         "left",
     ];
-    match below(rng, 29) {
+    match below(rng, 32) {
         0 => SheetEdit::AddProperty {
             thing: pick(rng, &things).cloned().unwrap_or_default(),
             name,
@@ -279,6 +279,18 @@ fn random_edit(rng: &mut u64, document: &SheetDocument) -> SheetEdit {
             line,
             row: below(rng, 3),
             item: ConditionItem::ALL[below(rng, ConditionItem::ALL.len())],
+        },
+        29 => SheetEdit::InsertLine {
+            anchor: line,
+            side: [LineSide::Above, LineSide::Below][below(rng, 2)],
+            line: Box::new(SheetLine::new(
+                [LineKind::Become, LineKind::When, LineKind::Calculate][below(rng, 3)],
+            )),
+        },
+        30 => SheetEdit::DuplicateLine { line },
+        31 => SheetEdit::DeleteRow {
+            line,
+            index: below(rng, 3),
         },
         _ => match below(rng, 7) {
             0 => SheetEdit::DrawNewNumbers { line },

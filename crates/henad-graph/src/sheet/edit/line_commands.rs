@@ -6,8 +6,9 @@ use std::collections::BTreeSet;
 use henad_core::metadata::TimeUnit;
 
 use super::lines::{self, PathStep};
-use super::references::{Change, Target, change_references};
-use super::{Draft, LineField, SheetEditError, clean_name, missing, refuse_taken};
+use super::names;
+use super::references::{Change, Target, change_references, rename_line_in};
+use super::{Draft, LineField, LineSide, SheetEditError, clean_name, missing, refuse_taken};
 use crate::sheet::document::{
     Around, CardRuns, CompareTest, LineKind, LookSummary, SheetChip, SheetLine, SheetLiteral, SheetTime, SheetValue,
     Slot, SummaryKind,
@@ -137,7 +138,7 @@ impl Draft {
         &mut self,
         card_id: &str,
         inside: Option<&str>,
-        mut line: SheetLine,
+        line: SheetLine,
     ) -> Result<Vec<String>, SheetEditError> {
         let card = self
             .document
@@ -156,11 +157,39 @@ impl Draft {
                 )));
             }
         }
-        if self.document.cards[card].line_tables.len() >= MAX_LINES_PER_CARD {
-            return Err(SheetEditError::Invalid(format!(
-                "card '{card_id}' already has the maximum of {MAX_LINES_PER_CARD} lines"
-            )));
-        }
+        self.place_line(card, inside, None, line)
+    }
+
+    /// Adds `line` right above or below the line `anchor`, in the block or at the top level that holds it.
+    pub(super) fn insert_line(
+        &mut self,
+        anchor: &str,
+        side: LineSide,
+        line: SheetLine,
+    ) -> Result<Vec<String>, SheetEditError> {
+        let card = self.card_of_line(anchor)?;
+        let parent = lines::parent_of(&self.document.cards[card], anchor);
+        let card_id = self.document.cards[card].id.clone();
+        let index = lines::list_of(&self.document.cards[card], parent.as_deref())
+            .and_then(|list| list.iter().position(|id| id == anchor))
+            .ok_or_else(|| SheetEditError::Missing(format!("card '{card_id}' has no line '{anchor}'")))?;
+        let at = match side {
+            LineSide::Above => index,
+            LineSide::Below => index + 1,
+        };
+        self.place_line(card, parent.as_deref(), Some(at), line)
+    }
+
+    /// Adds `line` to card `card` inside the block line `inside`, or at the card's top level for `None`, at index `at`
+    /// of that block or level, or at its end for `None`.
+    fn place_line(
+        &mut self,
+        card: usize,
+        inside: Option<&str>,
+        at: Option<usize>,
+        mut line: SheetLine,
+    ) -> Result<Vec<String>, SheetEditError> {
+        self.refuse_full(card, 1)?;
         line.lines.clear();
         if self.inside_when(card, inside) {
             if matches!(line.kind, LineKind::Become | LineKind::Set) && line.condition.is_blank() {
@@ -179,17 +208,107 @@ impl Draft {
         let id = self.mint_line_id()?;
         let target = &mut self.document.cards[card];
         target.line_tables.insert(id.clone(), line);
-        match inside {
-            Some(block) => {
-                if let Some(holder) = target.line_tables.get_mut(block) {
-                    holder.lines.push(id.clone());
-                }
-            }
-            None => target.lines.push(id.clone()),
+        if let Some(list) = lines::list_mut(target, inside) {
+            let at = at.map_or(list.len(), |at| at.min(list.len()));
+            list.insert(at, id.clone());
         }
         self.touched.push(id.clone());
         self.refuse_deep(&id)?;
         Ok(vec![id])
+    }
+
+    /// Refuses `count` more lines on card `card` when the card would hold more than [`MAX_LINES_PER_CARD`].
+    fn refuse_full(&self, card: usize, count: usize) -> Result<(), SheetEditError> {
+        let target = &self.document.cards[card];
+        if target.line_tables.len() + count > MAX_LINES_PER_CARD {
+            return Err(SheetEditError::Invalid(format!(
+                "card '{}' already has the maximum of {MAX_LINES_PER_CARD} lines",
+                target.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Copies line `line_id`, with the lines inside it, right below it, and returns the ids of the copies in display
+    /// order.
+    ///
+    /// The references among the copied lines name the copies, and each copied name that another result holds takes
+    /// a number after it.
+    pub(super) fn duplicate_line(&mut self, line_id: &str) -> Result<Vec<String>, SheetEditError> {
+        let card = self.card_of_line(line_id)?;
+        let originals = lines::lines_within(&self.document.cards[card], line_id);
+        self.refuse_full(card, originals.len())?;
+        let mut renames: Vec<(String, String)> = Vec::with_capacity(originals.len());
+        for original in &originals {
+            renames.push((original.clone(), self.mint_line_id()?));
+        }
+        let mut taken = names::result_names(&self.document);
+        let target = &self.document.cards[card];
+        let mut copies: Vec<(String, SheetLine)> = Vec::with_capacity(renames.len());
+        for (original, copy_id) in &renames {
+            let Some(line) = target.line_tables.get(original) else {
+                continue;
+            };
+            let mut copy = line.clone();
+            // A listed id with no table of its own has no copy, and the copy leaves it out.
+            copy.lines = copy
+                .lines
+                .iter()
+                .filter_map(|inner| renames.iter().find(|(old, _)| old == inner).map(|(_, new)| new.clone()))
+                .collect();
+            for (old, new) in &renames {
+                rename_line_in(&self.document, &mut copy, old, new);
+            }
+            if let Some(name) = &copy.name {
+                copy.name = Some(names::free_name(name, &mut taken));
+            }
+            copies.push((copy_id.clone(), copy));
+        }
+        let parent = lines::parent_of(&self.document.cards[card], line_id);
+        let target = &mut self.document.cards[card];
+        let ids: Vec<String> = copies.iter().map(|(id, _)| id.clone()).collect();
+        target.line_tables.extend(copies);
+        let first = ids.first().cloned().ok_or_else(|| missing("line", line_id))?;
+        let list = lines::list_mut(target, parent.as_deref()).ok_or_else(|| missing("line", line_id))?;
+        let index = list
+            .iter()
+            .position(|id| id == line_id)
+            .ok_or_else(|| missing("line", line_id))?;
+        list.insert(index + 1, first);
+        // A copy draws its own numbers. A key kept by a line whose draw an edit took away is copied too, and the
+        // copy takes a key of its own for it, so no two lines share one.
+        for id in &ids {
+            if self.line(id)?.key.is_some() {
+                let key = self.mint_key();
+                self.line_mut(id)?.key = Some(key);
+            }
+        }
+        self.touched.extend(ids.iter().cloned());
+        for id in &ids {
+            self.refuse_deep(id)?;
+        }
+        Ok(ids)
+    }
+
+    /// Removes the row at `index` of the Choose line `line_id`.
+    pub(super) fn delete_row(&mut self, line_id: &str, index: usize) -> Result<(), SheetEditError> {
+        let target = self.line_mut(line_id)?;
+        if target.kind != LineKind::Choose {
+            return Err(SheetEditError::Invalid(format!("line '{line_id}' has no rows")));
+        }
+        if index >= target.rows.len() {
+            return Err(SheetEditError::Missing(format!(
+                "line '{line_id}' has no row {}",
+                index + 1
+            )));
+        }
+        if target.rows.len() == 1 {
+            return Err(SheetEditError::Invalid(format!(
+                "line '{line_id}' must have at least one row"
+            )));
+        }
+        target.rows.remove(index);
+        Ok(())
     }
 
     /// Puts `value` in the slot at `path` of line `line_id`.

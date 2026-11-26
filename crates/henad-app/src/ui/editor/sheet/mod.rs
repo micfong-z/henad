@@ -713,14 +713,17 @@ fn name_button_ui(ui: &mut egui::Ui, name: &str, trailing: f32) -> egui::Respons
     .on_hover_or_focus_text(&tooltip)
 }
 
-/// Returns `document` with no name, no purpose and no property holding a start.
+/// Returns `document` with no name, no purpose, no note under a line and no property holding a start.
 ///
 /// Two sheets equal apart from these differ only in what leaves the running world alone, as [`SheetEditor::edit`]
-/// treats a new start, a new name or a new purpose.
+/// treats a new start, a new name, a new purpose or a new note.
 fn without_starts_or_words(document: &SheetDocument) -> SheetDocument {
     let mut document = document.clone();
     document.sheet.name.clear();
     document.sheet.purpose = None;
+    for line in document.cards.iter_mut().flat_map(|card| card.line_tables.values_mut()) {
+        line.note = None;
+    }
     let agents = document.agents.iter_mut().flat_map(|kind| &mut kind.properties);
     let ground = document.ground.iter_mut().flat_map(|ground| &mut ground.properties);
     for property in document.cells.iter_mut().flatten().chain(agents).chain(ground) {

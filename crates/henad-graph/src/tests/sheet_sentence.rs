@@ -111,6 +111,22 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::DELETE_WHEN_TOOLTIP),
         ),
         ("Draw new numbers", fixed(sentence::DRAW_NEW_NUMBERS)),
+        ("Add a line above line 2…", sentence::add_line_above("line 2")),
+        ("Add a line below line 2…", sentence::add_line_below("line 2")),
+        ("Add a line above line 2", sentence::add_above_name("line 2")),
+        (
+            "Add a line below Clear line 1",
+            sentence::add_below_name(&sentence::line_word(Some("Clear"), 1)),
+        ),
+        ("Duplicate line 2", sentence::duplicate_line("line 2")),
+        (
+            "Duplicate. Lines inside will be copied too.",
+            fixed(sentence::DUPLICATE_BLOCK_TOOLTIP),
+        ),
+        ("Add a note to line 2…", sentence::add_note_tool("line 2")),
+        ("Edit the note of line 2…", sentence::edit_note_tool("line 2")),
+        ("Line 2: note", sentence::note_field_name("Line 2")),
+        ("Type a note", fixed(sentence::NOTE_FIELD_HINT)),
         (
             "Another result is already called Alive neighbours.",
             sentence::result_name_taken("Alive neighbours"),
@@ -276,6 +292,8 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::LIST_HINT),
         ),
         ("Remove from list", fixed(sentence::REMOVE_FROM_LIST)),
+        ("Line 7: remove row 2", sentence::remove_choose_row_name("Line 7", 2)),
+        ("Remove this row", fixed(sentence::REMOVE_CHOOSE_ROW)),
         (
             "The rate grows with the chosen count. With for each infected neighbour, a cell with 2 infected neighbours \
              gets twice the rate.",
@@ -1947,6 +1965,9 @@ const FIXED_WORDING: &[&str] = &[
     sentence::WORLD_EMPTY,
     sentence::DIAGRAM_TOOLTIP,
     sentence::DIAGRAM_NOTE,
+    sentence::DUPLICATE_BLOCK_TOOLTIP,
+    sentence::NOTE_FIELD_HINT,
+    sentence::REMOVE_CHOOSE_ROW,
     sentence::EVENT_COUNT_MEASURE,
     sentence::MEASURE_NEEDS_EVENT,
 ];

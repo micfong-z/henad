@@ -218,14 +218,14 @@ and returns `SheetRequest::OpenCopy`. `sheet_ui(ui, sheet, &SheetShown)` and `na
 to an `EditorRequest`. Undo (`SheetEditor::history`, the Editor's `History` of canonical texts,
 `editor/history.rs`): `edit` and `keep_value` record the text before a kept edit, and `undo` and
 `redo` read a text back through `restore` (a fresh `SheetBuilder`, the pane's forms closed, the
-restart rule with `starts_only` when the two documents differ only in starts, the name and the
-purpose, `without_starts_or_words`). `sheet_ui` takes Cmd or Ctrl+Z, Shift+Cmd+Z and Cmd+Y
-(`editor::undo_redo_keys`, which the graph editor shares, redo read first) while `keys` (no New
-model dialog), no New parameter or delete dialog of either pane (`dialog_open`), no modal of the app
-(egui memory's
-`top_modal_layer`, from the previous frame) and no focused text field (`text_edit_focused`),
-anywhere in the Editor tab. A focused field keeps its own undo. `Pending::one` counts `SetPurpose`
-and `SetSheetName` as `starts_only`, so a name or a purpose leaves the running world alone. The
+restart rule with `starts_only` when the two documents differ only in starts, the name, the
+purpose and the notes under lines, `without_starts_or_words`). `sheet_ui` takes Cmd or Ctrl+Z,
+Shift+Cmd+Z and Cmd+Y (`editor::undo_redo_keys`, which the graph editor shares, redo read first)
+while `keys` (no New model dialog), no New parameter or delete dialog of either pane
+(`dialog_open`), no modal of the app (egui memory's `top_modal_layer`, from the previous frame)
+and no focused text field (`text_edit_focused`), anywhere in the Editor tab. A focused field keeps
+its own undo. `Pending::one` counts `SetPurpose` and `SetSheetName` as `starts_only`, so a name or
+a purpose leaves the running world alone, as the card's note does (`keep_note`). The
 Charts tab shows `PLOT_EMPTY` while `runs_editor_sheet` and the sheet holds no measure. The Card
 pane shows `BUTTON_CARD_EMPTY` under a card that runs once with no line.
 
