@@ -20,7 +20,7 @@ card that draws the parts. The drag of a line takes `drag_line_tooltip`, `more_l
 `add_line_above`, `add_line_below` (their menus titled `add_above_name`, `add_below_name`),
 `duplicate_line`, `add_note_tool`, `edit_note_tool` and `note_field_name`. A Choose row's "×" is
 `remove_choose_row_name` in `pickers.rs`, and an event count `event_count_measure` and
-`event_count_name` (the event's plural, "Deliveries") in `sheet.rs`.
+`event_count_name` ("Delivery count") in `sheet.rs`.
 
 **The wording table.** `sheet::sentence` holds every word the sheet editor shows: constants for
 fixed text and functions for templates, each named for what it

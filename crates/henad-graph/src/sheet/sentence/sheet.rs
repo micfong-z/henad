@@ -5,7 +5,7 @@ use henad_core::metadata::TimeUnit;
 
 use super::card::OTHERWISE;
 use super::editor::{MAX_LABEL, MIN_LABEL, UNIT_LABEL};
-use super::grammar::{plural, word_list};
+use super::grammar::word_list;
 use crate::sheet::document::MadeOf;
 
 // The sheet
@@ -652,10 +652,9 @@ pub fn event_count_measure(event: &str) -> String {
     format!("{EVENT_COUNT_LEAD} {event} {EVENT_COUNT_TAIL}")
 }
 
-/// Returns the name a measure that counts the times `event` happened takes, the plural of the event's name, such as
-/// "Deliveries".
+/// Returns the name a new measure that counts the times `event` happened takes, such as "Delivery count".
 pub fn event_count_name(event: &str) -> String {
-    plural(event)
+    format!("{event} count")
 }
 
 // Colours

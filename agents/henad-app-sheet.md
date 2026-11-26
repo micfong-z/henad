@@ -175,8 +175,8 @@ and `MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages
 reads `{ my = <property> }` and takes the next of `MEASURE_COLORS`; in a world of agents
 `EVENT_COUNT_MEASURE` too, greyed with `NO_EVENT` while the sheet has no event, a select named
 `MEASURE_EVENT_NAME` and `event_count_edit`: an `event_count` with no `over`, as the ants'
-Deliveries, named `event_count_name` or `event_count_measure` when that is taken, and plotted as
-`event_count_measure`). Colours: "Colour cells by" a select
+Deliveries, named `event_count_name` ("Delivery count") or `event_count_measure` when that is
+taken, and plotted as `event_count_measure`). Colours: "Colour cells by" a select
 of every property and None (`colors_of` in `agents/henad-app-sheet-pane.md`), `color_rule_edit`
 writing `by_state` or `shaded_rule` (blue from 0 to 1, or the previous shading's hue and ends),
 swatches under a States property, and `shading_ui` for a Number property: `SHADE` select of

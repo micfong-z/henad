@@ -408,7 +408,7 @@ fn event_count_row(ui: &mut Ui, document: &SheetDocument, form: &mut MeasureForm
 }
 
 /// Returns the command that adds a measure counting the times the event of id `event` happened, named by the
-/// event's plural, or by the measure's words when another measure holds that name.
+/// event, as "Delivery count", or by the measure's words when another measure holds that name.
 ///
 /// # Errors
 ///
@@ -424,17 +424,13 @@ fn event_count_edit(document: &SheetDocument, event: Option<&str>) -> Result<She
     if counted {
         return Err(MEASURE_ALREADY_PLOTTED.to_owned());
     }
-    let plural = event_count_name(&event.name);
+    let name = event_count_name(&event.name);
     let taken = document
         .measures
         .iter()
-        .any(|measure| measure.name.eq_ignore_ascii_case(&plural));
+        .any(|measure| measure.name.eq_ignore_ascii_case(&name));
     Ok(SheetEdit::AddMeasure {
-        name: if taken {
-            event_count_measure(&event.name)
-        } else {
-            plural
-        },
+        name: if taken { event_count_measure(&event.name) } else { name },
         rule: MeasureRule::EventCount,
         over: None,
         property: None,

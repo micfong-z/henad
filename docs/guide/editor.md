@@ -103,7 +103,7 @@ A narrow Sheet pane leaves out the symbols and folds **Edit** and **×** into th
 The value on the sheet is the one the model keeps.
 A parameter named after a column of sweep results, such as Population, takes the id `population_2`, since `runs.csv` writes a `population` column of its own.
 **Measures** plots a number worked out from every cell: turn on **Plot** beside a state to plot how many cells are in it.
-In a world of agents, **Number of times an event happened** plots how many times the Record lines have counted an event since the start, named after the event, such as Deliveries for Delivery.
+In a world of agents, **Number of times an event happened** plots how many times the Record lines have counted an event since the start, named after the event, such as Delivery count.
 An average keeps the name it was given, such as "Average of Food", in step with its property: renaming Food to Energy renames it "Average of Energy", and the column of the results with it, until you rename the measure yourself.
 A measure cannot be named run_id, tick or time, the names of the first columns of exported stats and sweep results.
 **Colours** chooses the property that colours the cells in the Viewport, or **None** for black cells, white agents or no ground.

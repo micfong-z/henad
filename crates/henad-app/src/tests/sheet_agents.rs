@@ -671,9 +671,10 @@ fn events_are_added_renamed_and_deleted_on_the_sheet() {
     assert!(shows_or_notice(&mut harness, EVENTS_EMPTY));
 }
 
-/// The measure form plots the number of times an event happened. The ants' Deliveries, removed and made again, equals
-/// the starter's but for its colour and its place, and the lowered sheet plots it. A second count of the event is
-/// refused, a world of agents with no event shows the choice greyed, and a world of cells does not offer it.
+/// The measure form plots the number of times an event happened. The ants' Deliveries, removed and made again, is
+/// named "Delivery count" and equals the starter's but for its name, id, colour and place, and the lowered sheet plots
+/// it. A second count of the event is refused, a taken name gives way to the measure's words, a world of agents with no
+/// event shows the choice greyed, and a world of cells does not offer it.
 #[test]
 fn an_event_count_is_plotted_from_the_measure_form() {
     let Some(mut harness) = Harness::tall() else {
@@ -704,15 +705,12 @@ fn an_event_count_is_plotted_from_the_measure_form() {
     harness.settle();
     let made = deliveries(&harness).expect("a count of Delivery");
     assert_eq!(
-        (&made.id, &made.name, made.rule, &made.over, &made.event, &made.value),
-        (
-            &starter.id,
-            &starter.name,
-            starter.rule,
-            &starter.over,
-            &starter.event,
-            &starter.value
-        )
+        (made.id.as_str(), made.name.as_str()),
+        ("delivery_count", "Delivery count")
+    );
+    assert_eq!(
+        (made.rule, &made.over, &made.event, &made.value),
+        (starter.rule, &starter.over, &starter.event, &starter.value)
     );
     assert!(shows_or_notice(&mut harness, &event_count_measure("Delivery")));
     let lowered = SheetFile::parse(&text(&harness)).expect("the sheet lowers");
@@ -722,8 +720,8 @@ fn an_event_count_is_plotted_from_the_measure_form() {
             .document()
             .stats
             .iter()
-            .any(|stat| stat.label == "Deliveries"),
-        "the lowered sheet plots Deliveries"
+            .any(|stat| stat.label == "Delivery count"),
+        "the lowered sheet plots Delivery count"
     );
     click(&mut harness, ADD_MEASURE);
     click(&mut harness, EVENT_COUNT_MEASURE);
@@ -732,6 +730,29 @@ fn an_event_count_is_plotted_from_the_measure_form() {
     click_last(&mut harness, "Delivery");
     click(&mut harness, DONE);
     assert!(shows_or_notice(&mut harness, MEASURE_ALREADY_PLOTTED));
+    click(&mut harness, CANCEL);
+    click(&mut harness, "Remove measure Delivery count");
+    apply_sheet_edit(
+        sheet_mut(&mut harness),
+        SheetEdit::AddMeasure {
+            name: "Delivery count".to_owned(),
+            rule: MeasureRule::CountInState,
+            over: Some("ant".to_owned()),
+            property: Some("cargo".to_owned()),
+            state: Some("searching".to_owned()),
+            event: None,
+            value: Slot::Blank,
+            color: None,
+        },
+    );
+    click(&mut harness, ADD_MEASURE);
+    click(&mut harness, EVENT_COUNT_MEASURE);
+    click(&mut harness, MEASURE_EVENT_NAME);
+    click_last(&mut harness, "Delivery");
+    click(&mut harness, DONE);
+    harness.settle();
+    let made = deliveries(&harness).expect("a count of Delivery");
+    assert_eq!(made.name, event_count_measure("Delivery"), "a taken name gives way");
 
     let Some(mut harness) = blank_agents() else {
         return;

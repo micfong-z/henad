@@ -1374,8 +1374,8 @@ fn sheet_entries() -> Vec<(&'static str, String)> {
             "Number of times Delivery happened",
             sentence::event_count_measure("Delivery"),
         ),
-        ("Deliveries", sentence::event_count_name("Delivery")),
-        ("Nest visits", sentence::event_count_name("Nest visit")),
+        ("Delivery count", sentence::event_count_name("Delivery")),
+        ("Nest reached count", sentence::event_count_name("Nest reached")),
         // Colours.
         ("Colour cells by", fixed(sentence::COLOR_CELLS_BY)),
         ("Shade", fixed(sentence::SHADE)),
