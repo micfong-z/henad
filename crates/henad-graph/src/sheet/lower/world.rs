@@ -170,7 +170,7 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
                 builder.problem(
                     format!(
                         "property '{}' of type {} is only for agents",
-                        property.id,
+                        property.name,
                         other.as_str()
                     ),
                     builder.property_place(index),
@@ -209,7 +209,10 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
         match descriptor(parameter) {
             Some(descriptor) => builder.graph.params.push(descriptor),
             None => builder.problem(
-                format!("parameter '{}' holds a number its type does not support", parameter.id),
+                format!(
+                    "parameter '{}' holds a number its type does not support",
+                    parameter.name
+                ),
                 Place::Parameter(index),
             ),
         }

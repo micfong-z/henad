@@ -420,7 +420,7 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
             }
         }
     }
-    checker.key(start.key, format!("the start of property '{id}'"), draws, place);
+    checker.key(start.key, format!("the start of {}", property.name), draws, place);
 }
 
 /// Checks that `state`, the field `field` of a start, is a state of property `property`.

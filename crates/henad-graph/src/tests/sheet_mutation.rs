@@ -167,7 +167,7 @@ fn a_missing_key_is_a_warning() {
     let found = assert_reported(
         &text,
         Expected::Warning,
-        "line l3 draws and holds no key",
+        "line 3 draws and holds no key",
         "[card.line.l3]",
     );
     assert!(!found.skips_line);
@@ -179,7 +179,7 @@ fn a_duplicate_key_is_an_error() {
     assert_reported(
         &text,
         Expected::Error,
-        "line l5 holds key 3688405984, which line l3 also holds",
+        "line 5 holds key 3688405984, which line 3 also holds",
         "[card.line.l5]",
     );
 }

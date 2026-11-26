@@ -137,12 +137,13 @@ pub(super) fn color_site(builder: &mut Builder<'_>) -> Site {
 ///
 /// # Errors
 ///
-/// Returns the message for a palette id that a property's category takes, or agents with no Heading.
+/// Returns the message for a property whose id the palette of headings needs, or agents with no Heading.
 fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
     let (palette, colors) = HEADING_PALETTE;
     if builder.graph.categories.iter().any(|category| category.id == palette) {
+        let other = builder.property_name(palette);
         return Err(format!(
-            "the heading palette id '{palette}' is already used by a property"
+            "the property '{other}' clashes with the colours by heading. Rename '{other}'"
         ));
     }
     let heading = builder
@@ -169,7 +170,7 @@ fn by_heading(builder: &mut Builder<'_>) -> Result<(), String> {
 ///
 /// # Errors
 ///
-/// Returns the message for a palette id that a property's category takes, a range whose two ends are equal, or a value
+/// Returns the message for a property whose id the shading's palette needs, a range whose two ends are equal, or a value
 /// with no number.
 pub(super) fn shade(
     builder: &mut Builder<'_>,
@@ -180,8 +181,10 @@ pub(super) fn shade(
 ) -> Result<(), String> {
     let palette = format!("shaded_{property}");
     if builder.graph.categories.iter().any(|category| category.id == palette) {
+        let other = builder.property_name(&palette);
         return Err(format!(
-            "the shading palette id '{palette}' is already used by a property"
+            "the property '{other}' clashes with the shading of '{}'. Rename '{other}'",
+            builder.property_name(property)
         ));
     }
     let darkest = rule.darkest.unwrap_or(0.0);

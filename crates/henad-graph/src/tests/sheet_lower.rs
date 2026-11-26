@@ -229,7 +229,7 @@ fn two_draws_with_one_key_are_an_error_naming_both() {
     let error = only_refusal(&text);
     let message = &error.message;
     assert!(
-        message.contains("property 'mood'") && message.contains("property 'status'"),
+        message.contains("the start of Mood") && message.contains("the start of Status"),
         "{message}"
     );
     let mood = text.find("[[cells.property]]\nid = \"mood\"").expect("the property");

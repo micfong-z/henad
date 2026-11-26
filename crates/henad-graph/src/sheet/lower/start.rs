@@ -17,6 +17,7 @@ use crate::sheet::check::Place;
 use crate::sheet::document::{
     LineKind, PropertyType, SheetChip, SheetLine, SheetProperty, SheetValue, StartRule, StartsAs,
 };
+use crate::sheet::sentence;
 use crate::types::ValueType;
 use crate::value::{ConfigValue, InputValue};
 
@@ -70,11 +71,11 @@ fn start_property(builder: &mut Builder<'_>, pass: usize, index: usize, button: 
     let draws = StartDraws {
         key: keys::owner_key(start.key, &builder.document.sheet.id, &property.id),
         button,
-        owner: format!("the start of property '{}'", property.id),
+        owner: format!("the start of {}", property.name),
         place: place.clone(),
     };
     if let Err(message) = start_value(builder, &site, property, start, &draws) {
-        builder.problem(format!("property '{}': {message}", property.id), place);
+        builder.problem(format!("{}: {message}", sentence::starts_place(&property.name)), place);
     }
 }
 

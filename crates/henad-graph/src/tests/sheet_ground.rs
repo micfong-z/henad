@@ -430,6 +430,11 @@ fn each_ground_refusal_gives_one_located_error() {
         "rule = \"on_ground\"\nproperty = \"ground\"\nstate = \"obstacle\"",
     );
     one(&rock_start, sentence::ON_GROUND_CELLS, "[[agents.property]]");
+    // The start is named as the Sheet pane names it, by the property's name and never by its id.
+    assert_eq!(
+        only_refusal(&rock_start).message,
+        format!("{}: {}", sentence::starts_place("Position"), sentence::ON_GROUND_CELLS)
+    );
     let ahead_by_arrow = boids_with("[card.line.l9]\nkind = \"look_at_cell\"\nname = \"Ahead\"\nwhich = \"ahead\"");
     one(&ahead_by_arrow, sentence::AHEAD_NEEDS_CELLS, "[card.line.l9]");
 }

@@ -53,8 +53,8 @@ property, `set_takes`, a Number taking a yes or no worked out or read but never
 `true` or `false`, and an Arrow a place; Keep between on a States or yes or no property; and the two
 sides of a comparison, `compared`, each item of a list on its own: equal types for is and one of, no
 order on states or yes or no, and "is within" over numbers and worked-out yes or no; each only where
-both types are known, and only what the lowering refuses too), formulas, keys held twice,
-Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
+both types are known, and only what the lowering refuses too), formulas, keys held twice (each
+owner named as the card and the Sheet pane name it, "line 5" or "the start of Status"), Count, Look around and Pick a cell inside a Repeat (`LOOK_IN_REPEAT`) or a run-once card,
 `RATE_IN_BUTTON_CARD`, a rate inside a Repeat (`RATE_IN_REPEAT`), and the ranges from the wording
 table (`CHANCE_OUT_OF_RANGE` and `RATE_BELOW_ZERO` on literals, a percent divided by 100,
 `CHANCE_LIMITS_OUTSIDE` and `RATE_BELOW_ZERO` on parameters). Agent-only fields (a Steer or Move

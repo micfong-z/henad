@@ -485,7 +485,7 @@ impl<'a> CardLowering<'_, 'a> {
     fn become_line(&mut self, site: &Site, id: &'a str, line: &'a SheetLine) -> Result<(), String> {
         let (index, property) = self.property(line.property.as_deref())?;
         if property.property_type != PropertyType::States {
-            return Err(format!("'{}' has no states to become", property.id));
+            return Err(format!("'{}' has no states to become", property.name));
         }
         let new_state = line
             .new_state
@@ -851,14 +851,14 @@ impl<'a> CardLowering<'_, 'a> {
     fn depending_on(&mut self, site: &Site, line: &'a SheetLine) -> Result<Operand, String> {
         let (_, property) = self.property(line.property.as_deref())?;
         if property.property_type != PropertyType::States {
-            return Err(format!("'{}' has no states to depend on", property.id));
+            return Err(format!("'{}' has no states to depend on", property.name));
         }
         let mut branches = Vec::with_capacity(property.states.len());
         for state in &property.states {
             let value = line
                 .branches
                 .get(&state.id)
-                .ok_or_else(|| format!("no value for the state '{}'", state.id))?;
+                .ok_or_else(|| format!("no value for the state '{}'", state.name))?;
             let branch_site = site.at(&format!("branches.{}", state.id));
             branches.push((state.id.as_str(), self.value(&branch_site, value)?));
         }
@@ -1017,7 +1017,7 @@ impl<'a> CardLowering<'_, 'a> {
             return Err(format!(
                 "'{}' changes by {} rows, counting a row for each state of a change from any state, expected \
                  at most {MAX_TRANSITION_RULES}",
-                property.id,
+                property.name,
                 rules.len()
             ));
         }

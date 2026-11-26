@@ -60,7 +60,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
                     .stats
                     .insert(place, Stat::new(&measure.name, from, measure.color));
             }
-            Err(message) => builder.problem(format!("measure '{}': {message}", measure.id), Place::Measure(index)),
+            Err(message) => builder.problem(format!("measure '{}': {message}", measure.name), Place::Measure(index)),
         }
     }
 }

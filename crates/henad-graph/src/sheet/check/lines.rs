@@ -360,7 +360,7 @@ fn check_line<'a>(
     }
     let mut state = LineState::default();
     checker.body(line, &context, &mut state);
-    checker.key(line.key, format!("line {}", owner.id), holds_draw(line), &place);
+    checker.key(line.key, word, holds_draw(line), &place);
 
     if state.skip.is_none() {
         let relations = &checker.relations[owner.card];

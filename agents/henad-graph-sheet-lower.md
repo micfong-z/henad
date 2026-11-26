@@ -116,7 +116,8 @@ that owns its site (a top-level or nested line, never the phrase's own `key`) an
 `""` for a Chance or Random number line itself and `condition` for a chance in a change's condition.
 A When's condition lowers once and its operand joins every change inside, so its draw is written and
 keyed once. `keys::clashes` is V18 after lowering: a key two owners take is an error naming both, at
-the second.
+the second. An owner is told apart by its table, and named in words as the card and the Sheet pane
+name it ("line 3", "the start of Status"), as the checker's `key` names the owners of a key.
 
 Starts: All [state], a number, yes or no or a parameter write the value (a fraction truncated into a
 Whole number), a `random_number` phrase is `rand.float(high - low) + low` on a Number property and
@@ -195,7 +196,12 @@ and so is an agents-only line kind or a look at agents within a distance. A prob
 message that names another line, names it by `CardRelations::line_word`, the number the card shows
 ("line 1", "Clear line 2" on a button's card, a line the card does not show by its quoted id), never
 by its id, and a conflict between two ways of changing a property by `sentence::line_prefix`
-(`a_refusal_names_its_line_by_the_number_the_card_shows`). Node, buffer and key names keep the id.
+(`a_refusal_names_its_line_by_the_number_the_card_shows`). Every other message names an item that
+exists by its name, as the Sheet pane shows it: a refused start after `sentence::starts_place`
+("Position starts as: ..."), a refused share kept after `sentence::kept_place`, and a property,
+state, parameter, measure or button by its name in quotes, a palette that needs a property's id by
+that property's name (`Builder::property_name`). An id stays where no item has it. Node, buffer and
+key names keep the id.
 
 Grid lowering tests sit in four files, on the host evaluator. `src/tests/sheet_lower.rs` holds
 `every_grid_sheet_lowers_checks_and_compiles` (the four grid starters and `sir_chance.toml`: no

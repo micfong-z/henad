@@ -379,6 +379,25 @@ impl<'a> Builder<'a> {
         }
     }
 
+    /// Returns the name of the property `id` of the cells, a kind of agent or the ground, or `id` itself when no
+    /// property has that id.
+    fn property_name<'b>(&self, id: &'b str) -> &'b str
+    where
+        'a: 'b,
+    {
+        let document = self.document;
+        let ground = document.ground.iter().flat_map(|ground| &ground.properties);
+        let agents = document.agents.iter().flat_map(|kind| &kind.properties);
+        document
+            .cells
+            .iter()
+            .flatten()
+            .chain(agents)
+            .chain(ground)
+            .find(|property| property.id == id)
+            .map_or(id, |property| property.name.as_str())
+    }
+
     /// Returns the property `id` of the sheet's kind of thing with its index.
     fn property(&self, id: &str) -> Option<(usize, &'a SheetProperty)> {
         self.properties()
@@ -597,7 +616,7 @@ impl<'a> Builder<'a> {
         }
         let (index, found) = self.required_property(property)?;
         if self.dropped.contains(property) {
-            return Err(format!("'{property}' has no value to read"));
+            return Err(format!("'{}' has no value to read", found.name));
         }
         let value_type = self.lane_type(found);
         let site = Site::sheet(
@@ -624,7 +643,10 @@ impl<'a> Builder<'a> {
     /// Returns the message for a property the pass writes already.
     fn write(&mut self, site: &Site, property: &str, value: InputValue) -> Result<(), String> {
         if !self.passes[site.pass].written.insert(property.to_owned()) {
-            return Err(format!("'{property}' is changed twice by one button"));
+            let name = self
+                .property(property)
+                .map_or(property, |(_, found)| found.name.as_str());
+            return Err(format!("'{name}' is changed twice by one button"));
         }
         if self.is_ground() {
             let (config, mut inputs) = self.ground_access(property)?;

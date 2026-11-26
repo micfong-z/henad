@@ -55,7 +55,7 @@ pub(super) fn colors(builder: &mut Builder<'_>) {
 /// # Errors
 ///
 /// Returns the message for a rule that names no States property of the ground, a shade of no Number property, or a
-/// palette id that a category takes.
+/// property whose id the palette of the shades needs.
 fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule) -> Result<(), String> {
     let (_, property) = rule
         .property
@@ -92,8 +92,10 @@ fn by_state(builder: &mut Builder<'_>, rule: &crate::sheet::document::ColorRule)
         .iter()
         .any(|category| category.id == palette_id)
     {
+        let other = builder.property_name(&palette_id);
         return Err(format!(
-            "the shades palette id '{palette_id}' is already used by a property"
+            "the property '{other}' clashes with the shades of '{}'. Rename '{other}'",
+            property.name
         ));
     }
     let colors = shade_palette(property, rule, shaded_index);

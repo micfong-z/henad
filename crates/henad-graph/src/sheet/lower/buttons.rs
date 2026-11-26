@@ -52,7 +52,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
             builder.problem(
                 format!(
                     "button '{}' cannot both start properties again and change them",
-                    button.id
+                    button.name
                 ),
                 place,
             );
@@ -62,7 +62,7 @@ pub(super) fn lower(builder: &mut Builder<'_>) {
             builder.problem(
                 format!(
                     "button '{}' cannot change both {} and the ground",
-                    button.id,
+                    button.name,
                     builder.thing_words()
                 ),
                 place,
@@ -125,11 +125,11 @@ fn write_action_pass<'a>(
                     .map(|(_, other)| *other);
                 match (found, earlier) {
                     (Some(_), Some(other)) => Err(format!(
-                        "card '{card_id}' cannot run for both button '{other}' and button '{}'",
-                        button.id
+                        "the lines of button '{other}' cannot also run for button '{}'",
+                        button.name
                     )),
                     (Some(card_index), None) => {
-                        run_by.push((card_id, button.id.as_str()));
+                        run_by.push((card_id, button.name.as_str()));
                         card::lower_card(builder, card_index, pass);
                         Ok(())
                     }
@@ -139,7 +139,7 @@ fn write_action_pass<'a>(
             ButtonStepRule::StartAgain => Ok(()),
         };
         if let Err(message) = outcome {
-            builder.problem(format!("button '{}': {message}", button.id), place.clone());
+            builder.problem(format!("button '{}': {message}", button.name), place.clone());
         }
     }
 }
@@ -194,7 +194,8 @@ fn set_everywhere(
     let (_, property) = builder.required_property(property_id)?;
     if builder.is_ground() && property.property_type == PropertyType::States {
         return Err(format!(
-            "the ground's '{property_id}' has painted states and cannot be set by a button"
+            "the ground's '{}' has painted states and cannot be set by a button",
+            property.name
         ));
     }
     let site = Site::sheet(

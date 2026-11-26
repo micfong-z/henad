@@ -65,7 +65,7 @@ fn a_property_set_twice_by_one_button_is_refused() {
     let text = life_with(life(), twice);
     let error = only_refusal(&text);
     assert!(
-        error.message.contains("'status' is changed twice by one button"),
+        error.message.contains("'Status' is changed twice by one button"),
         "{}",
         error.message
     );

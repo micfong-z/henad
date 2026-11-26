@@ -27,6 +27,7 @@ use crate::sheet::document::{
     ButtonStepRule, LineKind, Marks, PropertyType, SheetChip, SheetProperty, SheetValue, Slot,
 };
 use crate::sheet::limits::ADD_UP_RESOLUTION_SHIFT;
+use crate::sheet::sentence;
 use crate::types::ValueType;
 use crate::value::{InputValue, Literal, PortRef};
 
@@ -63,7 +64,13 @@ fn kept_input(builder: &Builder<'_>, slot: &Slot) -> Result<InputValue, String> 
         Some(SheetValue::Chip(SheetChip::Param(id))) => match builder.param(id)? {
             Operand::Param(id, ValueType::F32) => Ok(InputValue::Param(id)),
             _ => Err(format!(
-                "the share kept per tick reads '{id}', which is not a Number parameter"
+                "the share kept per tick reads '{}', which is not a Number parameter",
+                builder
+                    .document
+                    .parameters
+                    .iter()
+                    .find(|parameter| parameter.id == *id)
+                    .map_or(id.as_str(), |parameter| parameter.name.as_str())
             )),
         },
         _ => Err("the share kept per tick must be a number or a parameter".to_owned()),
@@ -116,7 +123,7 @@ pub(super) fn declare(builder: &mut Builder<'_>) {
             other => builder.problem(
                 format!(
                     "property '{}' of the ground is {}, expected number or states",
-                    property.id,
+                    property.name,
                     other.as_str()
                 ),
                 place,
@@ -165,7 +172,7 @@ fn declare_number(
                 Some(function)
             }
             Err(message) => {
-                builder.problem(format!("property '{}': {message}", property.id), place);
+                builder.problem(format!("{}: {message}", sentence::kept_place(&property.name)), place);
                 None
             }
         }

@@ -19,7 +19,7 @@ use crate::sheet::check::Place;
 pub(super) struct Draw {
     /// Key written on the draw.
     pub key: u32,
-    /// Owner in words, such as `line l2` or `the start of property 'status'`.
+    /// Owner in words as the card and the Sheet pane name it, such as `line 2` or `the start of Status`.
     pub owner: String,
     /// Table of the owner.
     pub place: Place,
@@ -27,13 +27,13 @@ pub(super) struct Draw {
 
 /// Returns an error for each draw whose key an earlier draw of another owner takes too, naming both owners (V18).
 ///
-/// Two draws of one owner never meet, since their slot paths differ.
+/// Two draws of one owner, which share a table, never meet, since their slot paths differ.
 pub(super) fn clashes(draws: &[Draw]) -> Vec<Problem> {
     let mut first: BTreeMap<u32, &Draw> = BTreeMap::new();
     let mut problems = Vec::new();
     for draw in draws {
         match first.get(&draw.key) {
-            Some(other) if other.owner != draw.owner => problems.push(Problem {
+            Some(other) if other.place != draw.place => problems.push(Problem {
                 message: format!(
                     "{} draws with key {}, which {} also draws with. Draw new numbers on one of them",
                     draw.owner, draw.key, other.owner

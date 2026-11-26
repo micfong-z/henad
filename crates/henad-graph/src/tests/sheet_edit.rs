@@ -1978,7 +1978,7 @@ fn a_start_on_two_painted_cells_takes_a_key() {
     assert!(
         warnings
             .iter()
-            .any(|message| message.contains("the start of property 'position' draws and holds no key")),
+            .any(|message| message.contains("the start of Position draws and holds no key")),
         "{warnings:#?}"
     );
     run(

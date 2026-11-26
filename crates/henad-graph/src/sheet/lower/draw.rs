@@ -35,8 +35,11 @@ impl<'a> CardLowering<'_, 'a> {
             .ok_or_else(|| format!("'{id}' is no line of the card"))?;
         let document = self.builder.document;
         let key = keys::draw_key(keys::owner_key(line.key, &document.sheet.id, id), &site.path);
-        self.builder
-            .record_draw(key, format!("line {id}"), Place::Line(self.card_index, id.clone()));
+        self.builder.record_draw(
+            key,
+            self.relations.line_word(id),
+            Place::Line(self.card_index, id.clone()),
+        );
         Ok(self.builder.emit(
             site,
             op,
