@@ -28,7 +28,11 @@ pub fn menu_bar_panel(ui: &mut egui::Ui, workspace: &mut Workspace, app: &mut Ap
 
 /// Draws the File menu, whose entries fill the Editor or save its text. Each one that fills the Editor brings it to the
 /// front. New model opens its dialog first, which also holds the grid rule and node graph starters.
+///
+/// The File menu also runs Save model on its shortcut, Cmd+S or Ctrl+S, which it shows beside the entry
+/// ([`editor::save_on_shortcut`]).
 pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
+    editor::save_on_shortcut(ui.ctx(), app);
     ui.menu_button(format!("{MDI_FILE_OUTLINE}  File"), |ui| {
         if ui
             .button(format!("{MDI_FILE_DOCUMENT_PLUS_OUTLINE}  {NEW_MODEL_BUTTON}"))
@@ -46,10 +50,11 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             editor::replace_model(app, editor::Replacement::OpenModel);
             ui.close();
         }
+        let shortcut = ui.ctx().format_shortcut(&editor::SAVE_SHORTCUT);
         let save = ui
             .add_enabled(
                 !app.editor.model.is_empty(),
-                egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN}  Save model")),
+                egui::Button::new(format!("{MDI_TRAY_ARROW_DOWN}  Save model")).shortcut_text(shortcut),
             )
             .on_hover_text("Save Editor model to TOML model file")
             .on_disabled_hover_text(EMPTY_EDITOR);

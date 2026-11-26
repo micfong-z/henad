@@ -11,7 +11,7 @@ use henad_graph::sheet::sentence::{
 };
 
 use crate::native::guard_close;
-use crate::tests::panes::{apply_sheet_edit, sheet_mut};
+use crate::tests::panes::{apply_sheet_edit, sheet, sheet_mut, type_into};
 use crate::tests::support::{Harness, Node, starter_text};
 use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
@@ -696,4 +696,72 @@ fn a_replacement_waiting_for_a_save_goes_with_its_model() {
     );
     assert!(harness.app.editor.is_unsaved());
     assert_eq!(asking(&mut harness), None);
+}
+
+/// Returns the number of saves requested and not yet reported.
+fn saves_waiting(harness: &Harness) -> usize {
+    harness.app.saves_requested.as_ref().map_or(0, Vec::len)
+}
+
+/// Cmd+S runs Save model, and Shift+Cmd+S does the same. A held key starts no second save while a save of the model
+/// waits on its dialog. A field of the sheet that holds the focus commits what was typed first, so the save holds it.
+/// With a modal dialog open, or no model, the keys save nothing.
+#[test]
+fn the_save_shortcut_saves_the_model_with_what_its_field_holds() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.press(Key::S, Modifiers::COMMAND);
+    assert_eq!(saves_waiting(&harness), 0, "the empty Editor saves nothing");
+
+    harness.open_sheet(starter_text("game_of_life.toml"));
+    harness.press(Key::S, Modifiers::COMMAND);
+    let requested = harness.app.saves_requested.clone().unwrap_or_default();
+    assert!(
+        matches!(requested.as_slice(), [(SaveTarget::Model(_), name)] if name == "opened.toml"),
+        "{requested:?}"
+    );
+    harness.press(Key::S, Modifiers::COMMAND);
+    assert_eq!(saves_waiting(&harness), 1, "a waiting save takes no second");
+    harness.app.finish_save(SaveResult::Saved("life.toml".to_owned()));
+    harness.press(Key::S, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!(saves_waiting(&harness), 1, "Shift+Cmd+S saves too");
+    harness.app.finish_save(SaveResult::Canceled);
+
+    // The typed purpose is committed, then saved.
+    type_into(&mut harness, "Purpose", "Typed before the save.");
+    harness.press(Key::S, Modifiers::COMMAND);
+    harness.settle();
+    assert_eq!(
+        sheet(&harness).document().sheet.purpose.as_deref(),
+        Some("Typed before the save.")
+    );
+    assert_eq!(saves_waiting(&harness), 1);
+    harness.app.finish_save(SaveResult::Saved("life.toml".to_owned()));
+    assert!(
+        harness.app.editor.unsaved_names().is_empty(),
+        "the save holds the typed purpose"
+    );
+
+    harness.click(NEW_MODEL);
+    harness.press(Key::S, Modifiers::COMMAND);
+    assert_eq!(saves_waiting(&harness), 0, "a modal dialog takes the keys");
+    harness.press(Key::Escape, Modifiers::NONE);
+}
+
+/// Cmd+S saves a grid rule at once, and the code view keeps the focus.
+#[test]
+fn the_save_shortcut_leaves_the_focus_in_the_code_view() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    replace_model(&mut harness.app, life_rule());
+    harness.settle();
+    let code = crate::ui::editor::code_view::code_id();
+    harness.context.memory_mut(|memory| memory.request_focus(code));
+    harness.settle();
+    harness.frame(vec![egui::Event::Text("\n".to_owned())]);
+    harness.press(Key::S, Modifiers::COMMAND);
+    assert_eq!(saves_waiting(&harness), 1);
+    assert!(harness.context.memory(|memory| memory.has_focus(code)));
 }

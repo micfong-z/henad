@@ -69,6 +69,9 @@ pub const EMPTY_EDITOR: &str = "Editor is empty. Press New model or Open model t
 /// Label of the button that opens the New model dialog.
 pub const NEW_MODEL_BUTTON: &str = henad_graph::sheet::sentence::NEW_MODEL;
 
+/// Shortcut that runs Save model: Cmd+S on macOS, Ctrl+S elsewhere. The File menu shows it beside Save model.
+pub const SAVE_SHORTCUT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
+
 /// Name of a saved model file whose text does not read as a model file.
 const FALLBACK_FILE_NAME: &str = "model.toml";
 
@@ -269,6 +272,9 @@ pub struct EditorPanel {
     reset_history: bool,
     /// Whether the code view returns to the top left on its next frame, after another file's text replaced the text.
     reset_scroll: bool,
+    /// Whether Save model runs on the next frame, after [`SAVE_SHORTCUT`] took the keyboard focus from a text field so
+    /// that the field commits what was typed.
+    save_after_commit: bool,
     /// Live preview of the graph model or the sheet.
     pub preview: preview::Preview,
     /// New model dialog, `None` while it is closed.
@@ -1698,6 +1704,39 @@ pub fn save_model(app: &mut AppState) -> Option<SaveTarget> {
     });
     app.save_as(target, &name, bytes);
     Some(target)
+}
+
+/// Runs Save model on [`SAVE_SHORTCUT`], with Shift held too, while no modal dialog is open and the Editor holds a model
+/// that no save of its own waits on. Save model asks where to save each time, so Shift+Cmd+S, the usual Save as, does
+/// the same.
+///
+/// A text field that holds the keyboard focus gives it up first, so a field of a sheet or a graph commits what was
+/// typed, and the save runs on the next frame. The code view of a grid rule holds the model's text itself, and keeps
+/// the focus.
+pub fn save_on_shortcut(ctx: &egui::Context, app: &mut AppState) {
+    if std::mem::take(&mut app.editor.save_after_commit) {
+        save_model(app);
+        return;
+    }
+    if ctx.memory(|memory| memory.top_modal_layer().is_some()) {
+        return;
+    }
+    let save_as = KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::S);
+    let pressed = ctx.input_mut(|input| input.consume_shortcut(&save_as) || input.consume_shortcut(&SAVE_SHORTCUT));
+    // A held key repeats, and a save whose dialog is still open takes no second one.
+    if !pressed || app.editor.model.is_empty() || !app.editor.saving.is_empty() {
+        return;
+    }
+    let field = ctx
+        .memory(|memory| memory.focused())
+        .filter(|_| ctx.text_edit_focused() && app.editor.model.rule_text().is_none());
+    if let Some(field) = field {
+        ctx.memory_mut(|memory| memory.surrender_focus(field));
+        app.editor.save_after_commit = true;
+        ctx.request_repaint();
+    } else {
+        save_model(app);
+    }
 }
 
 /// Opens a dialog that saves the model the Editor holds beside the one shown, as [`save_model`] saves the one shown,

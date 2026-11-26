@@ -670,6 +670,8 @@ A sheet is saved in its canonical form, with each line's sentence as a comment a
 A node graph is saved in its canonical form, with the canvas layout in its `[editor]` table.
 The desktop app asks where to save, and suggests the name of the file you opened or the model's id.
 A browser downloads the file.
+<kbd>Cmd</kbd>+<kbd>S</kbd> (<kbd>Ctrl</kbd>+<kbd>S</kbd> outside macOS) does the same from any tab, and so does <kbd>Shift</kbd>+<kbd>Cmd</kbd>+<kbd>S</kbd>, since Save model always asks where to save.
+The save includes the text of a field you are typing in.
 
 Press <span class="ui" markdown>:material-folder-open-outline: Open model</span> to read a `.toml` model file into the Editor.
 A sheet opens on its two panes, a node graph on the canvas, and any other file as text.

@@ -77,7 +77,13 @@ sheet of a `henad-sheet/1` author text, else the graph or the grid rule of the c
 while it holds unsaved edits (`henad-app.md`, unsaved edits). `can_edit` is
 `editable_model(...).is_some()`. Open model and Save model go through `OpenTarget::Model` and
 `SaveTarget::Model(n)`, a `.toml` file on
-native and a picked file or a download in a browser. Opening loads the text and applies nothing.
+native and a picked file or a download in a browser. `file_menu` calls `save_on_shortcut` every
+frame: `SAVE_SHORTCUT` (Cmd+S, Ctrl+S outside macOS, shown beside the File menu's Save model) or
+Shift+Cmd+S runs `save_model` while no modal is open, the model is not empty and no save of it
+waits (a held key repeats). A focused text field other than a grid rule's code view gives up the
+focus first, so a sheet's or a graph's field commits what was typed, and `save_after_commit` saves
+on the next frame (`the_save_shortcut_saves_the_model_with_what_its_field_holds`,
+`the_save_shortcut_leaves_the_focus_in_the_code_view`). Opening loads the text and applies nothing.
 `AppState::show_fault` gives a fault to the Editor (`EditorPanel::claims`) when it belongs to a run
 built from the applied source that has not passed tick 0, in place of the fault modal. A lost
 device, a failed poll and a device out of memory stay with the modal, since no edit of the code

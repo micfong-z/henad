@@ -23,6 +23,7 @@ In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: Vie
 Under the tabs it switches between two [layouts](#layouts).
 
 <span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its model.
+++cmd+s++ (++ctrl+s++ outside macOS) runs Save model.
 
 <span class="ui" markdown>:material-information-outline: About</span> links to the source code and this documentation.
 Select <span class="ui" markdown>:material-information-outline: About Henad</span> to open a window with the app's version, commit, source hash, build type and licence, and the version of the crate that provides the models with its commit or the hash of its sources.
