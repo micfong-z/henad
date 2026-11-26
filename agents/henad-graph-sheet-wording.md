@@ -5,7 +5,9 @@ sentences of the cards' lines with their parts and places. `mod.rs` holds the mo
 re-exports every item of its private files, so each stays at `sheet::sentence::X`. `card.rs` holds
 the card's fixed words and templates (its frame, the add menus, the words of line sentences,
 comparisons, conditions and blanks, the Lines help and `FORBIDDEN_WORDS`), `pickers.rs` the
-pickers, their messages, typed numbers and result names, `notes.rs` the notes under a line and
+pickers, their messages, typed numbers and result names, and the reasons of a greyed value
+(`BOOLEAN_WORDS` to `LIST_WORDS`, `kind_needed_by`, `kind_needed`, `as_sentence`, `move_owner`,
+`set_owner`, `steer_owner`, `CALCULATE_TAKES_PLAIN_VALUES`), `notes.rs` the notes under a line and
 "otherwise", `rates.rs` the words and notes of rates and chances, competing rates, the long tick and
 rate conversion, `errors.rs` the errors and refusals with the cost words and fire counts, `sheet.rs`
 the sheet's sections and forms, `editor.rs` the New model, unsaved changes, replace, delete and New
@@ -52,9 +54,9 @@ them), which `sheet::rates` fills. The end of
 `RATE_IN_REPEAT`, `ONE_AGENT_KIND`, `measure_name_reserved`), with the interim refusals
 (`NOT_YET_REPEAT`, `NOT_YET_REPEAT_CHANGE`,
 `NOT_YET_AGENT_WALLS`, `NOT_YET_BLOCKED_MOVE_BY`), the errors of the ground and the places
-(`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`), a property changed two ways
-(`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words of a look
-at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
+(`ON_GROUND_CELLS`, `AHEAD_NEEDS_CELLS`, `SET_IN_REPEAT`, `DISTANCE_NOT_FIXED`), a property changed
+two ways (`set_already`, `steered_already`, `moved_by_already`, `moved_to_already`) and the words
+of a look at agents (`look_name`, "line 3, Flockmates") and of its cost (`look_costs_too_much`,
 `card_costs_too_much`, `start_costs_too_much`, counts written with thousands commas, and for a pass
 past its cost per element `line_costs_too_much`, `smaller_maximum`, `FEWER_TIMES` and
 `FEWER_LINES`). `plural` (the rules of English and `IRREGULAR_PLURALS`) is crate-visible for

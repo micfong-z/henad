@@ -25,7 +25,7 @@ use crate::tests::panes::{
 };
 use crate::tests::support::{Harness, align_with_starter, edited, starter_text};
 use crate::ui::editor::sheet::card_pane::{NoteColor, card_lines};
-use crate::ui::editor::sheet::picker::{looked_at_picker, picker_for, takes_ground_states};
+use crate::ui::editor::sheet::picker::{looked_at_picker, mark_refusals, picker_for, takes_ground_states};
 
 /// Opens the menu of the add button `button` of a card over agents, the first such button when `first` holds and the
 /// last otherwise, records what it shows, and chooses `item`.
@@ -724,6 +724,32 @@ fn picker_items(document: &SheetDocument, line_id: &str, want: Blank) -> Vec<Str
     labels_of(&picker).into_iter().map(|(_, label)| label).collect()
 }
 
+/// Returns the labels of the items the picker of a `want` blank at the slot `path` of line `line_id` of `document`
+/// offers: those its place takes, then each it refuses with the reason.
+fn marked_items(
+    document: &SheetDocument,
+    line_id: &str,
+    want: Blank,
+    path: &str,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let picker = line_picker(document, line_id, |context| {
+        let mut picker = picker_for(context, want, None, true, false, "", DrawKind::Chance);
+        mark_refusals(&mut picker, context, &PlaceTarget::Slot(path.to_owned()));
+        picker
+    });
+    let items: Vec<_> = picker.groups.iter().flat_map(|group| &group.items).collect();
+    let taken = items
+        .iter()
+        .filter(|item| item.refusal.is_none())
+        .map(|item| item.label.clone())
+        .collect();
+    let refused = items
+        .iter()
+        .filter_map(|item| Some((item.label.clone(), item.refusal.clone()?)))
+        .collect();
+    (taken, refused)
+}
+
 #[test]
 fn each_agent_slot_offers_what_fits_it() {
     let boids = starter_document("boids.toml");
@@ -764,11 +790,14 @@ fn each_agent_slot_offers_what_fits_it() {
             document.sheet.id
         );
     }
-    // Move to takes a cell picked or looked at above, and the Choose that names one.
-    assert_eq!(
-        picker_items(&ants, "l8", Blank::Value),
-        ["Food way", "Home way", "Way", "Ahead", "Next cell"]
-    );
+    // Move to takes a cell picked or looked at above, and the Choose that names one. Every other value above shows
+    // greyed, with the reason.
+    let (taken, refused) = marked_items(&ants, "l8", Blank::Value, "value");
+    assert_eq!(taken, ["Food way", "Home way", "Way", "Ahead", "Next cell"]);
+    assert!(!refused.is_empty());
+    for (label, reason) in &refused {
+        assert!(reason.ends_with(", and Move to needs a cell."), "{label}: {reason}");
+    }
     // Steer by takes the summaries above it, and line 7 the value its changes give Velocity.
     let steer = picker_items(&boids, "l3", Blank::Value);
     for part in ["Flockmates' average velocity", "Flockmates' centre", "Too close's push"] {
@@ -1284,4 +1313,122 @@ fn a_calculate_line_takes_the_parts_of_the_lines_above() {
     click_on_line(&mut harness, "Line 8", "2");
     click_in(&mut harness, "Choose a number", "Too close's push");
     assert_eq!(formula(&harness).as_deref(), Some("l1.count_summary + l2.push"));
+}
+
+/// Returns the problems that stop `document` lowering at line `line_id`, for a sheet that checks.
+fn lowering_problems_at(document: &SheetDocument, line_id: &str) -> Vec<String> {
+    use henad_graph::sheet::{ParsedSheet, SheetFile};
+
+    let text = document.to_text().expect("the sheet writes");
+    let parsed = ParsedSheet::parse(&text).expect("the sheet reads");
+    SheetFile::lowering_problems(&parsed, &parsed.check())
+        .into_iter()
+        .filter(|problem| problem.line.as_deref() == Some(line_id))
+        .map(|problem| problem.diagnostic.message)
+        .collect()
+}
+
+/// Every value a picker of a slot offers enabled, a typed number where it shows a Number box included, put in the slot,
+/// gives the line no new error and lowers, and every value it shows greyed gives the line an error: the picker and the
+/// checker agree. A random value has its own numbers filled in, as a line with a blank never lowers.
+#[test]
+fn every_offered_value_the_checker_takes_and_every_greyed_one_it_refuses() {
+    use henad_graph::sheet::relations::CardRelations;
+
+    use crate::ui::editor::sheet::picker::{Choice, PickerItem, apply_choice};
+
+    let errors_at = |document: &SheetDocument, line_id: &str| -> Vec<String> {
+        check(document)
+            .errors()
+            .filter(|error| error.line.as_deref() == Some(line_id))
+            .map(|error| error.diagnostic.message.clone())
+            .collect()
+    };
+    let number = |value: f64| Slot::Filled(SheetValue::Literal(SheetLiteral::Number(value)));
+    let mut tried = 0;
+    let mut refused = 0;
+    let mut lowered = 0;
+    for file in ["boids.toml", "ants.toml", "sir.toml", "random_walk.toml"] {
+        let document = starter_document(file);
+        let sentences = Sentences::new(&document);
+        for (card_index, card) in document.cards.iter().enumerate() {
+            let relations = CardRelations::new(&document, card);
+            for &line_id in relations.order() {
+                let before = errors_at(&document, line_id);
+                let otherwise = relations.otherwise_numbers(line_id);
+                for placed in sentences.placed_parts(line_id, &otherwise) {
+                    let Some(place) = placed.place else {
+                        continue;
+                    };
+                    let Some(want) = place.want.filter(|want| *want != Blank::When) else {
+                        continue;
+                    };
+                    if !matches!(&place.target, PlaceTarget::Slot(path) if !path.starts_with("summaries."))
+                        && !matches!(place.target, PlaceTarget::ListItem { .. })
+                    {
+                        continue;
+                    }
+                    let picker = line_picker(&document, line_id, |context| {
+                        let ground = takes_ground_states(context.line, &place.target);
+                        let mut picker = picker_for(context, want, None, ground, false, "", DrawKind::Chance);
+                        mark_refusals(&mut picker, context, &place.target);
+                        picker
+                    });
+                    // A typed number stands for the Number box, which shows where the place takes one.
+                    let typed = picker.number_box.as_ref().map(|_| PickerItem {
+                        refusal: None,
+                        ..PickerItem::new("1", Choice::Value(SheetValue::Literal(SheetLiteral::Number(1.0))))
+                    });
+                    for item in picker
+                        .groups
+                        .iter()
+                        .flat_map(|group| &group.items)
+                        .chain(typed.as_ref())
+                    {
+                        let Choice::Value(value) = &item.choice else {
+                            continue;
+                        };
+                        let mut value = value.clone();
+                        if let SheetValue::Phrase(phrase) = &mut value {
+                            phrase.low = number(1.0);
+                            phrase.high = number(2.0);
+                            phrase.length = number(1.0);
+                        }
+                        let applied = apply_choice(&document, None, line_id, &place, &Choice::Value(value));
+                        let mut builder = SheetBuilder::new(document.clone()).with_key_seed(1);
+                        for edit in applied.edits {
+                            builder.apply(edit).expect("the choice applies");
+                        }
+                        let after = builder.document();
+                        let new: Vec<String> = errors_at(after, line_id)
+                            .into_iter()
+                            .filter(|error| !before.contains(error))
+                            .collect();
+                        let what = format!("{file} card {card_index} {line_id} {:?}: {}", place.target, item.label);
+                        tried += 1;
+                        refused += usize::from(item.refusal.is_some());
+                        if let Some(reason) = &item.refusal {
+                            assert!(!new.is_empty(), "{what} is greyed ({reason}) but checks");
+                            continue;
+                        }
+                        assert!(new.is_empty(), "{what} is offered but gives {new:?}");
+                        let report = check(after);
+                        if report.has_errors() || report.is_skipped(line_id) {
+                            continue;
+                        }
+                        lowered += 1;
+                        let problems = lowering_problems_at(after, line_id);
+                        assert!(
+                            problems.is_empty(),
+                            "{what} is offered but does not lower: {problems:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        tried > 600 && refused > 300 && lowered > 200,
+        "{tried} values tried, {refused} greyed and {lowered} lowered"
+    );
 }

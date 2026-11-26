@@ -159,7 +159,20 @@ filled item `REMOVE_FROM_LIST`, a "for each" `for_each_lead` and `REMOVE_FOR_EAC
 opens on a typed number as typed (`typed_text`), and a refused text keeps the box focused. The
 boxes start afresh each time the picker opens.
 `LineContext::results_above` offers the results of lines above, a result inside a When only to the
-lines after it inside that When. `choose_when(context, otherwise)` lists the Boolean results as
+lines after it inside that When, for "Choose when". Every picker of a value lists `values_above`
+under "From lines above": every result above whatever its kind, then the parts above.
+`mark_refusals(picker, context, target)` gives each value item the place cannot take a `refusal`,
+`place_refusal(...).reason(label)` from henad-graph's checker (`agents/henad-graph-sheet-check.md`),
+so a picker and the checker never disagree, and `groups_ui` draws it disabled with the reason as its
+tooltip. A value of a Calculate line of one operation (a field) refuses a phrase
+(`CALCULATE_TAKES_PLAIN_VALUES`) and a cell (`kind_needed`). A picker whose items are all refused
+still shows its empty words under them, such as `NO_PLACE` under the greyed values of a Move to.
+`control_picker` keeps the picker it built under the popup's id with "built", beside
+`CardState::fingerprint` (`fnv1a64` of the sheet's text, set as `card_pane` starts), and builds it
+again only once the sheet changes, since each reason reads the checker.
+`every_offered_value_the_checker_takes_and_every_greyed_one_it_refuses` puts each value of each slot
+picker of four starters in its slot through `apply_choice`: an offered value adds no error and
+lowers, a greyed one adds an error. `choose_when(context, otherwise)` lists the Boolean results as
 "when [name]", then "Conditions" or "Or a new condition" with `ConditionItem`s and their grey lines,
 "otherwise" in place of "always" when `otherwise_if_always` finds a higher line (the line's
 condition set to always on a copy of the sheet), and "at rate" only on a card that runs each tick
@@ -409,7 +422,8 @@ properties since `repeat_count` lowers nothing else (`NumberUse::Times`, an inte
 `TYPE_TIMES`; its New parameter dialog makes a `WholeNumber` and refuses other values with
 `TIMES_LIMITS_NOT_INTEGERS`). A summary's value opens `looked_at_picker`: `their_property_item` for
 each property but States, then the three relations, under `each_looked_at`. A Move to's value offers
-the places above alone (`NO_PLACE`).
+the places above, every other value above greyed ("… is a vector, and Move to needs a cell."), and
+`NO_PLACE` under them while nothing fits.
 
 Refusals: `SheetEditor::refresh` adds `SheetFile::lowering_problems` to the report when the sheet
 checks and does not lower, so a lowering refusal about a line (a Set and a Steer of one property,

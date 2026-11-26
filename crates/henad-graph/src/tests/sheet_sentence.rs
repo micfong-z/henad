@@ -687,6 +687,36 @@ fn every_wording_table_entry_equals_the_final_words() {
             fixed(sentence::SET_IN_REPEAT),
         ),
         (
+            "The distance must be a typed number or a parameter, the same for every agent.",
+            fixed(sentence::DISTANCE_NOT_FIXED),
+        ),
+        ("a Boolean", fixed(sentence::BOOLEAN_WORDS)),
+        ("a number", fixed(sentence::NUMBER_WORDS)),
+        ("a vector", fixed(sentence::VECTOR_WORDS)),
+        ("a cell", fixed(sentence::CELL_WORDS)),
+        ("a state", fixed(sentence::STATE_WORDS)),
+        ("a list", fixed(sentence::LIST_WORDS)),
+        (
+            "Flockmates' centre is a vector, and Move to needs a cell.",
+            sentence::kind_needed_by("Flockmates' centre", "a vector", "Move to", "a cell"),
+        ),
+        (
+            "Visual range is a number. Choose a vector here.",
+            sentence::kind_needed("Visual range", "a number", "a vector"),
+        ),
+        (
+            "Expected a place in a slot, got a number.",
+            sentence::as_sentence("expected a place in a slot, got a number"),
+        ),
+        ("Move to", fixed(sentence::move_owner(true))),
+        ("Move by", fixed(sentence::move_owner(false))),
+        ("Set Speed", sentence::set_owner("Speed")),
+        ("Steer Velocity", sentence::steer_owner("Velocity")),
+        (
+            "A Calculate line takes a result, a property, a parameter or a typed number here.",
+            fixed(sentence::CALCULATE_TAKES_PLAIN_VALUES),
+        ),
+        (
             "A look around, a count or a pick of a cell cannot be used inside a Repeat.",
             fixed(sentence::LOOK_IN_REPEAT),
         ),

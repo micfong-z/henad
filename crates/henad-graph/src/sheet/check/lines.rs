@@ -6,19 +6,22 @@
 
 use std::collections::{HashMap, HashSet};
 
+use henad_core::diagnostic::DiagnosticSeverity;
 use henad_core::metadata::TimeUnit;
 
-use super::{Checker, Place};
+use super::{Checker, Place, Thing};
 use super::{declarations, formula};
+use crate::sheet::document::SheetDocument;
 use crate::sheet::document::{
     Around, CELLS_ID, CardRuns, CellWhich, ChipRelation, CompareTest, GROUND_ID, LineKind, LineMode, MadeOf, Marks,
     PickRule, PropertyType, SheetChip, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot, SummaryKind,
 };
-use crate::sheet::edit::unit_in_text;
+use crate::sheet::edit::lines::{parse_path, set_value};
+use crate::sheet::edit::{slot_value, unit_in_text};
 use crate::sheet::limits::{ADD_UP_RESOLUTION_SHIFT, MAX_NESTING};
 use crate::sheet::sentence::{
     self, ANY_STATE_ID, ARROW_COMPARED_WITH_NUMBER, Blank, CHANCE_LIMITS_OUTSIDE, CHANCE_OUT_OF_RANGE, LineSelect,
-    NOT_RUN_TICK, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
+    NOT_RUN_TICK, PlaceTarget, RATE_BELOW_ZERO, RATE_IN_BUTTON_CARD, RATE_IN_REPEAT,
 };
 use crate::sheet::writer::format_number;
 
@@ -41,14 +44,17 @@ impl Want {
     }
 }
 
-/// Type of a value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ValueType {
-    /// Yes or no.
+/// Kind of a value, as the checker reads it: what a place of a line takes and what a value there gives.
+///
+/// [`value_kind`] returns the kind of a value, and [`place_refusal`] the kinds a refused value and its place differ in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ValueKind {
+    /// Yes or no, a Boolean.
     YesNo,
     /// A number.
     Number,
-    /// An arrow: a position, a heading or an offset.
+    /// A vector: a position, a heading or an offset.
     Arrow,
     /// A place: a cell of the grid or the ground.
     Place,
@@ -58,7 +64,7 @@ pub(super) enum ValueType {
     List,
 }
 
-impl ValueType {
+impl ValueKind {
     /// Returns the type of a property of type `property_type`.
     fn of_property(property_type: PropertyType) -> Self {
         match property_type {
@@ -76,6 +82,18 @@ impl ValueType {
             Self::Number
         } else {
             Self::Arrow
+        }
+    }
+
+    /// Words of the kind in a sentence of the card, such as "a vector" or "a cell".
+    pub fn sentence_words(self) -> &'static str {
+        match self {
+            Self::YesNo => sentence::BOOLEAN_WORDS,
+            Self::Number => sentence::NUMBER_WORDS,
+            Self::Arrow => sentence::VECTOR_WORDS,
+            Self::Place => sentence::CELL_WORDS,
+            Self::State => sentence::STATE_WORDS,
+            Self::List => sentence::LIST_WORDS,
         }
     }
 
@@ -458,10 +476,10 @@ impl<'a> Checker<'a> {
         slot: &Slot,
         context: &Context<'a>,
         blank: Blank,
-        expect: Option<ValueType>,
+        expect: Option<ValueKind>,
         governing: Option<&str>,
         state: &mut LineState,
-    ) -> Option<ValueType> {
+    ) -> Option<ValueKind> {
         match slot.value() {
             None => {
                 self.blank(context, state, Want::Blank(blank));
@@ -473,13 +491,13 @@ impl<'a> Checker<'a> {
 
     /// Checks the number in `slot`, as [`Self::slot`] does, where `blank` is what a blank slot wants.
     fn number_slot(&mut self, slot: &Slot, context: &Context<'a>, blank: Blank, state: &mut LineState) {
-        self.slot(slot, context, blank, Some(ValueType::Number), None, state);
+        self.slot(slot, context, blank, Some(ValueKind::Number), None, state);
     }
 
     /// Checks the yes or no in `slot`, a condition, as [`Self::slot`] does.
     fn condition_slot(&mut self, slot: &Slot, context: &Context<'a>, state: &mut LineState) {
         let condition = context.with_condition(true);
-        self.slot(slot, &condition, Blank::When, Some(ValueType::YesNo), None, state);
+        self.slot(slot, &condition, Blank::When, Some(ValueKind::YesNo), None, state);
     }
 
     /// Checks the value in `slot`, a slot outside the cards, as [`Self::slot`] does.
@@ -488,7 +506,7 @@ impl<'a> Checker<'a> {
         slot: &Slot,
         context: &Context<'a>,
         blank: Blank,
-        expect: Option<ValueType>,
+        expect: Option<ValueKind>,
         governing: Option<&str>,
     ) {
         self.slot(slot, context, blank, expect, governing, &mut LineState::default());
@@ -500,13 +518,13 @@ impl<'a> Checker<'a> {
         value: &SheetValue,
         context: &Context<'a>,
         blank: Blank,
-        expect: Option<ValueType>,
+        expect: Option<ValueKind>,
         governing: Option<&str>,
         state: &mut LineState,
-    ) -> Option<ValueType> {
+    ) -> Option<ValueKind> {
         let found = match value {
-            SheetValue::Literal(SheetLiteral::Bool(_)) => Some(ValueType::YesNo),
-            SheetValue::Literal(_) => Some(ValueType::Number),
+            SheetValue::Literal(SheetLiteral::Bool(_)) => Some(ValueKind::YesNo),
+            SheetValue::Literal(_) => Some(ValueKind::Number),
             SheetValue::List(items) => {
                 // An empty list reads as a blank. It holds nothing to compare with.
                 if items.is_empty() {
@@ -516,7 +534,7 @@ impl<'a> Checker<'a> {
                 for item in items {
                     self.value(item, context, blank, None, governing, state);
                 }
-                return Some(ValueType::List);
+                return Some(ValueKind::List);
             }
             SheetValue::Phrase(phrase) => {
                 self.phrase(phrase, context, state);
@@ -531,6 +549,7 @@ impl<'a> Checker<'a> {
                 format!("expected {} in a slot, got {}", expect.words(), found.words()),
                 &context.place,
             );
+            self.mismatches.push((expect, found));
         }
         found
     }
@@ -595,7 +614,7 @@ impl<'a> Checker<'a> {
             LineKind::LookAtCell => match line.which {
                 None => self.error("Look at a cell needs a cell: here, ahead or at", place),
                 Some(CellWhich::At) => {
-                    self.slot(&line.place, &inner, Blank::Value, Some(ValueType::Place), None, state);
+                    self.slot(&line.place, &inner, Blank::Value, Some(ValueKind::Place), None, state);
                 }
                 Some(_) => {}
             },
@@ -640,7 +659,7 @@ impl<'a> Checker<'a> {
                         item,
                         &context.with_condition(context.condition),
                         Blank::YesOrNo,
-                        Some(ValueType::YesNo),
+                        Some(ValueKind::YesNo),
                         None,
                         state,
                     );
@@ -757,6 +776,7 @@ impl<'a> Checker<'a> {
                         format!("expected {} in a slot, got {}", expect.words(), found.words()),
                         place,
                     );
+                    self.mismatches.push((expect, found));
                 }
                 self.condition(line, context, state, true);
             }
@@ -777,7 +797,7 @@ impl<'a> Checker<'a> {
                 // The value takes the type of the property it steers.
                 let expect = steered
                     .filter(|steered| matches!(steered, PropertyType::Number | PropertyType::Arrow))
-                    .map(ValueType::of_property);
+                    .map(ValueKind::of_property);
                 self.slot(&line.value, &inner, Blank::Value, expect, None, state);
                 self.number_slot(&line.strength, &inner, Blank::Number, state);
                 self.condition(line, context, state, false);
@@ -801,8 +821,8 @@ impl<'a> Checker<'a> {
                     self.error("only agents move", place);
                 }
                 let expect = match line.mode {
-                    Some(LineMode::To) => Some(ValueType::Place),
-                    Some(LineMode::By) => Some(ValueType::Arrow),
+                    Some(LineMode::To) => Some(ValueKind::Place),
+                    Some(LineMode::By) => Some(ValueKind::Arrow),
                     _ => {
                         self.error("Move needs a mode: by or to", place);
                         None
@@ -907,6 +927,9 @@ impl<'a> Checker<'a> {
                     None => self.error("a look at agents needs a kind of agent", place),
                 }
                 self.number_slot(&line.distance, &context.inner(), Blank::Number, state);
+                if line.distance.value().is_some_and(|distance| !fixed_number(distance)) {
+                    self.error(sentence::DISTANCE_NOT_FIXED, place);
+                }
                 if line.include_me.is_none() {
                     self.error("a look at agents must say whether it includes me (include_me)", place);
                 }
@@ -926,7 +949,7 @@ impl<'a> Checker<'a> {
                 &line.whose,
                 &whose,
                 Blank::Property,
-                Some(ValueType::YesNo),
+                Some(ValueKind::YesNo),
                 None,
                 state,
             );
@@ -961,8 +984,8 @@ impl<'a> Checker<'a> {
                     let want = if grid { Blank::NumberProperty } else { Blank::Value };
                     // The largest and the smallest compare numbers, and any and all join yes or no values.
                     let expect = match kind {
-                        SummaryKind::Largest | SummaryKind::Smallest => Some(ValueType::Number),
-                        SummaryKind::Any | SummaryKind::All => Some(ValueType::YesNo),
+                        SummaryKind::Largest | SummaryKind::Smallest => Some(ValueKind::Number),
+                        SummaryKind::Any | SummaryKind::All => Some(ValueKind::YesNo),
                         _ => None,
                     };
                     self.slot(&summary.value, &looking, want, expect, None, state);
@@ -993,13 +1016,13 @@ impl<'a> Checker<'a> {
                 }
                 self.number_slot(&line.low, &inner, Blank::LowerNumber, state);
                 self.number_slot(&line.high, &inner, Blank::UpperNumber, state);
-                if left == Some(ValueType::Arrow) {
+                if left == Some(ValueKind::Arrow) {
                     self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
                 } else if let Some(left) = left {
                     self.compared(
                         CompareTest::Outside,
                         (left, false),
-                        (ValueType::Number, false),
+                        (ValueKind::Number, false),
                         &context.place,
                     );
                 }
@@ -1013,7 +1036,7 @@ impl<'a> Checker<'a> {
                     (false, false) => Blank::Number,
                 };
                 // Each item of a list is compared with the left side on its own.
-                let right: Vec<(Option<ValueType>, bool)> = match line.right.value() {
+                let right: Vec<(Option<ValueKind>, bool)> = match line.right.value() {
                     Some(SheetValue::List(items)) if !items.is_empty() => items
                         .iter()
                         .map(|item| (self.value(item, &inner, want, None, governing, state), is_yes_no(item)))
@@ -1032,7 +1055,7 @@ impl<'a> Checker<'a> {
                         continue;
                     };
                     let sides = [left, found];
-                    let fits = if sides.contains(&ValueType::Arrow) && sides.contains(&ValueType::Number) {
+                    let fits = if sides.contains(&ValueKind::Arrow) && sides.contains(&ValueKind::Number) {
                         self.error(ARROW_COMPARED_WITH_NUMBER, &context.place);
                         false
                     } else {
@@ -1055,8 +1078,8 @@ impl<'a> Checker<'a> {
     fn compared(
         &mut self,
         test: CompareTest,
-        (left, left_literal): (ValueType, bool),
-        (right, right_literal): (ValueType, bool),
+        (left, left_literal): (ValueKind, bool),
+        (right, right_literal): (ValueKind, bool),
         place: &Place,
     ) -> bool {
         let sides = [left, right];
@@ -1067,11 +1090,11 @@ impl<'a> Checker<'a> {
             CompareTest::Within => sides
                 .into_iter()
                 .zip([left_literal, right_literal])
-                .find(|(side, literal)| *literal || !matches!(side, ValueType::Number | ValueType::YesNo))
+                .find(|(side, literal)| *literal || !matches!(side, ValueKind::Number | ValueKind::YesNo))
                 .map(|(side, _)| format!("is within compares numbers, got {}", side.words())),
             _ if sides
                 .iter()
-                .any(|side| matches!(side, ValueType::YesNo | ValueType::State)) =>
+                .any(|side| matches!(side, ValueKind::YesNo | ValueKind::State)) =>
             {
                 Some("states and Boolean values cannot be ordered".to_owned())
             }
@@ -1094,12 +1117,12 @@ impl<'a> Checker<'a> {
         blank: Blank,
         governing: Option<&str>,
         state: &mut LineState,
-    ) -> Option<ValueType> {
+    ) -> Option<ValueKind> {
         let place = &context.place;
         match chip {
             SheetChip::Param(id) => {
                 if self.parameters.contains_key(id.as_str()) {
-                    Some(ValueType::Number)
+                    Some(ValueKind::Number)
                 } else {
                     self.error(format!("the parameter '{id}' does not exist"), place);
                     None
@@ -1113,7 +1136,7 @@ impl<'a> Checker<'a> {
                     }
                     Some(_) => {}
                 }
-                Some(ValueType::State)
+                Some(ValueKind::State)
             }
             SheetChip::My(id) | SheetChip::MyNew(id) | SheetChip::Their(id) => {
                 let thing = if matches!(chip, SheetChip::Their(_)) {
@@ -1132,7 +1155,7 @@ impl<'a> Checker<'a> {
                 if matches!(chip, SheetChip::MyNew(_)) {
                     self.my_new(id, context, blank, state);
                 }
-                Some(ValueType::of_property(property.property_type))
+                Some(ValueKind::of_property(property.property_type))
             }
             SheetChip::Relation(relation) => {
                 if context.looked.is_none() {
@@ -1141,7 +1164,7 @@ impl<'a> Checker<'a> {
                         place,
                     );
                 }
-                Some(ValueType::of_relation(*relation))
+                Some(ValueKind::of_relation(*relation))
             }
             SheetChip::Result { line, part, property } => {
                 self.result(line, part.as_deref(), property.as_deref(), context, blank, state)
@@ -1197,7 +1220,7 @@ impl<'a> Checker<'a> {
         context: &Context<'a>,
         blank: Blank,
         state: &mut LineState,
-    ) -> Option<ValueType> {
+    ) -> Option<ValueKind> {
         let place = &context.place;
         let Some(owner) = context.line else {
             self.error(format!("the result of {id} is read outside a line"), place);
@@ -1239,7 +1262,7 @@ impl<'a> Checker<'a> {
             return self.part_type(source, part, id, place);
         }
         if let Some(property) = property {
-            if self.phrase_type(source) != Some(ValueType::Place) {
+            if self.phrase_type(source) != Some(ValueKind::Place) {
                 self.error(format!("{id} is not a place, so it has no properties"), place);
                 return None;
             }
@@ -1248,7 +1271,7 @@ impl<'a> Checker<'a> {
                 self.error(format!("'{property}' is not a property of '{ground}'"), place);
                 return None;
             };
-            return Some(ValueType::of_property(found.property_type));
+            return Some(ValueKind::of_property(found.property_type));
         }
         if source.kind == LineKind::LookAround {
             self.error(
@@ -1261,23 +1284,23 @@ impl<'a> Checker<'a> {
     }
 
     /// Returns the type of part `part` of `source`, the line `id`.
-    fn part_type(&mut self, source: &SheetLine, part: &str, id: &str, place: &Place) -> Option<ValueType> {
+    fn part_type(&mut self, source: &SheetLine, part: &str, id: &str, place: &Place) -> Option<ValueKind> {
         if source.kind == LineKind::LookAround {
             if part == "count" {
-                return Some(ValueType::Number);
+                return Some(ValueKind::Number);
             }
             if let Some(summary) = source.summaries.iter().find(|summary| summary.id == part) {
                 return match summary.summary {
-                    Some(SummaryKind::Any | SummaryKind::All) => Some(ValueType::YesNo),
-                    Some(SummaryKind::Count) => Some(ValueType::Number),
+                    Some(SummaryKind::Any | SummaryKind::All) => Some(ValueKind::YesNo),
+                    Some(SummaryKind::Count) => Some(ValueKind::Number),
                     _ => match summary.value.value() {
                         Some(SheetValue::Chip(SheetChip::Relation(relation))) => {
-                            Some(ValueType::of_relation(*relation))
+                            Some(ValueKind::of_relation(*relation))
                         }
                         Some(SheetValue::Chip(SheetChip::Their(property))) => self
                             .properties
                             .get(property.as_str())
-                            .map(|(found, _)| ValueType::of_property(found.property_type)),
+                            .map(|(found, _)| ValueKind::of_property(found.property_type)),
                         _ => None,
                     },
                 };
@@ -1289,10 +1312,10 @@ impl<'a> Checker<'a> {
                 LineKind::PickCell | LineKind::DependingOn | LineKind::Choose
             )
         {
-            return Some(ValueType::Number);
+            return Some(ValueKind::Number);
         }
-        if part == "open" && self.phrase_type(source) == Some(ValueType::Place) {
-            return Some(ValueType::YesNo);
+        if part == "open" && self.phrase_type(source) == Some(ValueKind::Place) {
+            return Some(ValueKind::YesNo);
         }
         self.error(
             format!("'{part}' is not a part of {id}, a {} line", source.kind.as_str()),
@@ -1302,14 +1325,14 @@ impl<'a> Checker<'a> {
     }
 
     /// Returns the type of the value a result line or phrase gives, `None` when it cannot be known.
-    fn phrase_type(&self, line: &SheetLine) -> Option<ValueType> {
+    fn phrase_type(&self, line: &SheetLine) -> Option<ValueKind> {
         self.line_type(line, 0)
     }
 
     /// Returns the type of the value `line` gives, `depth` results and phrases deep in the walk that reached it.
     ///
     /// A walk past [`MAX_NESTING`] returns `None`. A walk around a cycle of results ends there.
-    fn line_type(&self, line: &SheetLine, depth: usize) -> Option<ValueType> {
+    fn line_type(&self, line: &SheetLine, depth: usize) -> Option<ValueKind> {
         if depth > MAX_NESTING {
             return None;
         }
@@ -1320,10 +1343,10 @@ impl<'a> Checker<'a> {
             | LineKind::NoneOf
             | LineKind::Chance
             | LineKind::Rate
-            | LineKind::Always => Some(ValueType::YesNo),
-            LineKind::Count | LineKind::RandomNumber => Some(ValueType::Number),
-            LineKind::RandomDirection => Some(ValueType::Arrow),
-            LineKind::PickCell | LineKind::LookAtCell => Some(ValueType::Place),
+            | LineKind::Always => Some(ValueKind::YesNo),
+            LineKind::Count | LineKind::RandomNumber => Some(ValueKind::Number),
+            LineKind::RandomDirection => Some(ValueKind::Arrow),
+            LineKind::PickCell | LineKind::LookAtCell => Some(ValueKind::Place),
             LineKind::Choose => {
                 let values = line
                     .rows
@@ -1339,14 +1362,14 @@ impl<'a> Checker<'a> {
     }
 
     /// Returns the type all of `values` share, `None` when they share none that can be known.
-    fn one_type<'v>(&self, values: impl Iterator<Item = &'v SheetValue>, depth: usize) -> Option<ValueType> {
+    fn one_type<'v>(&self, values: impl Iterator<Item = &'v SheetValue>, depth: usize) -> Option<ValueKind> {
         let mut types = values.map(|value| self.value_type(value, depth + 1));
         let first = types.next()??;
         types.all(|other| other == Some(first)).then_some(first)
     }
 
     /// Returns the type of `value` without checking it, `depth` deep in the walk that reached it.
-    fn value_type(&self, value: &SheetValue, depth: usize) -> Option<ValueType> {
+    fn value_type(&self, value: &SheetValue, depth: usize) -> Option<ValueKind> {
         match value {
             SheetValue::Phrase(phrase) => self.line_type(phrase, depth),
             SheetValue::Chip(SheetChip::Result {
@@ -1357,8 +1380,8 @@ impl<'a> Checker<'a> {
                 let (_, source) = self.document.line(line)?;
                 self.line_type(source, depth)
             }
-            SheetValue::Literal(SheetLiteral::Bool(_)) => Some(ValueType::YesNo),
-            SheetValue::Literal(_) => Some(ValueType::Number),
+            SheetValue::Literal(SheetLiteral::Bool(_)) => Some(ValueKind::YesNo),
+            SheetValue::Literal(_) => Some(ValueKind::Number),
             _ => None,
         }
     }
@@ -1589,13 +1612,187 @@ fn is_yes_no(value: &SheetValue) -> bool {
 /// A Set takes a value of the property's own type. A Number property also takes a yes or no that a line works out
 /// or a property holds, as 1 or 0, and an Arrow property takes a place, as its column and row. A States, Position or
 /// Heading property is not checked, since no Set changes one.
-fn set_takes(property_type: PropertyType, found: ValueType, value: Option<&SheetValue>) -> Option<ValueType> {
-    let expect = ValueType::of_property(property_type);
+fn set_takes(property_type: PropertyType, found: ValueKind, value: Option<&SheetValue>) -> Option<ValueKind> {
+    let expect = ValueKind::of_property(property_type);
     let takes = match property_type {
         PropertyType::States | PropertyType::Position | PropertyType::Heading => true,
-        PropertyType::Number => found == expect || found == ValueType::YesNo && !value.is_some_and(is_yes_no),
-        PropertyType::Arrow => matches!(found, ValueType::Arrow | ValueType::Place),
+        PropertyType::Number => found == expect || found == ValueKind::YesNo && !value.is_some_and(is_yes_no),
+        PropertyType::Arrow => matches!(found, ValueKind::Arrow | ValueKind::Place),
         _ => found == expect,
     };
     (!takes).then_some(expect)
+}
+
+/// Returns whether `value` is the same for every agent and every tick: a typed number or a parameter. The distance of a
+/// look at agents takes nothing else.
+pub(in crate::sheet) fn fixed_number(value: &SheetValue) -> bool {
+    match value {
+        SheetValue::Literal(literal) => literal.number().is_some(),
+        SheetValue::Chip(SheetChip::Param(_)) => true,
+        _ => false,
+    }
+}
+
+/// Errors the checker finds on one line of a card, and the kinds of the values it finds in a place of another kind.
+#[derive(Debug, Default)]
+struct LineFindings {
+    /// Message of each error, in the order found.
+    errors: Vec<String>,
+    /// Kind each mismatched place takes and kind of its value, in the order found.
+    mismatches: Vec<(ValueKind, ValueKind)>,
+}
+
+/// Returns what the checker finds on line `line_id` of card `card` of `document` alone, `None` for a line the card does
+/// not show.
+fn line_findings(document: &SheetDocument, card: usize, line_id: &str) -> Option<LineFindings> {
+    let mut checker = Checker::new(document);
+    let relations = checker.relations.get(card)?;
+    let position = relations.index(line_id)?;
+    let in_repeat = relations.repeat_of(line_id).is_some();
+    let card_table = document.cards.get(card)?;
+    let (id, line) = card_table.line_tables.get_key_value(line_id)?;
+    let owner = OwnerLine {
+        card,
+        id: id.as_str(),
+        position,
+        in_repeat,
+        runs_once: card_table.runs == CardRuns::Once,
+    };
+    check_line(&mut checker, line, owner, &HashSet::new());
+    let errors = checker
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == DiagnosticSeverity::Error)
+        .map(|finding| finding.message.clone())
+        .collect();
+    Some(LineFindings {
+        errors,
+        mismatches: checker.mismatches,
+    })
+}
+
+/// Returns the kind of `value` put in a place of line `line_id` of `document`, as the checker reads it, `None` when
+/// the kind cannot be known or no card shows the line.
+///
+/// A property of the agents a look at agents looks at, as "their Velocity", reads as the property of the line's kind
+/// of agent.
+pub fn value_kind(document: &SheetDocument, line_id: &str, value: &SheetValue) -> Option<ValueKind> {
+    let (card, line) = document.line(line_id)?;
+    let mut checker = Checker::new(document);
+    let card_table = document.cards.get(card)?;
+    let relations = checker.relations.get(card)?;
+    let position = relations.index(line_id)?;
+    let (id, _) = card_table.line_tables.get_key_value(line_id)?;
+    let context = Context {
+        place: Place::Line(card, line_id.to_owned()),
+        line: Some(OwnerLine {
+            card,
+            id: id.as_str(),
+            position,
+            in_repeat: false,
+            runs_once: card_table.runs == CardRuns::Once,
+        }),
+        thing: card_table.every.as_str(),
+        looked: line.agent_kind.as_deref(),
+        condition: false,
+        whose: false,
+    };
+    checker.value(value, &context, Blank::Value, None, None, &mut LineState::default())
+}
+
+/// Why the checker refuses a value in a place of a line, as [`place_refusal`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PlaceRefusal {
+    /// Message of the first error the value gives that the line does not have already.
+    pub message: String,
+    /// Kind the place takes and kind of the value, when the error is that the two differ.
+    pub kinds: Option<(ValueKind, ValueKind)>,
+    /// Words that name the line the place belongs to, as "Move to" or "Set Speed", for the value of a Move, a Set or a
+    /// Steer, `None` for any other place.
+    pub owner: Option<String>,
+}
+
+impl PlaceRefusal {
+    /// Returns the reason in the card's words, where `value` names the value refused, as "Flockmates' centre is a
+    /// vector, and Move to needs a cell." or the error's message as a sentence.
+    pub fn reason(&self, value: &str) -> String {
+        match (self.kinds, self.owner.as_deref()) {
+            (Some((expected, found)), Some(owner)) => {
+                sentence::kind_needed_by(value, found.sentence_words(), owner, expected.sentence_words())
+            }
+            (Some((expected, found)), None) => {
+                sentence::kind_needed(value, found.sentence_words(), expected.sentence_words())
+            }
+            (None, _) => sentence::as_sentence(&self.message),
+        }
+    }
+}
+
+/// Returns why the checker refuses `value` put at `target` of line `line_id` of `document`, `None` when it takes the
+/// value there.
+///
+/// The value is tried in a copy of the sheet, and the checker reads the line as it reads it in the sheet. An error
+/// the line has already, before the value is put in, is not the value's. Only a slot or an item of a list takes a
+/// value. A field returns `None`.
+pub fn place_refusal(
+    document: &SheetDocument,
+    line_id: &str,
+    target: &PlaceTarget,
+    value: &SheetValue,
+) -> Option<PlaceRefusal> {
+    let (card, line) = document.line(line_id)?;
+    let (path, filled) = match target {
+        PlaceTarget::Slot(path) => (path.as_str(), value.clone()),
+        PlaceTarget::ListItem { slot, index } => {
+            let mut items = match slot_value(line, slot) {
+                Some(SheetValue::List(items)) => items.clone(),
+                _ => Vec::new(),
+            };
+            let start = (*index).min(items.len());
+            let end = (index + 1).min(items.len());
+            items.splice(start..end, [value.clone()]);
+            (slot.as_str(), SheetValue::List(items))
+        }
+        _ => return None,
+    };
+    let steps = parse_path(path).ok()?;
+    let mut trial = document.clone();
+    let tried = trial.cards.get_mut(card)?.line_tables.get_mut(line_id)?;
+    set_value(tried, &steps, Slot::Filled(filled)).ok()?;
+    let before = line_findings(document, card, line_id)?;
+    let after = line_findings(&trial, card, line_id)?;
+    let message = after
+        .errors
+        .iter()
+        .find(|error| !before.errors.contains(error))?
+        .clone();
+    let mut known = before.mismatches;
+    let kinds = after.mismatches.into_iter().find(|mismatch| {
+        let index = known.iter().position(|old| old == mismatch);
+        index.map(|index| known.remove(index)).is_none()
+    });
+    let owner = (path == "value").then(|| owner_words(document, line)).flatten();
+    Some(PlaceRefusal { message, kinds, owner })
+}
+
+/// Returns the words that name `line` as the owner of its value, as "Move to", "Move by", "Set Speed" or "Steer
+/// Velocity", `None` for a line of another kind.
+fn owner_words(document: &SheetDocument, line: &SheetLine) -> Option<String> {
+    let property = || {
+        let id = line.property.as_deref()?;
+        Some(
+            Thing::all(document)
+                .into_iter()
+                .flat_map(|thing| thing.properties(document))
+                .find(|property| property.id == id)
+                .map_or_else(|| id.to_owned(), |property| property.name.clone()),
+        )
+    };
+    match line.kind {
+        LineKind::Move => Some(sentence::move_owner(line.mode? == LineMode::To).to_owned()),
+        LineKind::Set => Some(sentence::set_owner(&property()?)),
+        LineKind::Steer => Some(sentence::steer_owner(&property()?)),
+        _ => None,
+    }
 }

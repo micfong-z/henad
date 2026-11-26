@@ -268,7 +268,7 @@ pub(crate) fn phrase_mut<'a>(line: &'a mut SheetLine, steps: &[PathStep]) -> Res
 /// # Errors
 ///
 /// Returns [`SheetEditError::Missing`] when the path finds no phrase or no item, row or summary at its index.
-pub(super) fn set_value(line: &mut SheetLine, steps: &[PathStep], value: Slot) -> Result<(), SheetEditError> {
+pub(crate) fn set_value(line: &mut SheetLine, steps: &[PathStep], value: Slot) -> Result<(), SheetEditError> {
     let (last, inner) = steps
         .split_last()
         .ok_or_else(|| SheetEditError::Invalid("an empty slot path".to_owned()))?;

@@ -61,6 +61,9 @@ pub const ON_GROUND_CELLS: &str = "Agents can start only on a state the ground p
 /// Error on a look at the cell ahead in a sheet whose agents do not move to cells.
 pub const AHEAD_NEEDS_CELLS: &str = "The cell ahead needs agents that move to cells.";
 
+/// Error on a look at agents whose distance is no typed number or parameter, such as a random number or a result.
+pub const DISTANCE_NOT_FIXED: &str = "The distance must be a typed number or a parameter, the same for every agent.";
+
 /// Error on a Count, Look around or Pick a cell line inside a Repeat.
 pub const LOOK_IN_REPEAT: &str = "A look around, a count or a pick of a cell cannot be used inside a Repeat.";
 

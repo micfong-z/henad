@@ -28,6 +28,7 @@ mod sheet_document;
 mod sheet_edit;
 mod sheet_edit_random;
 mod sheet_fires;
+mod sheet_fit;
 mod sheet_ground;
 mod sheet_identity;
 mod sheet_lower;

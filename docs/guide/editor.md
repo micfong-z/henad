@@ -132,7 +132,9 @@ A button's card runs its lines once when the button is pressed, and offers **+ C
 
 ### Writing a line
 
-A new line's first blank opens its *picker*, which lists only what fits there, in groups.
+A new line's first blank opens its *picker*, which lists what fits there, in groups.
+A value of a line above that the blank cannot take shows greyed, and its reason shows under the pointer, such as "Flockmates' centre is a vector, and Move to needs a cell."
+The same holds for any value the model would refuse there, such as a random number as the distance of a look at agents.
 A picker opens as a framed list under its blank, titled with what it asks for, such as **Choose a value**, and a press on a filled chip opens it again.
 Where the window has no room for it under the blank, it opens above, and where neither side has room, it opens on the side with more room and scrolls.
 A number takes a typed number, a result of a line above, one of the cell's properties, a parameter, or **New parameter…**, which creates one in a dialog and puts it in the blank.
@@ -280,7 +282,7 @@ A value on a card over agents also takes the summaries of the looks above, as "F
 A number also takes the length of a Vector property, as "length of my Velocity".
 Below the last line that changes a property, a value can take "my new Velocity", the value the changes above give it this tick.
 Above that line it is not offered.
-Move to takes a cell picked or looked at above.
+Move to takes a cell picked or looked at above, and shows the other values above greyed.
 A Move to below another Move to that can apply to the same agent reads "otherwise", since the first whose condition holds decides.
 An agent whose cell from that line is not open stays where it is.
 

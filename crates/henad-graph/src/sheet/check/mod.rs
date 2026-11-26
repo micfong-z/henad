@@ -15,7 +15,7 @@ pub(super) mod formula;
 mod lines;
 
 pub(crate) use declarations::{RESERVED_IDS, RESERVED_PARAMETER_IDS, RESERVED_PREFIX};
-pub use lines::{changes_property, holds_draw};
+pub use lines::{PlaceRefusal, ValueKind, changes_property, holds_draw, place_refusal, value_kind};
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::Range;
@@ -28,7 +28,7 @@ use super::relations::CardRelations;
 use super::sentence::Sentences;
 
 pub(super) use self::formula::formula_chip;
-pub(super) use self::lines::governing_property;
+pub(super) use self::lines::{fixed_number, governing_property};
 
 /// Result of checking a sheet.
 #[derive(Debug, Clone, Default)]
@@ -307,6 +307,8 @@ struct Checker<'a> {
     keys: BTreeMap<u32, String>,
     /// Relations between the lines of each card, by card index.
     relations: Vec<CardRelations<'a>>,
+    /// Kind each place of another kind than its value takes, with the kind of the value, in the order found.
+    mismatches: Vec<(lines::ValueKind, lines::ValueKind)>,
 }
 
 impl<'a> Checker<'a> {
@@ -347,6 +349,7 @@ impl<'a> Checker<'a> {
                 .iter()
                 .map(|card| CardRelations::new(document, card))
                 .collect(),
+            mismatches: Vec::new(),
         }
     }
 

@@ -89,7 +89,26 @@ property and a Repeat with no times skip their line in the blank's words, and so
 with no value for a state of its property (a new state included), each missing value a
 `Blank::Value` in state order. A value keyed by no state of the property is an error, and a property
 of another type is one error for the whole line. `changes_property` is the rule of `my_new`, public
-for the card's picker.
+for the card's picker. A look at agents whose distance is no typed number or parameter
+(`fixed_number`, which the lowering's `open_looks` reads too) is the error `DISTANCE_NOT_FIXED` at
+its line, so the lowering never meets one.
+
+**The checker for a picker.** `ValueKind` (public, `#[non_exhaustive]`) is the checker's own type of
+a value, its diagnostic words in `words` ("a Boolean", "a vector", "a place") and its card words in
+`sentence_words` ("a cell" for a place). `value_kind(document, line_id, value)` returns the kind the
+checker reads for a value in a place of the line (`Checker::value` in the line's context, `looked`
+the line's own kind of agent). `place_refusal(document, line_id, target, value)` puts the value at a
+`PlaceTarget::Slot` or `ListItem` of a copy of the sheet (`edit::lines::set_value`, crate-visible),
+checks the line alone on both (`line_findings`, `check_line` with a fresh `Checker`) and returns the
+first error the copy adds as a `PlaceRefusal`: its `message`, the `kinds` (expected, found) from
+`Checker::mismatches`, which `value` and a Set's `set_takes` record beside their error, and the
+`owner` words of the value of a Move, Set or Steer (`move_owner`, `set_owner`, `steer_owner`).
+`PlaceRefusal::reason(value)` words it for the card: `kind_needed_by` with an owner ("Flockmates'
+centre is a vector, and Move to needs a cell."), `kind_needed` without ("Visual range is a number.
+Choose a vector here."), or the message through `as_sentence`. A field returns `None`.
+`src/tests/sheet_fit.rs` holds `a_value_gives_the_kind_the_checker_reads`,
+`the_distance_of_a_look_at_agents_takes_a_typed_number_or_a_parameter_alone` and
+`a_value_of_another_kind_names_both_kinds_and_the_line_that_needs_it`.
 
 **Tests.** Checker tests sit in `src/tests/sheet_mutation.rs` (25 cases, one test per rule, each
 on a committed sheet edited in the test, each asserting error, warning

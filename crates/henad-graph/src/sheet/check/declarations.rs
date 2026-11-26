@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::lines::{Context, Draw, ValueType, line_number, value_draws, value_rates};
+use super::lines::{Context, Draw, ValueKind, line_number, value_draws, value_rates};
 use super::{Checker, Place, Thing};
 use crate::check::{RESERVED_STAT_LABELS, RUNS_CSV_COLUMNS};
 use crate::ids::is_id;
@@ -329,7 +329,7 @@ fn check_property<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, th
             &property.kept_per_tick,
             &context,
             Blank::Number,
-            Some(ValueType::Number),
+            Some(ValueKind::Number),
             None,
         );
         checker.kept_range(property, &context);
@@ -379,7 +379,7 @@ fn check_start<'a>(checker: &mut Checker<'a>, property: &'a SheetProperty, thing
                 if row.chance.value().is_some_and(value_rates) {
                     checker.error(format!("property '{id}' starts with a rate, expected a chance"), place);
                 }
-                checker.outside_slot(&row.chance, &context, Blank::Chance, Some(ValueType::Number), None);
+                checker.outside_slot(&row.chance, &context, Blank::Chance, Some(ValueKind::Number), None);
                 checker.draw_range(&row.chance, &context, Draw::Chance);
             }
             check_state_field(checker, id, start.otherwise.as_deref(), "otherwise", place);

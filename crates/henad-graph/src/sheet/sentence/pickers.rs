@@ -3,6 +3,7 @@
 use henad_core::metadata::TimeUnit;
 
 use super::card::{DrawKind, rate_unit_word};
+use super::grammar::upper_first;
 use super::sentences::summary_word;
 use crate::sheet::document::{SheetLiteral, SummaryKind};
 
@@ -367,3 +368,70 @@ pub fn repeated_result_name(name: &str, count: usize) -> String {
 pub fn empty_field(name: &str, want: &str) -> String {
     format!("{name} has an empty field. Type {want} in it.")
 }
+
+// The reasons a picker gives for a value it offers that its place cannot take
+
+/// Words of a Boolean value in a reason, as "Hungry is a Boolean".
+pub const BOOLEAN_WORDS: &str = "a Boolean";
+
+/// Words of a number in a reason.
+pub const NUMBER_WORDS: &str = "a number";
+
+/// Words of a vector in a reason, as "Flockmates' centre is a vector".
+pub const VECTOR_WORDS: &str = "a vector";
+
+/// Words of a cell, a place a Move to takes, in a reason.
+pub const CELL_WORDS: &str = "a cell";
+
+/// Words of a state in a reason.
+pub const STATE_WORDS: &str = "a state";
+
+/// Words of a list in a reason.
+pub const LIST_WORDS: &str = "a list";
+
+/// Returns the reason a place of the line that `owner` names cannot take the value `value`, such as "Flockmates'
+/// centre is a vector, and Move to needs a cell."
+///
+/// `found` and `expected` are the words of the value's kind and of the kind the place takes.
+pub fn kind_needed_by(value: &str, found: &str, owner: &str, expected: &str) -> String {
+    format!("{} is {found}, and {owner} needs {expected}.", upper_first(value))
+}
+
+/// Returns the reason a place cannot take the value `value`, such as "Visual range is a number. Choose a vector here."
+///
+/// `found` and `expected` are the words of the value's kind and of the kind the place takes.
+pub fn kind_needed(value: &str, found: &str, expected: &str) -> String {
+    format!("{} is {found}. Choose {expected} here.", upper_first(value))
+}
+
+/// Returns `message`, a problem in the words of the checker, as a sentence: its first letter a capital and a full stop
+/// at its end.
+pub fn as_sentence(message: &str) -> String {
+    let sentence = upper_first(message.trim());
+    if sentence.ends_with('.') {
+        sentence
+    } else {
+        format!("{sentence}.")
+    }
+}
+
+/// Returns the words that name a Move line as the owner of its value: "Move to" for a move to a cell, and "Move by"
+/// otherwise.
+pub fn move_owner(to: bool) -> &'static str {
+    if to { "Move to" } else { "Move by" }
+}
+
+/// Returns the words that name a Set line of the property `property` as the owner of its value, as "Set Speed".
+pub fn set_owner(property: &str) -> String {
+    format!("Set {property}")
+}
+
+/// Returns the words that name a Steer line of the property `property` as the owner of its value, as "Steer
+/// Velocity".
+pub fn steer_owner(property: &str) -> String {
+    format!("Steer {property}")
+}
+
+/// Reason a value of a phrase, such as a random number or a length, cannot be a value of a Calculate line.
+pub const CALCULATE_TAKES_PLAIN_VALUES: &str =
+    "A Calculate line takes a result, a property, a parameter or a typed number here.";

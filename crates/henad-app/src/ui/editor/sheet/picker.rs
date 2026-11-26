@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use egui::{Color32, Frame, Id, Key, Popup, PopupCloseBehavior, Rect, Response, RichText, ScrollArea, TextEdit, Ui};
 use henad_core::metadata::TimeUnit;
-use henad_graph::sheet::check::changes_property;
+use henad_graph::sheet::check::{ValueKind, changes_property, place_refusal, value_kind};
 use henad_graph::sheet::document::{
     Around, CELLS_ID, CardRuns, CellWhich, ChipRelation, CompareTest, GROUND_ID, LineKind, LineMode, ParameterType,
     PickRule, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral, SheetProperty, SheetValue, Slot,
@@ -36,10 +36,10 @@ use henad_graph::sheet::sentence::{
     shared_state_name, this_cells_property, when_lead,
 };
 use henad_graph::sheet::sentence::{
-    AddItem, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD, LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT,
-    NO_GROUND_PROPERTY, NO_PLACE, NO_PROPERTY, OR_A_NEW_VALUE, REMOVE_SUMMARY, SUMMARIES, each_looked_at,
-    length_of_item, my_new_detail, my_new_property_item, relation_words, summary_item, their_property_item,
-    this_things_properties, this_things_property,
+    AddItem, CALCULATE_TAKES_PLAIN_VALUES, CELL_WORDS, CHOOSE_A_SUMMARY, EVENTS, GROUND_PROPERTIES, LOOK_AT_AHEAD,
+    LOOK_AT_HERE, LOOK_AT_PLACE, NO_EVENT, NO_GROUND_PROPERTY, NO_PLACE, NO_PROPERTY, NUMBER_WORDS, OR_A_NEW_VALUE,
+    REMOVE_SUMMARY, SUMMARIES, each_looked_at, kind_needed, length_of_item, my_new_detail, my_new_property_item,
+    relation_words, summary_item, their_property_item, this_things_properties, this_things_property,
 };
 
 use super::widgets::{
@@ -112,6 +112,9 @@ pub struct PickerItem {
     pub swatch: Option<Color32>,
     /// Value choosing the item puts in the place.
     pub choice: Choice,
+    /// Reason the place cannot take the item's value, `None` for an item it takes. An item with a reason shows greyed,
+    /// with the reason as its tooltip, and takes no click.
+    pub refusal: Option<String>,
 }
 
 impl PickerItem {
@@ -123,6 +126,7 @@ impl PickerItem {
             detail: None,
             swatch: None,
             choice,
+            refusal: None,
         }
     }
 
@@ -271,7 +275,12 @@ impl CardPicker {
             }
             under_title = false;
         }
-        offered |= self.groups.iter().any(|group| !group.items.is_empty());
+        // A picker whose every item is refused still says what to make first, under the items.
+        offered |= self
+            .groups
+            .iter()
+            .flat_map(|group| &group.items)
+            .any(|item| item.refusal.is_none());
         if let Some(clicked) = groups_ui(ui, &self.groups, self.current.as_deref(), under_title) {
             choice = Some(clicked);
         }
@@ -491,8 +500,15 @@ fn groups_ui(ui: &mut Ui, groups: &[PickerGroup], current: Option<&str>, under_t
                     current: current == Some(item.label.as_str()),
                     swatch: item.swatch,
                 };
-                if menu_item(ui, &row).clicked() {
-                    choice = Some(item.choice.clone());
+                let response = ui
+                    .add_enabled_ui(item.refusal.is_none(), |ui| menu_item(ui, &row))
+                    .inner;
+                match &item.refusal {
+                    Some(refusal) => {
+                        response.on_disabled_hover_text(refusal);
+                    }
+                    None if response.clicked() => choice = Some(item.choice.clone()),
+                    None => {}
                 }
             }
         });
@@ -753,6 +769,24 @@ impl LineContext<'_> {
                 )
             })
             .collect()
+    }
+
+    /// Returns every value the lines above the line work out that it can use, whatever its kind: each result, as
+    /// [`Self::results_above_of`] names it, then each part, as [`Self::parts_above`] names it.
+    ///
+    /// A value its place cannot take shows greyed with the reason once [`mark_refusals`] marks it.
+    fn values_above(&self) -> Vec<PickerItem> {
+        let mut items = self.results_above_of(
+            &[
+                ResultKind::Number,
+                ResultKind::YesOrNo,
+                ResultKind::Arrow,
+                ResultKind::Place,
+            ],
+            false,
+        );
+        items.extend(self.parts_above());
+        items
     }
 
     /// Returns the summaries of the looks at agents above the line that it can use, and the properties and amounts
@@ -1069,11 +1103,9 @@ pub fn picker_for(
         ),
         Blank::GroundProperty => one_group(NO_GROUND_PROPERTY, GROUND_PROPERTIES, ground_number_items(context)),
         Blank::Event => one_group(NO_EVENT, EVENTS, event_items(context)),
-        Blank::Value if agents && kind == LineKind::Move && context.line.mode == Some(LineMode::To) => one_group(
-            NO_PLACE,
-            FROM_LINES_ABOVE,
-            context.results_above(ResultKind::Place, false),
-        ),
+        Blank::Value if agents && kind == LineKind::Move && context.line.mode == Some(LineMode::To) => {
+            one_group(NO_PLACE, FROM_LINES_ABOVE, context.values_above())
+        }
         Blank::Value => value_picker(context, numbers(false, NumberUse::Number)),
         Blank::NumberList => {
             let mut picker = CardPicker::titled(title, NO_NUMBER_RESULT);
@@ -1094,11 +1126,7 @@ pub fn picker_for(
             picker
         }
         Blank::YesOrNo | Blank::YesOrNoList => {
-            let mut picker = one_group(
-                NO_YES_OR_NO_RESULT,
-                FROM_LINES_ABOVE,
-                context.results_above(ResultKind::YesOrNo, false),
-            );
+            let mut picker = one_group(NO_YES_OR_NO_RESULT, FROM_LINES_ABOVE, context.values_above());
             picker.remove = (filled && want == Blank::YesOrNoList).then_some(REMOVE_FROM_LIST);
             picker
         }
@@ -1111,17 +1139,7 @@ pub fn picker_for(
 /// values add a random direction.
 fn value_picker(context: &LineContext<'_>, mut picker: CardPicker) -> CardPicker {
     let agents = context.agents();
-    let mut results = if agents {
-        context.results_above_of(&[ResultKind::Number, ResultKind::YesOrNo, ResultKind::Arrow], false)
-    } else {
-        let mut results = context.results_above(ResultKind::Number, false);
-        results.extend(context.results_above(ResultKind::YesOrNo, false));
-        results
-    };
-    if agents {
-        results.extend(context.parts_above());
-    }
-    picker.groups[0].items = results;
+    picker.groups[0].items = context.values_above();
     picker.groups[1].items = context.my_properties(|_| true);
     if agents {
         // The new values come before the parameters, as a long picker scrolls.
@@ -1173,10 +1191,9 @@ fn number_picker(
     let agents = context.agents() && number_use != NumberUse::Times;
     let mut picker = CardPicker::titled(title, NO_NUMBER_RESULT);
     if number_use != NumberUse::Times {
-        let mut results = context.results_above(ResultKind::Number, false);
+        let results = context.values_above();
         let mut properties = context.my_properties(is_number);
         if agents {
-            results.extend(context.parts_above());
             properties.extend(context.lengths());
         }
         picker.groups = vec![
@@ -1788,5 +1805,47 @@ pub fn list_len(line: &SheetLine, path: &str) -> usize {
     match slot_value(line, path) {
         Some(SheetValue::List(items)) => items.len(),
         _ => 0,
+    }
+}
+
+/// Marks each value of `picker`, the picker of `target` on the line of `context`, that the place cannot take, with the
+/// reason as the checker words it. The place takes the value through [`place_refusal`], which reads the checker's rules,
+/// so the picker and the checker never disagree.
+///
+/// A value of a Calculate line of one operation is written into its formula, which takes no phrase, such as a random
+/// number or a length, and no cell. A place that refuses a typed number, such as the value of a Set of a Vector, shows
+/// no Number box and no "New parameter…".
+pub fn mark_refusals(picker: &mut CardPicker, context: &LineContext<'_>, target: &PlaceTarget) {
+    // The probe is the number 1, which the range of every chance, rate and count takes. A refusal of it is a refusal of
+    // any number, such as a comparison with a state.
+    let typed = SheetValue::Literal(SheetLiteral::Number(1.0));
+    if (picker.number_box.is_some() || picker.new_parameter)
+        && place_refusal(context.document, context.line_id, target, &typed).is_some()
+    {
+        picker.number_box = None;
+        picker.new_parameter = false;
+    }
+    let operand = matches!(
+        target,
+        PlaceTarget::Field {
+            field: FieldPlace::FirstOperand | FieldPlace::SecondOperand,
+            ..
+        }
+    );
+    for item in picker.groups.iter_mut().flat_map(|group| group.items.iter_mut()) {
+        let Choice::Value(value) = &item.choice else {
+            continue;
+        };
+        item.refusal = if operand {
+            match value {
+                SheetValue::Phrase(_) => Some(CALCULATE_TAKES_PLAIN_VALUES.to_owned()),
+                _ if value_kind(context.document, context.line_id, value) == Some(ValueKind::Place) => {
+                    Some(kind_needed(&item.label, CELL_WORDS, NUMBER_WORDS))
+                }
+                _ => None,
+            }
+        } else {
+            place_refusal(context.document, context.line_id, target, value).map(|refusal| refusal.reason(&item.label))
+        };
     }
 }

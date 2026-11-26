@@ -26,6 +26,7 @@ use super::value::{Operand, number, port, port_of};
 use super::{Site, visit_chips};
 use crate::ids::NodeId;
 use crate::limits::MAX_ACCUMULATORS;
+use crate::sheet::check::fixed_number;
 use crate::sheet::document::{Around, ChipRelation, Edges, LineKind, SheetChip, SheetLine, SheetValue, SummaryKind};
 use crate::sheet::sentence;
 use crate::types::ValueType;
@@ -80,7 +81,8 @@ impl<'a> CardLowering<'_, 'a> {
         let lines = self.agent_looks();
         let mut distance = HashMap::new();
         for &(_, id, line) in &lines {
-            let operand = match line.distance.value() {
+            // The checker refuses any other distance, through the same rule.
+            let operand = match line.distance.value().filter(|distance| fixed_number(distance)) {
                 Some(SheetValue::Literal(literal)) => literal.number().map(Operand::Number),
                 Some(SheetValue::Chip(SheetChip::Param(parameter))) => self.builder.param(parameter).ok(),
                 _ => None,

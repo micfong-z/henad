@@ -42,7 +42,8 @@ change or a block, the When or Repeat that holds it, so a look that reads anothe
 and a fold reads only folds of a lower depth, whichever line id is lower. A line that works out a
 result, a look included, is worked out everywhere, so its own block adds nothing. A card whose looks
 read no look keeps one depth and the folds it had. A distance is a
-number or a parameter, refused otherwise. The sheet owns,
+number or a parameter (`check::fixed_number`), which the checker refuses otherwise first. The sheet
+owns,
 in group `GROUP_LOOK` at path `card.<card>`: the largest distance, a `math.max` chain over the
 distinct distances sorted by key (a parameter's id, a number's bits), `cell_size = math.div(largest,
 3)`, one node every fold reads (V14), and each `agent.radius_fold` (index 1 up) at its own looks'

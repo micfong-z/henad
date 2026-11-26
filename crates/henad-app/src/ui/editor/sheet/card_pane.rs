@@ -43,6 +43,7 @@ use egui::{
     Align, Color32, CornerRadius, FontId, Frame, Id, Key, Label, Layout, Margin, Popup, Pos2, Rect, Response, RichText,
     Sense, Shape, Sides, Stroke, TextEdit, TextStyle, Ui, UiBuilder, Vec2, WidgetInfo, WidgetType, pos2, vec2,
 };
+use henad_core::explore::fingerprint::fnv1a64;
 use henad_graph::sheet::check::{SheetReport, holds_draw};
 use henad_graph::sheet::document::{
     Around, CELLS_ID, CardRuns, CellWhich, ChooseRow, CompareTest, GROUND_ID, LineKind, LineMode, LookSummary, MadeOf,
@@ -80,9 +81,9 @@ use super::delete_question::{DeleteAnswer, DeleteQuestion};
 use super::help::{Help, help_mark};
 use super::picker::{
     CalcDraft, CardPicker, Choice, DraftUpdate, LineContext, SelectOption, apply_choice, around_options,
-    calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mode_options,
-    operation_options, phrase_of, pick_options, picker_for, read_property, summary_options, summary_picker,
-    takes_ground_states, typed_text, unit_options, value_at, which_options,
+    calculate_edit, choose_when, comparison_options, list_len, look_summary_options, looked_at_picker, mark_refusals,
+    mode_options, operation_options, phrase_of, pick_options, picker_for, read_property, summary_options,
+    summary_picker, takes_ground_states, typed_text, unit_options, value_at, which_options,
 };
 use super::sheet_pane::SheetTrial;
 use super::widgets::{
@@ -187,6 +188,9 @@ pub struct CardState {
     /// Delete of a line that waits on the dialog that asks before it empties formulas the card cannot write again,
     /// `None` while the dialog is closed.
     delete_question: Option<DeleteQuestion>,
+    /// Fingerprint of the sheet's canonical text as the pane draws it. An open picker is built again only once it
+    /// changes, since the reasons of its greyed values read the checker once for each value.
+    fingerprint: u64,
 }
 
 impl CardState {
@@ -205,6 +209,7 @@ impl CardState {
             otherwise_notice: None,
             tick_notice: None,
             delete_question: None,
+            fingerprint: 0,
         }
     }
 
@@ -355,6 +360,7 @@ pub fn card_pane(
     {
         pending.push(CardEdit::commands(vec![question.edit], After::Stay));
     }
+    sheet.card.fingerprint = fnv1a64(sheet.text.as_bytes());
     {
         let document = sheet.builder.document();
         let state = &mut sheet.card;
@@ -2306,7 +2312,16 @@ fn control_picker(
         }
         return;
     }
-    let mut picker = place_picker(drawing, place, part);
+    // The picker as built in the frame before, while the sheet is as it was then.
+    let built = popup_id.with("built");
+    let mut picker = match ui.data(|data| data.get_temp::<(u64, CardPicker)>(built)) {
+        Some((fingerprint, picker)) if fingerprint == state.fingerprint => picker,
+        _ => {
+            let picker = place_picker(drawing, place, part);
+            ui.data_mut(|data| data.insert_temp(built, (state.fingerprint, picker.clone())));
+            picker
+        }
+    };
     if let SentencePart::Chip(chip) = part {
         picker.current = Some(chip.name.clone());
     }
@@ -2551,7 +2566,9 @@ fn place_picker(drawing: &PartDrawing<'_>, place: &PartPlace, part: &SentencePar
     if let PlaceTarget::Slot(path) = &place.target
         && path.starts_with("summaries.")
     {
-        return looked_at_picker(context);
+        let mut picker = looked_at_picker(context);
+        mark_refusals(&mut picker, context, &place.target);
+        return picker;
     }
     let value = value_at(line, &place.target);
     let property = match &place.target {
@@ -2578,6 +2595,7 @@ fn place_picker(drawing: &PartDrawing<'_>, place: &PartPlace, part: &SentencePar
     if matches!(&place.target, PlaceTarget::ListItem { index, slot } if list_len(line, slot) == *index) {
         picker.remove = None;
     }
+    mark_refusals(&mut picker, context, &place.target);
     picker
 }
 
