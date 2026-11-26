@@ -196,6 +196,7 @@ nav = [
             { "#109, 2026-11-22" = "developing/agent-record/20261122-109-editor-look-decisions-and-fold.md" },
             { "#110, 2026-11-24" = "developing/agent-record/20261124-110-fixes-windows-ci-docs-review-and-test-tiers.md" },
             { "#111, 2026-11-25" = "developing/agent-record/20261125-111-rtx-4090-rerun-on-a-9950x3d.md" },
+            { "#112, 2026-11-26" = "developing/agent-record/20261126-112-release-0-4-0-review-and-card-editor-fixes.md" },
         ] },
     ] },
 ]
