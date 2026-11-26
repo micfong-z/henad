@@ -12,6 +12,7 @@ use henad_graph::sheet::document::{
     AgentKind, Marks, PropertyType, SheetDocument, SheetLiteral, SheetProperty, SheetValue, Slot,
 };
 use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, is_reserved_name, mint_id};
+use henad_graph::sheet::sentence::DELETE_EVENT_HEADING;
 use henad_graph::sheet::sentence::{
     ADD_EVENT, ADD_GROUND_PROPERTY_NAME, AGENT_COUNT_LABEL, AGENT_COUNT_NAME, AGENT_MAX_LABEL, AGENT_MAX_NAME,
     AGENT_MAX_TOOLTIP, AGENT_NAME_FIELD, AGENT_NAME_MISSING, EVENT_NAME_FIELD, EVENT_NAME_MISSING,
@@ -21,6 +22,7 @@ use henad_graph::sheet::sentence::{
     name_reserved, read_typed_number,
 };
 
+use super::delete_or_ask;
 use super::layout::{Column, Form, Table, line, text_cell, wrapped_line};
 use super::{
     FormKind, GROUND_ID, NumberField, NumberTarget, PARAMETER_NAME_WIDTH, PaneState, Pending, form_buttons,
@@ -379,9 +381,11 @@ pub(super) fn events(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState
                         });
                     });
                     if row.delete_cell(1, &delete_event_name(&event.name)) {
-                        pending.push(Pending::one(SheetEdit::Delete {
+                        let edit = SheetEdit::Delete {
                             item: SheetItem::Event(event.id.clone()),
-                        }));
+                        };
+                        let asked = (DELETE_EVENT_HEADING, event.name.as_str());
+                        delete_or_ask(document, edit, asked, None, &mut pane.delete_question, pending);
                     }
                     if let Some(message) = row.message(id) {
                         row.below(0, |ui| message_ui(ui, &message));

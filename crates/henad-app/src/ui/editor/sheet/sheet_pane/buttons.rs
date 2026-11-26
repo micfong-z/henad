@@ -5,6 +5,7 @@ use henad_graph::sheet::check::SheetReport;
 use henad_graph::sheet::document::{
     ButtonStep, ButtonStepRule, CELLS_ID, GROUND_ID, SheetButton, SheetDocument, SheetProperty,
 };
+use henad_graph::sheet::edit::SheetLosses;
 use henad_graph::sheet::edit::{IdSpace, SheetEdit, SheetItem, is_reserved_name};
 use henad_graph::sheet::sentence::name_reserved;
 use henad_graph::sheet::sentence::set_everywhere;
@@ -13,12 +14,14 @@ use henad_graph::sheet::sentence::{
     EVERY_PROPERTY, NAME_LABEL, NEW_BUTTON, START_AGAIN, START_AGAIN_FOR, Sentences, button_name_taken,
     delete_button_name, edit_button_name, run_once, start_again_for,
 };
+use henad_graph::sheet::sentence::{CHANGE, CHANGE_BUTTON_HEADING, DELETE_BUTTON_HEADING};
 
 use super::layout::{Column, Form, Table, line, text_cell, text_width};
 use super::{
     ButtonForm, DELETE_WIDTH, EditRun, FormKind, PaneState, Pending, form_buttons, form_heading, form_name_field,
     measured_thing, select,
 };
+use super::{PendingDelete, delete_or_ask, run_or_ask};
 use crate::ui::editor::sheet::card_pane::card_lines;
 use crate::ui::editor::sheet::widgets::{
     CHIP_HEIGHT, OverlayItem, caption_width, hairline, message_ui, name_taken, region, small_label, text_control,
@@ -120,9 +123,11 @@ pub(super) fn buttons(
                         });
                     });
                     if row.delete_cell(3, &delete_button_name(&button.name)) {
-                        pending.push(Pending::one(SheetEdit::Delete {
+                        let edit = SheetEdit::Delete {
                             item: SheetItem::Button(button.id.clone()),
-                        }));
+                        };
+                        let asked = (DELETE_BUTTON_HEADING, button.name.as_str());
+                        delete_or_ask(document, edit, asked, None, &mut pane.delete_question, pending);
                     }
                 });
                 if let Some(form) = pane
@@ -131,7 +136,7 @@ pub(super) fn buttons(
                     .filter(|form| form.editing.as_deref() == Some(button.id.as_str()))
                 {
                     let mut close = false;
-                    button_form(ui, document, form, &mut close, pending);
+                    button_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
                     if close {
                         pane.button_form = None;
                     }
@@ -151,7 +156,7 @@ pub(super) fn buttons(
     match &mut pane.button_form {
         Some(form) if form.editing.is_none() => {
             let mut close = false;
-            button_form(ui, document, form, &mut close, pending);
+            button_form(ui, document, form, &mut close, &mut pane.delete_question, pending);
             if close {
                 pane.button_form = None;
             }
@@ -198,12 +203,14 @@ fn run_once_card(ui: &mut Ui, document: &SheetDocument, sentences: &Sentences<'_
     });
 }
 
-/// Draws the button form, and sets `close` on Cancel. Done checks the form and adds or changes the button.
+/// Draws the button form, and sets `close` on Cancel. Done checks the form and adds or changes the button, or holds
+/// the change in `waiting` while it deletes the lines of the button's card.
 fn button_form(
     ui: &mut Ui,
     document: &SheetDocument,
     form: &mut ButtonForm,
     close: &mut bool,
+    waiting: &mut Option<PendingDelete>,
     pending: &mut Vec<Pending>,
 ) {
     let thing = measured_thing(document);
@@ -275,10 +282,16 @@ fn button_form(
     if done {
         match check_button_form(document, form) {
             Ok(()) => {
-                pending.push(Pending::from_form(
-                    FormKind::Button,
-                    button_edit(form.clone(), thing.to_owned()),
-                ));
+                let make = || Pending::from_form(FormKind::Button, button_edit(form.clone(), thing.to_owned()));
+                match &form.editing {
+                    // A button that runs once and starts again in its place takes its card's lines with it.
+                    Some(editing) => {
+                        let asked = (CHANGE_BUTTON_HEADING, form.original.as_str(), CHANGE);
+                        let own = |losses: &mut SheetLosses| losses.buttons.retain(|button| button != editing);
+                        run_or_ask(document, make, asked, own, waiting, pending);
+                    }
+                    None => pending.push(make()),
+                }
             }
             Err(message) => form.message = Some(message),
         }

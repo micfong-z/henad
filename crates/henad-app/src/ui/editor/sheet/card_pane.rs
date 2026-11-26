@@ -3078,7 +3078,7 @@ fn line_menu_ui(
                         .then(|| automatic_name(document, line_data))
                         .flatten()
                 })
-                .unwrap_or_else(|| line.prefix.clone());
+                .unwrap_or_else(|| line.word.clone());
             match DeleteQuestion::before(document, &delete, DELETE_LINE_HEADING, &name) {
                 Some(question) => state.delete_question = Some(question),
                 None => pending.push(edit(delete)),

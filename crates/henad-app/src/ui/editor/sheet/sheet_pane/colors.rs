@@ -8,6 +8,7 @@ use henad_graph::sheet::document::{
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::sentence::{BY_HEADING_NOTE, COLOR_AGENTS_BY, COLOR_BY_NOTHING, COLOR_GROUND_BY};
+use henad_graph::sheet::sentence::{CHANGE, CHANGE_COLORS_HEADING};
 use henad_graph::sheet::sentence::{
     COLOR_CELLS_BY, DARKEST_NAME, LIGHTEST_NAME, SHADE, SHADE_COLORS, SHADE_DARK_TO, SHADE_ENDS_EQUAL, SHADE_FROM,
     SHADE_LIGHT,
@@ -17,6 +18,7 @@ use super::layout::{Form, ITEM_GAP, text_width, wrapped_line};
 use super::parameters::typed_number;
 use super::starts::STATE_SWATCH_WIDTH;
 use super::{FIELD_WIDTH, GRADIENT_BANDS, GRADIENT_WIDTH, Pending, SWATCH_SIDE, measured_thing, select};
+use super::{PaneState, edit_or_ask};
 use crate::ui::editor::sheet::properties_of;
 use crate::ui::editor::sheet::widgets::{
     OverlayItem, TypeSymbol, color32, commit_number, field_message, message_ui, swatch_ui, type_symbols_shown,
@@ -64,11 +66,12 @@ fn color_rule_edit(thing: &str, property: &SheetProperty, previous: Option<&Colo
 }
 
 /// Draws the Colours section: the property that colours the cells, or in a world of agents the property that colours
-/// the agents and the one that colours the ground. `widgets` is the id the pane's widgets are keyed under.
-pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending: &mut Vec<Pending>) {
+/// the agents and the one that colours the ground. Its widgets are keyed under the id `pane` holds, and a change of
+/// colours that drops shades waits in `pane` for the dialog that asks first.
+pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneState, pending: &mut Vec<Pending>) {
     let form = Form::new(ui, &[COLOR_CELLS_BY, COLOR_AGENTS_BY, COLOR_GROUND_BY, SHADE]);
     if document.world.made_of != MadeOf::Agents {
-        colors_of(ui, document, CELLS_ID, COLOR_CELLS_BY, &form, widgets, pending);
+        colors_of(ui, document, CELLS_ID, COLOR_CELLS_BY, &form, pane, pending);
         return;
     }
     colors_of(
@@ -77,12 +80,12 @@ pub(super) fn colors(ui: &mut Ui, document: &SheetDocument, widgets: Id, pending
         measured_thing(document),
         COLOR_AGENTS_BY,
         &form,
-        widgets,
+        pane,
         pending,
     );
     if !properties_of(document, GROUND_ID).is_empty() {
         ui.add_space(4.0);
-        colors_of(ui, document, GROUND_ID, COLOR_GROUND_BY, &form, widgets, pending);
+        colors_of(ui, document, GROUND_ID, COLOR_GROUND_BY, &form, pane, pending);
     }
 }
 
@@ -122,9 +125,10 @@ fn colors_of(
     thing: &str,
     label: &str,
     form: &Form,
-    widgets: Id,
+    pane: &mut PaneState,
     pending: &mut Vec<Pending>,
 ) {
+    let widgets = pane.widgets;
     let properties: Vec<&SheetProperty> = properties_of(document, thing)
         .iter()
         .filter(|property| {
@@ -172,13 +176,16 @@ fn colors_of(
         if picked.map(|property| &property.id) == chosen.map(|property| &property.id) {
             return;
         }
-        pending.push(Pending::one(match picked {
+        let edit = match picked {
             Some(property) => color_rule_edit(thing, property, rule),
             None => SheetEdit::SetColorRule {
                 thing: thing.to_owned(),
                 rule: None,
             },
-        }));
+        };
+        // Shades of the rule replaced go with it, and no control shades by a second property again.
+        let asked = (CHANGE_COLORS_HEADING, shown, CHANGE);
+        edit_or_ask(document, edit, asked, None, &mut pane.delete_question, pending);
     });
     let Some(chosen) = chosen else {
         return;

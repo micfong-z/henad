@@ -53,6 +53,7 @@ mod formulas;
 mod ids;
 mod line_commands;
 pub(crate) mod lines;
+mod losses;
 mod names;
 mod references;
 
@@ -62,6 +63,7 @@ pub use formulas::{lines_losing_formulas, measures_losing_formulas};
 pub use ids::{IdSpace, is_reserved_name, mint_id};
 pub(crate) use line_commands::unit_in_text;
 pub use lines::slot_value;
+pub use losses::SheetLosses;
 pub use names::{automatic_name, automatic_summary_name};
 
 use std::collections::BTreeSet;

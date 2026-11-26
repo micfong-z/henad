@@ -163,7 +163,9 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
     model, conversion, unsaved changes, replace applied model and delete dialogs): egui's window
     frame (`Frame::window`) with 12 points of margin, its title (`title_text`) with a gray 800
     hairline under it across the dialog, and the buttons in one row at the bottom right, the primary
-    last (blue 700, or red 900 under red 200 for Rebuild, Replace and Delete). Enter presses the
+    last (blue 700, or red 900 under red 200 for Rebuild, Replace and the actions of the dialog that
+    asks before an edit takes parts of a sheet away: Delete, Remove, Change kind, Change and
+    Replace). Enter presses the
     primary unless another button took the key or the dialog opened on that frame, and Escape closes
     through `Modal`. `dialog_title` marks the dialog's AccessKit node modal and makes the title a
     heading (`heading_caption`, a `title_text` label of role `Heading` named by its words as

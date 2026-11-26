@@ -18,13 +18,16 @@ use henad_graph::sheet::sentence::{
     EVENT_COUNT_LEAD, EVENT_COUNT_MEASURE, EVENT_COUNT_TAIL, MEASURE_EVENT_EMPTY, MEASURE_EVENT_NAME,
     MEASURE_NEEDS_EVENT, NO_EVENT, event_count_measure, event_count_name,
 };
+use henad_graph::sheet::sentence::{REMOVE, REMOVE_MEASURE_HEADING, measure_not_added_again};
 
+use super::PendingDelete;
 use super::layout::{Column, Form, Table, line, text_cell, wrapped_line};
 use super::starts::{STATE_SWATCH_WIDTH, state_name};
 use super::{
     DELETE_WIDTH, FormKind, MeasureForm, MeasureKind, PaneState, Pending, form_buttons, form_heading, measured_thing,
     select,
 };
+use crate::ui::editor::sheet::delete_question::Question;
 use crate::ui::editor::sheet::widgets::{
     OverlayItem, color_button, color_name, color32, message_ui, set_name, swatch_ui,
 };
@@ -209,9 +212,7 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
                         text_cell(ui, Label::new(measure_words(document, measure)));
                     });
                     if row.delete_cell(2, &remove_measure_name(&measure.name)) {
-                        pending.push(Pending::one(SheetEdit::Delete {
-                            item: SheetItem::Measure(measure.id.clone()),
-                        }));
+                        remove_measure(document, measure, &mut pane.delete_question, pending);
                     }
                 });
             }
@@ -227,6 +228,46 @@ pub(super) fn measures(ui: &mut Ui, document: &SheetDocument, pane: &mut PaneSta
     } else if crate::ui::editor::sheet::widgets::add_row_button(ui, ADD_MEASURE, ADD_MEASURE, None, false).clicked() {
         pane.measure_form = Some(MeasureForm::add(document));
     }
+}
+
+/// Pushes the removal of `measure` to `pending`, or holds it in `waiting` while no control of the Sheet pane makes the
+/// measure again. The dialog then asks first, from the next frame on.
+fn remove_measure(
+    document: &SheetDocument,
+    measure: &SheetMeasure,
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
+    let edit = Pending::one(SheetEdit::Delete {
+        item: SheetItem::Measure(measure.id.clone()),
+    });
+    if made_on_the_pane(document, measure) {
+        pending.push(edit);
+    } else {
+        let question = Question::new(REMOVE_MEASURE_HEADING, measure_not_added_again(&measure.name), REMOVE);
+        *waiting = Some(PendingDelete { question, edit });
+    }
+}
+
+/// Returns whether a control of the Sheet pane makes `measure` again once it is removed: a count of a state of the
+/// kind of thing measured, which its Plot box or the measure form adds, an average of one of its properties, which
+/// the measure form adds, or, in a world of agents, a count of one of the sheet's events, which the measure form adds.
+fn made_on_the_pane(document: &SheetDocument, measure: &SheetMeasure) -> bool {
+    let thing = measured_thing(document);
+    if measure.rule == MeasureRule::EventCount {
+        let counted = |id: &str| document.events.iter().any(|event| event.id == id);
+        return thing != CELLS_ID && measure.event.as_deref().is_some_and(counted);
+    }
+    let over = measure.over.as_deref().unwrap_or(CELLS_ID);
+    let of_thing = |id: &str| properties_of(document, thing).iter().any(|property| property.id == id);
+    over == thing
+        && match measure.rule {
+            MeasureRule::CountInState => measure.property.as_deref().is_some_and(of_thing) && measure.state.is_some(),
+            MeasureRule::Average => {
+                matches!(measure.value.value(), Some(SheetValue::Chip(SheetChip::My(id))) if of_thing(id))
+            }
+            _ => false,
+        }
 }
 
 /// Adds a select named `name` of `properties` showing the one of id `current`, or `empty` while none is chosen, and

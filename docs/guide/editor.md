@@ -94,7 +94,7 @@ Each state takes a colour, and a few usual names take their usual colour as you 
 **Changed by** lists the lines of the card that change the property.
 Press **Edit** at the end of a row to change the property's name, kind or states, and **×** to delete it.
 Where the Sheet pane is too narrow for both, a menu at the end of each row holds them.
-A delete that would empty a formula the card cannot write again asks first.
+A delete that takes anything else with it asks first, as the [notes under a line](#notes-under-a-line) describe.
 A symbol before each property and parameter, here and in the **Colours** selects, shows its type, such as a dot for a number and an arrow for a vector, as the Statistics tab shows them, and the type's name shows under the pointer.
 Uncheck **Show type symbols on sheets** in the View menu to hide them.
 A narrow Sheet pane leaves out the symbols and folds **Edit** and **×** into the menu before it wraps any words.
@@ -354,12 +354,17 @@ The Card pane scrolls while the pointer is near its top or bottom edge.
 ### Notes under a line
 
 A line that cannot run yet keeps its place on the card and says why under it, such as "Not run yet: choose a state", and the rest of the model runs without it.
-The card never blocks editing, apart from one question before a delete.
-Deleting a parameter, a property or a line, or removing a summary of a look at agents, empties every formula that uses it.
-The card writes again only a formula of one operation on a Calculate line of its own, and the length of a property, such as "length of my Velocity", where a value goes.
-Before a delete that would empty any other formula, a measure's included, a dialog names the lines and the measures that use the item.
-In the ant foraging model, deleting Trail falloff asks **Trail falloff is used by lines 3 and 4. Delete it?**, and deleting the ground's To food asks **To food is used by the measure Total trail. Delete it?**
-Press <span class="ui">Delete</span>, or <span class="ui">Remove</span> for a summary, to go ahead, or <span class="ui">Cancel</span> to keep the item.
+The card never blocks editing, apart from one question before an edit that takes more than you chose.
+Deleting a parameter, a property, a state, an event or a line, or removing a summary of a look at agents, leaves a blank everywhere it was used, and a measure or a colour rule about it goes with it.
+Done in the property form does the same for each state you removed and for a property given another kind.
+A new **Starts as** drops the shapes a painted start held, and new colours drop the shades of the rule they replace, which no control makes again.
+Before such an edit a dialog lists what will be lost, the lines by the numbers the card shows.
+In SIR, deleting Health asks **Lines 1, 2 and 3 and New outbreak line 1 will lose Health. The measures Susceptible, Infected and Recovered will be removed. The cells will no longer be coloured by Health.**
+In the ant foraging model, starting the Ground all Open asks **The 4 shapes painted on Ground will be lost. Position will have no Nest cell to start on.**
+Removing a measure that the Sheet pane cannot add again, such as Total trail, asks too, and so do deleting a button and changing a button that runs once to start again, which take the lines of its card.
+Press the dialog's action, such as <span class="ui">Delete</span>, to go ahead, or <span class="ui">Cancel</span> to keep the sheet as it is.
+One Undo takes the whole edit back.
+An edit that takes nothing else away, such as deleting a parameter no line uses, asks nothing.
 Grey notes explain how lines work together:
 
 - Two Become lines from different states say that their order does not matter, as in Game of Life: "Lines 2 and 3 change different cells (Dead and Alive), so their order does not matter."

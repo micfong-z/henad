@@ -1514,40 +1514,73 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
             sentence::replace_applied("Chance SIR", "untitled_model"),
         ),
         ("Replace", fixed(sentence::REPLACE)),
-        // The dialog that asks before a delete or a removal empties formulas that the editor cannot write again.
+        // The dialog that asks before an edit takes away parts of the sheet besides the item it deletes or changes.
         ("Delete parameter?", fixed(sentence::DELETE_PARAMETER_HEADING)),
         ("Delete property?", fixed(sentence::DELETE_PROPERTY_HEADING)),
         ("Delete line?", fixed(sentence::DELETE_LINE_HEADING)),
         ("Remove summary?", fixed(sentence::REMOVE_SUMMARY_HEADING)),
+        ("Delete event?", fixed(sentence::DELETE_EVENT_HEADING)),
+        ("Delete button?", fixed(sentence::DELETE_BUTTON_HEADING)),
+        ("Remove measure?", fixed(sentence::REMOVE_MEASURE_HEADING)),
+        ("Delete state?", fixed(sentence::DELETE_STATE_HEADING)),
+        ("Delete states?", fixed(sentence::DELETE_STATES_HEADING)),
+        ("Change kind?", fixed(sentence::CHANGE_KIND_HEADING)),
+        ("Replace start?", fixed(sentence::REPLACE_START_HEADING)),
+        ("Change colours?", fixed(sentence::CHANGE_COLORS_HEADING)),
+        ("Change button?", fixed(sentence::CHANGE_BUTTON_HEADING)),
         ("Delete", fixed(sentence::DELETE)),
         ("Remove", fixed(sentence::REMOVE)),
+        ("Change kind", fixed(sentence::CHANGE_KIND)),
+        ("Change", fixed(sentence::CHANGE)),
         (
-            "Home way is used by line 3. Delete it?",
-            sentence::used_by("Home way", &[(None, 3)], &[]),
+            "Lines 1, 2 and 3 and New outbreak line 1 will lose Health. The measures Susceptible, Infected and \
+             Recovered will be removed. The cells will no longer be coloured by Health.",
+            sentence::lost_question("Health", &lost_health()),
         ),
         (
-            "Trail falloff is used by lines 3 and 4. Delete it?",
-            sentence::used_by("Trail falloff", &[(None, 3), (None, 4)], &[]),
+            "Lines 1, 2 and 3, New outbreak line 1 and the start of Health will lose Infected. The measure Infected \
+             will be removed.",
+            sentence::lost_question("Infected", &lost_infected()),
         ),
         (
-            "Rate is used by line 2 and Clear lines 1 and 3. Delete it?",
-            sentence::used_by(
+            "Line 2 and Clear lines 1 and 3 will lose Rate.",
+            sentence::lost_question(
                 "Rate",
-                &[(None, 2), (Some("Clear"), 1), (Some("Clear"), 3), (None, 2)],
-                &[],
+                &lost_lines(&[(None, 2), (Some("Clear"), 1), (Some("Clear"), 3), (None, 2)]),
             ),
         ),
         (
-            "To food is used by the measure Total trail. Delete it?",
-            sentence::used_by("To food", &[], &["Total trail"]),
+            "Line 4 will lose average heading.",
+            sentence::lost_question("average heading", &lost_lines(&[(None, 4)])),
         ),
         (
-            "Velocity is used by Randomise line 1 and the measures Average speed and Spread. Delete it?",
-            sentence::used_by("Velocity", &[(Some("Randomise"), 1)], &["Average speed", "Spread"]),
+            "Lines 3 and 4, the start of Position, the shares of To food and To home kept each tick, the button Reset \
+             colony and the measure Total trail will lose Trail kept per tick.",
+            sentence::lost_question("Trail kept per tick", &lost_everywhere()),
         ),
         (
-            "Average heading is used by lines 4 and 6. Remove it?",
-            sentence::summary_used_by("average heading", &[(None, 4), (None, 6)]),
+            "New outbreak line 1 will be deleted.",
+            sentence::lost_question("New outbreak", &lost_deleted()),
+        ),
+        (
+            "The ground will no longer be shaded by To food and To home.",
+            sentence::lost_question("Ground", &lost_shades()),
+        ),
+        (
+            "The 4 shapes painted on Ground will be lost. Position will have no Nest cell to start on.",
+            sentence::lost_question("Ground", &lost_shapes(4)),
+        ),
+        (
+            "The shape painted on Ground will be lost. Position will have no Nest cell to start on.",
+            sentence::lost_question("Ground", &lost_shapes(1)),
+        ),
+        (
+            "The agents will no longer be coloured by Heading.",
+            sentence::lost_question("Heading", &lost_heading()),
+        ),
+        (
+            "Total trail cannot be added again in the Sheet pane.",
+            sentence::measure_not_added_again("Total trail"),
         ),
         // The New parameter dialog.
         ("New parameter", fixed(sentence::NEW_PARAMETER_HEADING)),
@@ -1909,8 +1942,19 @@ const FIXED_WORDING: &[&str] = &[
     sentence::DELETE_PROPERTY_HEADING,
     sentence::DELETE_LINE_HEADING,
     sentence::REMOVE_SUMMARY_HEADING,
+    sentence::DELETE_EVENT_HEADING,
+    sentence::DELETE_BUTTON_HEADING,
+    sentence::REMOVE_MEASURE_HEADING,
+    sentence::DELETE_STATE_HEADING,
+    sentence::DELETE_STATES_HEADING,
+    sentence::CHANGE_KIND_HEADING,
+    sentence::REPLACE_START_HEADING,
+    sentence::CHANGE_COLORS_HEADING,
+    sentence::CHANGE_BUTTON_HEADING,
     sentence::DELETE,
     sentence::REMOVE,
+    sentence::CHANGE_KIND,
+    sentence::CHANGE,
     sentence::ADD_AT_END_NOTE,
     sentence::BUTTON_CARD_EMPTY,
     sentence::BLANK_MODEL_CARD,
@@ -1979,12 +2023,18 @@ fn no_fixed_wording_entry_holds_a_forbidden_word() {
     texts.push(sentence::measure_name_reserved("tick"));
     texts.push(sentence::parameter_id_reserved("status"));
     texts.push(sentence::replace_applied("Chance SIR", "untitled_model"));
-    texts.push(sentence::used_by(
-        "Trail falloff",
-        &[(None, 3), (Some("Clear"), 1)],
-        &["Total trail"],
-    ));
-    texts.push(sentence::summary_used_by("Average heading", &[(None, 4)]));
+    for lost in [
+        lost_health(),
+        lost_infected(),
+        lost_everywhere(),
+        lost_deleted(),
+        lost_shades(),
+        lost_shapes(4),
+        lost_heading(),
+    ] {
+        texts.push(sentence::lost_question("Trail falloff", &lost));
+    }
+    texts.push(sentence::measure_not_added_again("Total trail"));
     texts.push(sentence::add_up_worked_out_note(70_000, "ant", "To home", "65536"));
     for grows in [true, false] {
         texts.push(sentence::kept_outside_note("To food", "5", grows));
@@ -2525,4 +2575,74 @@ fn the_notes_of_an_agent_card_name_its_agents() {
         "{notes:?}"
     );
     assert!(notes.iter().all(|note| !note.contains("cells")), "{notes:?}");
+}
+
+/// Returns what deleting Health takes from SIR, as the dialog that asks first names it.
+fn lost_health() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        removed_measures: vec!["Susceptible", "Infected", "Recovered"],
+        colors: vec![(sentence::ColoredThing::Cells, "Health")],
+        ..lost_lines(&[(None, 1), (None, 2), (None, 3), (Some("New outbreak"), 1)])
+    }
+}
+
+/// Returns what deleting the state Infected takes from SIR.
+fn lost_infected() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        starts: vec!["Health"],
+        removed_measures: vec!["Infected"],
+        ..lost_lines(&[(None, 1), (None, 2), (None, 3), (Some("New outbreak"), 1)])
+    }
+}
+
+/// Returns a loss of the lines `lines` alone.
+fn lost_lines(lines: &[(Option<&'static str>, usize)]) -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        lines: lines.to_vec(),
+        ..Default::default()
+    }
+}
+
+/// Returns a loss of a value in lines, a start, two shares kept, a button and a measure.
+fn lost_everywhere() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        starts: vec!["Position"],
+        kept: vec!["To food", "To home"],
+        buttons: vec!["Reset colony"],
+        measures: vec!["Total trail"],
+        ..lost_lines(&[(None, 3), (None, 4)])
+    }
+}
+
+/// Returns a loss of the line of a button's card.
+fn lost_deleted() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        deleted_lines: vec![(Some("New outbreak"), 1)],
+        ..Default::default()
+    }
+}
+
+/// Returns a loss of the two shades of the ground.
+fn lost_shades() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        shades: vec![(sentence::ColoredThing::Ground, vec!["To food", "To home"])],
+        ..Default::default()
+    }
+}
+
+/// Returns a loss of `count` painted shapes of the ground, and of the cells the ants start on.
+fn lost_shapes(count: usize) -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        shapes: vec![("Ground", count)],
+        start_cells: vec![("Position", "Nest")],
+        ..Default::default()
+    }
+}
+
+/// Returns a loss of the colours of agents by their heading.
+fn lost_heading() -> sentence::LostParts<'static> {
+    sentence::LostParts {
+        colors: vec![(sentence::ColoredThing::Agents, "Heading")],
+        ..Default::default()
+    }
 }

@@ -134,8 +134,10 @@ kind runs `SetPropertyType` and starts afresh the same way, and otherwise remove
 `Delete`, kept ones `Rename` and `Recolor`, then new rows `AddState` (`change_states`). A rename
 onto a name another state still holds, as in a swap or a chain, first gives every renamed state a
 `spare_name` such as "alive 1" (`the_property_form_swaps_the_names_of_two_states`). "Delete
-property" (edit only) runs `Delete`, through the delete dialog when the delete empties a formula the
-editor cannot write again (`agents/henad-app-sheet-pane.md`). The form closes once its edit is kept.
+property" (edit only) runs `Delete`. Delete, and Done with a new kind or a removed state, go through
+the dialog that asks first when the edit takes away parts of the sheet besides the property
+(`done_or_ask`, `agents/henad-app-sheet-pane.md`), and the form stays open after Cancel. The form
+closes once its edit is kept.
 
 The other sections. Purpose is a `commit_area` named "Purpose" with `PURPOSE_PLACEHOLDER`,
 committing `SetPurpose` on focus loss. Parameters: a table (`PARAMETER_COLUMNS`) of the name,
@@ -154,7 +156,7 @@ untouched slider returns the stored default to the value field, so boids' Protec
 shows 8 in 0.5 to 50, after Tab moves the focus onto it and after an Undo with the focus on it,
 `a_slider_that_takes_the_focus_keeps_a_default_off_its_steps`), the value field named
 `value_field_name` (a typed value outside the range widens it) and × named `delete_parameter_name`
-(through the delete dialog, as Delete property),
+(through the dialog that asks first, as Delete property),
 Min and Max fields (`with_range_end`: Min above Max
 swaps, equal ends make Max one more, the value moves into the range) and Unit as a
 `suggestion_field` named `parameter_unit_name` with `UNIT_FIELD_PLACEHOLDER` and `unit_suggestions`
@@ -169,16 +171,18 @@ wraps no nested group, and a row of groups ran past a narrow pane) with a "Plot"
 count named by the state (`add_count`, the property's name before it when the name is taken) or
 deleting the counts of that state, then a table headed `PLOTTED` of a `color_button` named
 `measure_color_name` (`Recolor`), `measure_words` (`count_measure`, `average_measure`, or the name)
-and × named `remove_measure_name`, then the measure form (`MeasureForm`: `NEW_MEASURE`, radios of
-its `MeasureKind`, `COUNT_MEASURE` and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME`
-and `MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages, and an average
-reads `{ my = <property> }` and takes the next of `MEASURE_COLORS`; in a world of agents
+and × named `remove_measure_name` (through the dialog that asks first unless `made_on_the_pane`
+holds), then the measure form (`MeasureForm`: `NEW_MEASURE`, radios of its `MeasureKind`,
+`COUNT_MEASURE` and `AVERAGE_MEASURE`, selects named `MEASURE_PROPERTY_NAME` and
+`MEASURE_STATE_NAME`, Done checked by `measure_edit` with the three messages, and an average reads
+`{ my = <property> }` and takes the next of `MEASURE_COLORS`; in a world of agents
 `EVENT_COUNT_MEASURE` too, greyed with `NO_EVENT` while the sheet has no event, a select named
 `MEASURE_EVENT_NAME` and `event_count_edit`: an `event_count` with no `over`, as the ants'
 Deliveries, named `event_count_name` ("Delivery count") or `event_count_measure` when that is
-taken, and plotted as `event_count_measure`). Colours: "Colour cells by" a select
-of every property and None (`colors_of` in `agents/henad-app-sheet-pane.md`), `color_rule_edit`
-writing `by_state` or `shaded_rule` (blue from 0 to 1, or the previous shading's hue and ends),
+taken, and plotted as `event_count_measure`). Colours: "Colour cells by" a select of every
+property and None (`colors_of` in `agents/henad-app-sheet-pane.md`, through the dialog that asks
+first when the rule replaced holds shades), `color_rule_edit` writing `by_state` or `shaded_rule`
+(blue from 0 to 1, or the previous shading's hue and ends),
 swatches under a States property, and `shading_ui` for a Number property: `SHADE` select of
 `SHADE_COLORS` over `ShadeHue::ALL`, a gradient of `ShadeHue::ends` in 16 bands, and `SHADE_FROM`
 [`DARKEST_NAME`] `SHADE_DARK_TO` [`LIGHTEST_NAME`] `SHADE_LIGHT`, the ends left out read as 0 and 1,
@@ -186,16 +190,18 @@ and a value equal to the other end refused with `SHADE_ENDS_EQUAL` (a darkest va
 lightest one is kept, and the lowering reverses the palette). A first property that is a Number,
 with no States property and no rule, gets a shaded rule in `form_edit`. Buttons: each with its name,
 `button_does` (`start_again_for`, `run_once("cell")`), `EDIT` named `edit_button_name` and × named
-`delete_button_name` in a table, the button form (`ButtonForm`, under the button it edits or at the
-end: `NEW_BUTTON` or `edit_button_name`, Name named `BUTTON_NAME_FIELD`, `BUTTON_DOES` with radios
-`START_AGAIN` beside a select named `START_AGAIN_FOR` and `run_once`, then the button's set
-everywhere steps read-only as `button_does` words them (`set_steps`), checked by
-`check_button_form`), and `run_once_card` read-only under a Run once button (a region: the card's
-heading, each line's number and sentence from `card_lines`, or `BUTTON_CARD_EMPTY`).
+`delete_button_name` (through the dialog that asks first) in a table, the button form
+(`ButtonForm`, under the button it edits or at the end: `NEW_BUTTON` or `edit_button_name`, Name
+named `BUTTON_NAME_FIELD`, `BUTTON_DOES` with radios `START_AGAIN` beside a select named
+`START_AGAIN_FOR` and `run_once`, then the button's set everywhere steps read-only as `button_does`
+words them (`set_steps`), checked by `check_button_form`), and `run_once_card` read-only under a Run
+once button (a region: the card's heading, each line's number and sentence from `card_lines`, or
+`BUTTON_CARD_EMPTY`).
 `ButtonForm::run_once` is `None`, neither radio chosen, for a button whose steps only set
 everywhere. `button_edit` adds with `AddButton` and `SetButtonSteps` (one property as `properties`,
 every property as `thing`, the cells or the kind of agent), renames and sets steps, and deletes
-and adds again a button whose kind changes. It keeps the set everywhere steps in their order in
+and adds again a button whose kind changes, through the dialog that asks first when that takes the
+lines of its card. It keeps the set everywhere steps in their order in
 every case, the new kind's step in the place of the old one, and renames alone a button that only
 sets while no kind is chosen (`the_button_form_keeps_the_steps_that_set_a_property_everywhere`,
 `src/tests/sheet_agents.rs`). A refusal shows as the form's message (`FormKind` on `Pending`).

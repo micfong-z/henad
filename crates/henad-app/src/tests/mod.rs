@@ -17,6 +17,7 @@ mod runaway;
 mod sheet_agent_lines;
 mod sheet_agents;
 mod sheet_card;
+mod sheet_confirm;
 mod sheet_drag;
 mod sheet_editor;
 mod sheet_fires;

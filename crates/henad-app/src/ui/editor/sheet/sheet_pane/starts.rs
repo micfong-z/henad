@@ -20,6 +20,7 @@ use henad_graph::sheet::sentence::{
     ANYWHERE_AT_RANDOM, ARROW_KIND, HEADING_KIND, HEADING_START, NO, PAINTED, POSITION_KIND, YES, YES_NO_KIND,
     every_starts_at, on_ground_start, painted_shapes,
 };
+use henad_graph::sheet::sentence::{REPLACE, REPLACE_START_HEADING};
 
 use super::layout::{
     Column, ITEM_GAP, LINE, Table, TableRow, delete_button, line, text_cell, text_width, wrapped_line,
@@ -29,6 +30,7 @@ use super::{
     DELETE_WIDTH, FIELD_WIDTH, FormKind, NumberField, NumberTarget, PaneState, Pending, PropertyForm, StartSlot,
     delete_or_ask, select, select_width,
 };
+use super::{PendingDelete, edit_or_ask};
 use crate::ui::editor::sheet::picker::{Choice, ParameterPicker};
 use crate::ui::editor::sheet::widgets::{
     CHIP_HEIGHT, DialogOutcome, NewParameterDialog, NumberUse, OverlayItem, TypeSymbol, caption_width, chip_width,
@@ -741,7 +743,14 @@ fn starts_ui(
         _ => {}
     }
     if let Some(choice) = start_select(ui, document, property, &selected) {
-        choose_start(property, &selected, choice, pending);
+        choose_start(
+            document,
+            property,
+            &selected,
+            choice,
+            &mut pane.delete_question,
+            pending,
+        );
     }
     let Some(start) = &property.starts_as else {
         return;
@@ -781,8 +790,17 @@ fn starts_ui(
     }
 }
 
-/// Sets the start of `property` to `choice`, unless `selected`, the words of its start, already reads as it.
-fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, pending: &mut Vec<Pending>) {
+/// Sets the start of `property` to `choice`, unless `selected`, the words of its start, already reads as it. A start
+/// that takes away parts of the sheet, such as the shapes of a painted start, waits in `waiting` for the dialog that
+/// asks first.
+fn choose_start(
+    document: &SheetDocument,
+    property: &SheetProperty,
+    selected: &str,
+    choice: StartChoice,
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
     let number = |value: f64| Slot::Filled(SheetValue::Literal(SheetLiteral::Number(value)));
     let start = match choice {
         StartChoice::All(state) => {
@@ -829,10 +847,12 @@ fn choose_start(property: &SheetProperty, selected: &str, choice: StartChoice, p
         }
         _ => return,
     };
-    pending.push(Pending::one(SheetEdit::SetStartsAs {
+    let edit = SheetEdit::SetStartsAs {
         property: property.id.clone(),
         starts_as: Some(Box::new(start)),
-    }));
+    };
+    let asked = (REPLACE_START_HEADING, property.name.as_str(), REPLACE);
+    edit_or_ask(document, edit, asked, None, waiting, pending);
 }
 
 /// Draws the rows of the by-chance `start` of `property`, each on a line of its own, then "+ Add row" and the state

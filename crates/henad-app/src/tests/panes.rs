@@ -138,6 +138,19 @@ pub fn click_on_line(harness: &mut Harness, line: &str, item: &str) {
     harness.click_at(position);
 }
 
+/// Returns the question of the modal dialog titled `title`, the text of its one label, or `None` while no such dialog
+/// is open.
+pub fn question_in(harness: &mut Harness, title: &str) -> Option<String> {
+    let nodes = harness.settle();
+    let texts: Vec<String> = nodes
+        .iter()
+        .filter(|node| node.dialog == title && node.role == Role::Label && !node.value.is_empty())
+        .map(|node| node.value.clone())
+        .collect();
+    assert!(texts.len() <= 1, "one question in {title}: {texts:?}");
+    texts.into_iter().next()
+}
+
 /// Returns whether a picker or menu titled `dialog` is open.
 pub fn is_open(harness: &mut Harness, dialog: &str) -> bool {
     harness

@@ -179,10 +179,11 @@ card's first line stays at the top, and only a top-level line with no top-level 
 the bottom), `DRAW_NEW_NUMBERS` on a line
 `check::holds_draw` finds drawing (`DrawNewNumbers`), `CHANGE_TO_RATE` or `CHANGE_TO_CHANCE` where
 `rates::conversion` finds one (`ChangeToRate`, `ChangeToChance`), and `delete_line`, with
-`DELETE_WHEN_TOOLTIP` on a When (a delete that empties a formula the editor cannot write again
-waits in `CardState::delete_question` on the dialog titled `DELETE_LINE_HEADING`, drawn by
-`card_pane` from the next frame on, as the Sheet pane's in `henad-app-sheet-pane.md`, and names the
-line as a chip of its result reads: its name, an unnamed Count's automatic name, else "Line 2"),
+`DELETE_WHEN_TOOLTIP` on a When (a delete that takes away parts of the sheet besides the line, as
+a line that reads its result, waits in `CardState::delete_question` on the dialog titled
+`DELETE_LINE_HEADING`, drawn by `card_pane` from the next frame on, as the Sheet pane's in
+`henad-app-sheet-pane.md`, and names the line as a chip of its result reads: its name, an unnamed
+Count's automatic name, else its line word, "line 2"),
 and on a look at agents `include_me_tool` or `leave_me_out_tool`
 (`SetField` `IncludeMe`). Rename shows on a line of a result (`LineKind::works_out_result`). Rename
 opens a field named `rename_field_name` under the line: Enter or leaving it keeps (`RenameResult`),
@@ -352,10 +353,9 @@ what the checker asks of a template: a look at agents the card's kind, `include_
 cells, a Look at a cell `Here`, Steer and Move a mode, a Choose one empty row. Selects:
 `mode_options` (by and towards for Steer, by and to for Move), `pick_options`, `which_options`, and
 `look_summary_options` per summary (`LOOK_SUMMARIES`, "Remove this summary" running `DeleteSummary`
-while two or more are left, and a count blanks its value). A removal that empties a formula the
-card cannot write again waits on the delete dialog titled `REMOVE_SUMMARY_HEADING`, with
-`summary_used_by` and Remove (`removing_a_summary_that_a_formula_reads_asks_first`, in
-`src/tests/sheet_agent_lines.rs`). `add_summary_ui` draws "+" named
+while two or more are left, and a count blanks its value). A removal that blanks a line that reads
+the summary waits on the dialog titled `REMOVE_SUMMARY_HEADING`, with `lost_question` and Remove
+(`removing_a_summary_that_lines_read_asks_first`, in `src/tests/sheet_agent_lines.rs`). `add_summary_ui` draws "+" named
 `add_summary_name` after a look's summaries, opening `summary_picker` (`CHOOSE_A_SUMMARY`), whose
 choice runs `AddSummary` and opens the new summary's value. `add_row_ui` draws "+" named
 `add_choose_row_name` after a Choose line, a value picker at `row.N.value` that `SetSlot` appends,

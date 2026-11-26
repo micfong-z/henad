@@ -401,9 +401,15 @@ fn the_line_menu_renames_a_result_and_deletes_a_line() {
         line_text(&mut harness, "Line 2"),
         "Become Alive from Dead, when Neighbours is 3"
     );
-    // Delete takes the line out, and its result's chips turn blank.
+    // Delete takes the line out, and its result's chips turn blank, so it asks first.
     click(&mut harness, "Line 1 actions");
     click(&mut harness, "Delete line 1");
+    let heading = henad_graph::sheet::sentence::DELETE_LINE_HEADING;
+    assert_eq!(
+        crate::tests::panes::question_in(&mut harness, heading).as_deref(),
+        Some("Lines 2 and 3 will lose Neighbours.")
+    );
+    crate::tests::panes::press_in_dialog(&mut harness, heading, henad_graph::sheet::sentence::DELETE);
     let document = sheet(&harness).document().clone();
     assert!(document.line("l1").is_none());
     assert_eq!(line_text(&mut harness, "Line 1"), "Become Alive from Dead, when … is 3");

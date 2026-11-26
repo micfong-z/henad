@@ -95,49 +95,176 @@ pub fn replace_applied(name: &str, id: &str) -> String {
 /// Action of the dialog that asks before Apply replaces a model, which applies the model in its place.
 pub const REPLACE: &str = "Replace";
 
-// The dialog that asks before a delete or a removal empties formulas that the editor cannot write again
+// The dialog that asks before an edit takes away parts of the sheet besides the item it deletes or changes
 
-/// Title of the dialog that asks before a parameter is deleted that formulas use.
+/// Title of the dialog that asks before a parameter is deleted.
 pub const DELETE_PARAMETER_HEADING: &str = "Delete parameter?";
 
-/// Title of the dialog that asks before a property is deleted that formulas use.
+/// Title of the dialog that asks before a property is deleted.
 pub const DELETE_PROPERTY_HEADING: &str = "Delete property?";
 
-/// Title of the dialog that asks before a line is deleted that formulas use.
+/// Title of the dialog that asks before a line is deleted.
 pub const DELETE_LINE_HEADING: &str = "Delete line?";
 
-/// Title of the dialog that asks before a summary of a look at agents is removed that formulas use.
+/// Title of the dialog that asks before a summary of a look at agents is removed.
 pub const REMOVE_SUMMARY_HEADING: &str = "Remove summary?";
+
+/// Title of the dialog that asks before an event is deleted.
+pub const DELETE_EVENT_HEADING: &str = "Delete event?";
+
+/// Title of the dialog that asks before a button is deleted.
+pub const DELETE_BUTTON_HEADING: &str = "Delete button?";
+
+/// Title of the dialog that asks before a measure is removed.
+pub const REMOVE_MEASURE_HEADING: &str = "Remove measure?";
+
+/// Title of the dialog that asks before Done of the property form deletes one state.
+pub const DELETE_STATE_HEADING: &str = "Delete state?";
+
+/// Title of the dialog that asks before Done of the property form deletes several states.
+pub const DELETE_STATES_HEADING: &str = "Delete states?";
+
+/// Title of the dialog that asks before Done of the property form gives a property another kind.
+pub const CHANGE_KIND_HEADING: &str = "Change kind?";
+
+/// Title of the dialog that asks before a property starts otherwise.
+pub const REPLACE_START_HEADING: &str = "Replace start?";
+
+/// Title of the dialog that asks before a kind of thing is coloured otherwise.
+pub const CHANGE_COLORS_HEADING: &str = "Change colours?";
+
+/// Title of the dialog that asks before Done of the button form changes what a button does.
+pub const CHANGE_BUTTON_HEADING: &str = "Change button?";
 
 /// Action of the dialog that asks before a delete, which deletes the item.
 pub const DELETE: &str = "Delete";
 
-/// Action of the dialog that asks before a summary is removed, which removes it.
+/// Action of the dialog that asks before a summary or a measure is removed, which removes it.
 pub const REMOVE: &str = "Remove";
 
-/// Returns the question of the dialog that asks before the item `name` is deleted while the lines `lines` and the
-/// measures named `measures` use it.
-///
-/// They use the item in formulas the editor cannot write again, as in "Trail falloff is used by lines 3 and 4. Delete
-/// it?" or "To food is used by the measure Total trail. Delete it?". Each line is the button of its card, `None` for a
-/// card that runs each tick, and its number on that card. The lines of a button's card take its name, as in "Clear
-/// line 1".
-pub fn used_by(name: &str, lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
-    format!("{name} is used by {}. Delete it?", users(lines, measures))
+/// Action of the dialog that asks before a property takes another kind, which gives it the kind.
+pub const CHANGE_KIND: &str = "Change kind";
+
+/// Action of the dialog that asks before a change of colours or of a button, which makes the change.
+pub const CHANGE: &str = "Change";
+
+/// Kind of thing a colour rule colours, as the dialog that asks before an edit names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ColoredThing {
+    /// The cells of a grid.
+    Cells,
+    /// The agents.
+    Agents,
+    /// The ground under agents.
+    Ground,
 }
 
-/// Returns the question of the dialog that asks before the summary `name` is removed while the lines `lines` use it,
-/// as [`used_by`] words the lines.
-///
-/// The name opens the sentence with a capital, since a summary takes a name such as "average heading": "Average heading
-/// is used by line 4. Remove it?".
-pub fn summary_used_by(name: &str, lines: &[(Option<&str>, usize)]) -> String {
-    format!("{} is used by {}. Remove it?", upper_first(name), users(lines, &[]))
+impl ColoredThing {
+    /// Returns the words of the kind of thing at the start of a sentence, such as "The cells".
+    fn words(self) -> &'static str {
+        match self {
+            Self::Cells => "The cells",
+            Self::Agents => "The agents",
+            Self::Ground => "The ground",
+        }
+    }
 }
 
-/// Returns the lines `lines` and the measures named `measures` as a list, such as "line 2, Clear lines 1 and 3 and the
-/// measure Total trail".
-fn users(lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
+/// Parts of a sheet that an edit takes away, named as the editor shows them, for the dialog that asks before the edit.
+///
+/// A line is the button of its card, `None` for a card that runs each tick, and its number on that card. The lines of
+/// a button's card take its name, as in "Clear line 1".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LostParts<'a> {
+    /// Lines that lose a value.
+    pub lines: Vec<(Option<&'a str>, usize)>,
+    /// Names of the properties whose start loses a value.
+    pub starts: Vec<&'a str>,
+    /// Starts of agents on a state of the ground that the ground will no longer paint on single cells, each as the
+    /// name of the agents' property and the name of the state.
+    pub start_cells: Vec<(&'a str, &'a str)>,
+    /// Names of the ground properties whose share kept each tick loses its value.
+    pub kept: Vec<&'a str>,
+    /// Names of the buttons that lose a step.
+    pub buttons: Vec<&'a str>,
+    /// Names of the measures whose value loses a part.
+    pub measures: Vec<&'a str>,
+    /// Lines that go.
+    pub deleted_lines: Vec<(Option<&'a str>, usize)>,
+    /// Names of the measures that go.
+    pub removed_measures: Vec<&'a str>,
+    /// Kinds of thing no longer coloured by a property, each with the property's name.
+    pub colors: Vec<(ColoredThing, &'a str)>,
+    /// Kinds of thing whose colour rule loses shades, each with the names of the properties that no longer shade it.
+    pub shades: Vec<(ColoredThing, Vec<&'a str>)>,
+    /// Names of the properties whose painted start loses shapes, each with the number of shapes lost.
+    pub shapes: Vec<(&'a str, usize)>,
+}
+
+/// Returns the question of the dialog that asks before an edit takes `lost` away from the item named `name`.
+///
+/// `name` is the name of what the edit deletes or changes. The question holds one sentence per kind of loss, such as
+/// "Lines 1, 2 and 3 and New outbreak line 1 will lose Health. The measures Susceptible, Infected and Recovered will be
+/// removed. The cells will no longer be coloured by Health."
+pub fn lost_question(name: &str, lost: &LostParts<'_>) -> String {
+    let mut sentences = Vec::new();
+    let mut losers = line_groups(&lost.lines);
+    losers.push(named_list("the start of", "the starts of", &lost.starts));
+    if !lost.kept.is_empty() {
+        let noun = if lost.kept.len() == 1 {
+            "the share"
+        } else {
+            "the shares"
+        };
+        losers.push(format!("{noun} of {} kept each tick", names(&lost.kept)));
+    }
+    losers.push(named_list("the button", "the buttons", &lost.buttons));
+    losers.push(named_list("the measure", "the measures", &lost.measures));
+    losers.retain(|words| !words.is_empty());
+    if !losers.is_empty() {
+        sentences.push(format!("{} will lose {name}.", upper_first(&word_list(&losers))));
+    }
+    if !lost.deleted_lines.is_empty() {
+        let lines = word_list(&line_groups(&lost.deleted_lines));
+        sentences.push(format!("{} will be deleted.", upper_first(&lines)));
+    }
+    if !lost.removed_measures.is_empty() {
+        let measures = named_list("the measure", "the measures", &lost.removed_measures);
+        sentences.push(format!("{} will be removed.", upper_first(&measures)));
+    }
+    for (thing, property) in &lost.colors {
+        sentences.push(format!("{} will no longer be coloured by {property}.", thing.words()));
+    }
+    for (thing, properties) in &lost.shades {
+        sentences.push(format!(
+            "{} will no longer be shaded by {}.",
+            thing.words(),
+            names(properties)
+        ));
+    }
+    for (property, count) in &lost.shapes {
+        sentences.push(match count {
+            1 => format!("The shape painted on {property} will be lost."),
+            _ => format!("The {count} shapes painted on {property} will be lost."),
+        });
+    }
+    for (property, state) in &lost.start_cells {
+        sentences.push(format!("{property} will have no {state} cell to start on."));
+    }
+    sentences.join(" ")
+}
+
+/// Returns the sentence of the dialog that asks before the measure `name` is removed while no control of the Sheet
+/// pane makes it, such as "Total trail cannot be added again in the Sheet pane."
+pub fn measure_not_added_again(name: &str) -> String {
+    format!("{name} cannot be added again in the Sheet pane.")
+}
+
+/// Returns `lines` as one group of words per card, such as "lines 1, 2 and 3" and "New outbreak line 1", in the order
+/// of each card's first line.
+fn line_groups(lines: &[(Option<&str>, usize)]) -> Vec<String> {
     let mut cards: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
     for &(button, number) in lines {
         match cards.iter_mut().find(|(known, _)| *known == button) {
@@ -146,7 +273,7 @@ fn users(lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
             None => cards.push((button, vec![number])),
         }
     }
-    let mut words: Vec<String> = cards
+    cards
         .iter()
         .map(|(button, numbers)| {
             let noun = if numbers.len() == 1 { "line" } else { "lines" };
@@ -156,16 +283,23 @@ fn users(lines: &[(Option<&str>, usize)], measures: &[&str]) -> String {
                 None => format!("{noun} {numbers}"),
             }
         })
-        .collect();
-    match measures {
-        [] => {}
-        [measure] => words.push(format!("the measure {measure}")),
-        _ => {
-            let names: Vec<String> = measures.iter().map(|&measure| measure.to_owned()).collect();
-            words.push(format!("the measures {}", word_list(&names)));
-        }
+        .collect()
+}
+
+/// Returns `items` as a list after `one` or `several`, such as "the measure Total trail" or "the measures Susceptible
+/// and Infected", and nothing for no item.
+fn named_list(one: &str, several: &str, items: &[&str]) -> String {
+    match items {
+        [] => String::new(),
+        [item] => format!("{one} {item}"),
+        _ => format!("{several} {}", names(items)),
     }
-    word_list(&words)
+}
+
+/// Returns `items` as a list ending in "and".
+fn names(items: &[&str]) -> String {
+    let items: Vec<String> = items.iter().map(|&item| item.to_owned()).collect();
+    word_list(&items)
 }
 
 // The New parameter dialog

@@ -453,6 +453,8 @@ fn a_starts_as_chance_takes_a_percent_and_refuses_what_is_no_chance() {
 
 #[test]
 fn editing_a_property_renames_recolors_and_changes_its_kind() {
+    use henad_graph::sheet::sentence::{CHANGE_KIND, CHANGE_KIND_HEADING, DELETE, DELETE_STATE_HEADING};
+
     let Some(mut harness) = blank() else {
         return;
     };
@@ -463,6 +465,12 @@ fn editing_a_property_renames_recolors_and_changes_its_kind() {
     type_into(&mut harness, "State 3 name", "Infected");
     click(&mut harness, "Remove state 1");
     click(&mut harness, DONE);
+    // The start in the removed state goes with it, so Done asks first.
+    assert_eq!(
+        crate::tests::panes::question_in(&mut harness, DELETE_STATE_HEADING).as_deref(),
+        Some("The start of Status will lose Dead.")
+    );
+    crate::tests::panes::press_in_dialog(&mut harness, DELETE_STATE_HEADING, DELETE);
     harness.settle();
     let property = sheet(&harness).document().cells.as_ref().expect("cells")[0].clone();
     assert_eq!(property.name, "Life");
@@ -479,6 +487,11 @@ fn editing_a_property_renames_recolors_and_changes_its_kind() {
     click(&mut harness, "Edit property Life");
     click(&mut harness, INTEGER_KIND);
     click(&mut harness, DONE);
+    assert_eq!(
+        crate::tests::panes::question_in(&mut harness, CHANGE_KIND_HEADING).as_deref(),
+        Some("The cells will no longer be coloured by Life.")
+    );
+    crate::tests::panes::press_in_dialog(&mut harness, CHANGE_KIND_HEADING, CHANGE_KIND);
     harness.settle();
     let property = sheet(&harness).document().cells.as_ref().expect("cells")[0].clone();
     assert_eq!(property.property_type, PropertyType::WholeNumber);
@@ -1752,18 +1765,17 @@ fn a_starts_chance_chip_opens_its_picker_with_the_number_box_focused() {
     );
 }
 
-/// A delete that empties formulas the editor cannot write again asks first, and names the lines and the measures whose
-/// formulas it empties: the Parameters table's ×, Delete property and the line menu's Delete. Cancel and Escape keep
-/// the item, Delete deletes it, and Undo brings back the sheet as it was. A delete that the card can rebuild, of a
-/// formula of one operation, runs at once.
+/// A delete that takes away parts of the sheet besides the item asks first, and names them: the Parameters table's ×,
+/// Delete property and the line menu's Delete. Cancel and Escape keep the item, Delete deletes it, and one Undo brings
+/// back the sheet as it was. A delete that takes nothing else away runs at once.
 #[test]
-fn a_delete_of_an_item_that_formulas_use_asks_first() {
-    use henad_graph::sheet::document::{LineKind, SheetLine};
+fn a_delete_of_an_item_that_others_use_asks_first() {
+    use henad_graph::sheet::document::ParameterType;
     use henad_graph::sheet::sentence::{
-        DELETE, DELETE_LINE_HEADING, DELETE_PARAMETER_HEADING, DELETE_PROPERTY_HEADING, used_by,
+        DELETE, DELETE_LINE_HEADING, DELETE_PARAMETER_HEADING, DELETE_PROPERTY_HEADING,
     };
 
-    use crate::tests::panes::{is_open, press_in_dialog, shows};
+    use crate::tests::panes::{is_open, press_in_dialog, question_in, shows};
 
     let text = |harness: &Harness| sheet(harness).text().to_owned();
 
@@ -1778,12 +1790,13 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
             .iter()
             .any(|parameter| parameter.id == id)
     };
-    let lines_3_and_4 = |name: &str| used_by(name, &[(None, 3), (None, 4)], &[]);
     let starter = text(&harness);
 
     click(&mut harness, "Delete parameter Trail falloff");
-    assert!(is_open(&mut harness, DELETE_PARAMETER_HEADING), "no dialog asks");
-    assert!(shows(&mut harness, &lines_3_and_4("Trail falloff")));
+    assert_eq!(
+        question_in(&mut harness, DELETE_PARAMETER_HEADING).as_deref(),
+        Some("Lines 3 and 4 will lose Trail falloff.")
+    );
     assert_eq!(text(&harness), starter, "the parameter went before Delete");
     press_in_dialog(&mut harness, DELETE_PARAMETER_HEADING, CANCEL);
     assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
@@ -1799,15 +1812,16 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
     assert_eq!(
         text(&harness),
         starter,
-        "Undo brings back the parameter and its formulas"
+        "one Undo brings back the parameter and its lines"
     );
 
     click(&mut harness, "Edit property Reward held");
     click(&mut harness, DELETE_PROPERTY);
-    assert!(is_open(&mut harness, DELETE_PROPERTY_HEADING), "no dialog asks");
-    assert!(shows(&mut harness, &lines_3_and_4("Reward held")));
+    assert_eq!(
+        question_in(&mut harness, DELETE_PROPERTY_HEADING).as_deref(),
+        Some("Lines 3, 4, 11, 14 and 16 will lose Reward held.")
+    );
     press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, DELETE);
-    harness.settle();
     let document = sheet(&harness).document();
     assert!(
         document.agents[0]
@@ -1820,28 +1834,29 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
     click(&mut harness, UNDO);
     assert_eq!(text(&harness), starter);
 
-    // Total trail adds up To food and To home over the ground, and the Sheet pane writes no formula of a measure.
+    // Total trail adds up To food and To home over the ground, and the ground is shaded by both.
     click(&mut harness, "Edit property To food");
     click(&mut harness, DELETE_PROPERTY);
-    assert!(shows(&mut harness, &used_by("To food", &[], &["Total trail"])));
+    assert_eq!(
+        question_in(&mut harness, DELETE_PROPERTY_HEADING).as_deref(),
+        Some(
+            "Lines 1 and 4, the button Reset colony and the measure Total trail will lose To food. The ground will no \
+             longer be shaded by To food."
+        )
+    );
     harness.press(egui::Key::Escape, egui::Modifiers::NONE);
     assert!(!is_open(&mut harness, DELETE_PROPERTY_HEADING));
     assert_eq!(text(&harness), starter, "Escape keeps the property");
+    assert!(shows(&mut harness, DONE), "the property form stays open");
     click(&mut harness, CANCEL);
 
-    let number = {
-        let document = sheet(&harness).document();
-        let (card, _) = document.line("l2").expect("the ants hold line l2");
-        henad_graph::sheet::relations::CardRelations::new(document, &document.cards[card])
-            .number("l2")
-            .expect("line l2 is on its card")
-    };
-    click(&mut harness, &format!("Line {number} actions"));
-    click(&mut harness, &format!("Delete line {number}"));
-    assert!(is_open(&mut harness, DELETE_LINE_HEADING), "no dialog asks");
-    assert!(shows(&mut harness, &used_by("Home way", &[(None, 3)], &[])));
+    click(&mut harness, "Line 2 actions");
+    click(&mut harness, "Delete line 2");
+    assert_eq!(
+        question_in(&mut harness, DELETE_LINE_HEADING).as_deref(),
+        Some("Lines 3 and 5 will lose Home way.")
+    );
     press_in_dialog(&mut harness, DELETE_LINE_HEADING, DELETE);
-    harness.settle();
     assert!(
         sheet(&harness).document().line("l2").is_none(),
         "Delete deletes the line"
@@ -1849,21 +1864,21 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
     click(&mut harness, UNDO);
     assert_eq!(text(&harness), starter);
 
-    // A Calculate line of one operation is rebuilt on the card, and its parameter goes at once.
-    open_starter(&mut harness, "sir.toml");
-    let mut line = SheetLine::new(LineKind::Calculate);
-    line.formula = Some("infection_rate * 2".to_owned());
+    // A parameter that nothing reads goes at once.
     apply_sheet_edit(
         sheet_mut(&mut harness),
-        SheetEdit::AddLine {
-            card: "cell_tick".to_owned(),
-            inside: None,
-            line: Box::new(line),
+        SheetEdit::AddParameter {
+            name: "Unused".to_owned(),
+            parameter_type: ParameterType::Number,
+            min: 0.0,
+            max: 1.0,
+            default: 0.5,
+            unit: None,
         },
     );
-    click(&mut harness, "Delete parameter Infection rate");
+    click(&mut harness, "Delete parameter Unused");
     assert!(!is_open(&mut harness, DELETE_PARAMETER_HEADING));
-    assert!(!has_parameter(&harness, "infection_rate"));
+    assert!(!has_parameter(&harness, "unused"));
 }
 
 /// Each row of a table of properties holds an Edit button, which opens the property form and scrolls it into view, and
@@ -1873,7 +1888,7 @@ fn a_delete_of_an_item_that_formulas_use_asks_first() {
 fn each_property_row_edits_and_deletes_its_property() {
     use egui::accesskit::Role;
     use henad_graph::sheet::sentence::{
-        DELETE_PROPERTY_HEADING, PROPERTY_NAME_FIELD, delete_property_name, edit_property_heading,
+        DELETE, DELETE_PROPERTY_HEADING, PROPERTY_NAME_FIELD, delete_property_name, edit_property_heading,
         property_actions_name,
     };
 
@@ -1914,7 +1929,7 @@ fn each_property_row_edits_and_deletes_its_property() {
             .any(|rect| pane.y_range().contains(rect.top()) && pane.y_range().contains(rect.bottom()))
     };
 
-    // Lines 3 and 4 read Reward held, so its delete asks first.
+    // Lines read Reward held, so its delete asks first.
     click(&mut harness, &delete_property_name("Reward held"));
     assert!(is_open(&mut harness, DELETE_PROPERTY_HEADING), "no dialog asks");
     press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, CANCEL);
@@ -1928,7 +1943,7 @@ fn each_property_row_edits_and_deletes_its_property() {
     click(&mut harness, &edit_property_heading("Heading"));
     assert!(shows(&mut harness, DONE), "Edit opens the property form");
     assert!(in_pane(&mut harness, PROPERTY_NAME_FIELD), "the form scrolls into view");
-    // The delete of the property the form edits goes at once, as no formula reads it, and closes the form.
+    // The delete of the property the form edits goes at once, as nothing else uses it, and closes the form.
     click(&mut harness, &delete_property_name("Heading"));
     assert!(!is_open(&mut harness, DELETE_PROPERTY_HEADING), "a dialog asks");
     assert!(!names(&harness, false).contains(&"Heading".to_owned()));
@@ -1936,9 +1951,10 @@ fn each_property_row_edits_and_deletes_its_property() {
     click(&mut harness, UNDO);
     assert_eq!(text(&harness), starter);
 
-    // The delete of another property leaves the open form alone.
+    // The delete of another property leaves the open form alone, and asks first, as lines read Cargo.
     click(&mut harness, &edit_property_heading("Heading"));
     click(&mut harness, &delete_property_name("Cargo"));
+    press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, DELETE);
     assert!(!names(&harness, false).contains(&"Cargo".to_owned()));
     assert!(shows(&mut harness, DONE), "the form of Heading stays open");
     assert!(names(&harness, true).contains(&"To food".to_owned()));
@@ -1960,6 +1976,7 @@ fn each_property_row_edits_and_deletes_its_property() {
     assert!(in_pane(&mut harness, PROPERTY_NAME_FIELD), "the form scrolls into view");
     click(&mut harness, &property_actions_name("Cargo"));
     click(&mut harness, &delete_property_name("Cargo"));
+    press_in_dialog(&mut harness, DELETE_PROPERTY_HEADING, DELETE);
     assert!(
         !names(&harness, false).contains(&"Cargo".to_owned()),
         "the menu's Delete deletes"

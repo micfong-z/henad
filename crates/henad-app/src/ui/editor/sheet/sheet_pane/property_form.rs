@@ -6,6 +6,7 @@ use henad_graph::sheet::document::{
     CELLS_ID, CardRuns, GROUND_ID, LineKind, PropertyType, SheetChip, SheetDocument, SheetLine, SheetLiteral,
     SheetProperty, SheetValue, Slot, StartRule, StartsAs,
 };
+use henad_graph::sheet::edit::SheetLosses;
 use henad_graph::sheet::edit::{
     IdSpace, STATE_COLORS, SheetBuilder, SheetEdit, SheetEditError, SheetItem, is_reserved_name, suggested_state_color,
 };
@@ -20,10 +21,14 @@ use henad_graph::sheet::sentence::{
 use henad_graph::sheet::sentence::{
     ARROW_KIND_DESCRIPTION, HEADING_KIND_DESCRIPTION, POSITION_KIND_DESCRIPTION, YES_NO_KIND_DESCRIPTION,
 };
+use henad_graph::sheet::sentence::{
+    CHANGE_KIND, CHANGE_KIND_HEADING, DELETE, DELETE_STATE_HEADING, DELETE_STATES_HEADING, word_list,
+};
 use henad_graph::value::Color;
 
 use super::colors::shaded_rule;
 use super::layout::{Form, ITEM_GAP, delete_button, line};
+use super::run_or_ask;
 use super::starts::kind_words;
 use super::{
     DELETE_WIDTH, EditRun, FormKind, FormState, Pending, PendingDelete, PropertyForm, STATE_FIELD_WIDTH, delete_or_ask,
@@ -35,7 +40,8 @@ use crate::ui::editor::sheet::{find_property, properties_of};
 use crate::ui::sweep::layout::destructive_button;
 
 /// Draws the property form, and sets `close` on Cancel. Done checks the form and adds or changes the property. Delete
-/// property deletes it, or holds the delete in `waiting` while it empties formulas that the card cannot write again.
+/// property deletes it. A delete, a new kind or a removed state that takes away parts of the sheet waits in `waiting`
+/// for the dialog that asks first.
 pub(super) fn property_form(
     ui: &mut Ui,
     document: &SheetDocument,
@@ -91,7 +97,7 @@ pub(super) fn property_form(
     });
     if done {
         match check_form(document, form) {
-            Ok(()) => pending.push(Pending::from_form(FormKind::Property, form_edit(form.clone()))),
+            Ok(()) => done_or_ask(document, form, waiting, pending),
             Err(message) => form.message = Some(message),
         }
     }
@@ -103,6 +109,60 @@ pub(super) fn property_form(
         let asked = (DELETE_PROPERTY_HEADING, form.original.as_str());
         delete_or_ask(document, edit, asked, Some(FormKind::Property), waiting, pending);
     }
+}
+
+/// Pushes the edit Done makes from `form` to `pending`, or holds it in `waiting` while it takes away parts of the
+/// sheet: a new kind clears every use of the property, and a removed state every use of the state. The form stays
+/// open until the edit is kept.
+///
+/// The start a new kind sets afresh is left out of what the dialog names.
+fn done_or_ask(
+    document: &SheetDocument,
+    form: &PropertyForm,
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
+    let make = || Pending::from_form(FormKind::Property, form_edit(form.clone()));
+    let Some(current) = form.editing.as_deref().and_then(|id| find_property(document, id)) else {
+        pending.push(make());
+        return;
+    };
+    if current.property_type != form.kind {
+        let asked = (CHANGE_KIND_HEADING, current.name.as_str(), CHANGE_KIND);
+        let own = |losses: &mut SheetLosses| losses.leave_out_start(&current.id);
+        run_or_ask(document, make, asked, own, waiting, pending);
+        return;
+    }
+    // A row whose name is cleared deletes its state, as `form_edit` reads the rows.
+    let kept: Vec<&str> = form
+        .states
+        .iter()
+        .filter(|state| !state.name.trim().is_empty())
+        .filter_map(|state| state.id.as_deref())
+        .collect();
+    let removed: Vec<String> = current
+        .states
+        .iter()
+        .filter(|state| !kept.contains(&state.id.as_str()))
+        .map(|state| state.name.clone())
+        .collect();
+    let title = match removed.len() {
+        0 => {
+            pending.push(make());
+            return;
+        }
+        1 => DELETE_STATE_HEADING,
+        _ => DELETE_STATES_HEADING,
+    };
+    let names = word_list(&removed);
+    run_or_ask(
+        document,
+        make,
+        (title, names.as_str(), DELETE),
+        |_| {},
+        waiting,
+        pending,
+    );
 }
 
 /// Draws the rows of states of the property form: each with its colour, its name and its remove button, then "+ Add

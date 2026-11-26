@@ -31,6 +31,7 @@ mod sheet_fires;
 mod sheet_fit;
 mod sheet_ground;
 mod sheet_identity;
+mod sheet_losses;
 mod sheet_lower;
 mod sheet_mutation;
 mod sheet_parts;

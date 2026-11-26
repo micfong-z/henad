@@ -24,9 +24,10 @@ use henad_graph::sheet::document::{
     ButtonStepRule, CELLS_ID, Edges, GROUND_ID, MadeOf, PropertyType, SheetButton, SheetDocument, SheetLiteral,
     SheetProperty, SheetTime, Slot,
 };
-use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError};
+use henad_graph::sheet::edit::{SheetBuilder, SheetEdit, SheetEditError, SheetLosses};
 use henad_graph::sheet::format_number;
 use henad_graph::sheet::rates::chance_line_numbers;
+use henad_graph::sheet::sentence::DELETE;
 use henad_graph::sheet::sentence::{AGENT_WALLS_SENTENCE, AGENT_WRAP_TOOLTIP};
 use henad_graph::sheet::sentence::{
     AGENTS_IN_OPEN_SPACE, CANCEL, CELLS_ON_A_GRID, DONE, EDGES_LABEL, HEIGHT_NAME, ONE_TICK_IS, PURPOSE_PLACEHOLDER,
@@ -36,7 +37,7 @@ use henad_graph::sheet::sentence::{
 };
 use henad_graph::value::Color;
 
-use super::delete_question::{DeleteAnswer, DeleteQuestion};
+use super::delete_question::{DeleteAnswer, Question, edit_question};
 use super::help::Help;
 use super::widgets::{
     NewParameterDialog, NumberUse, OverlayItem, REGION_GAP, commit_area, commit_number, field_message, message_ui,
@@ -135,8 +136,8 @@ pub struct PaneState {
     /// Whether the last edit of the pane changed the length or the unit of one tick. The notice under the Time line
     /// then names the lines that use chances per tick, read from the sheet as it is drawn.
     time_changed: bool,
-    /// Delete that waits on the dialog that asks before it empties formulas the card cannot write again, `None` while
-    /// the dialog is closed.
+    /// Edit that waits on the dialog that asks before it takes away parts of the sheet, `None` while the dialog is
+    /// closed.
     delete_question: Option<PendingDelete>,
     /// Rectangle of a form opened in this frame, which the pane scrolls into view once every section is drawn, `None`
     /// in any other frame.
@@ -146,13 +147,21 @@ pub struct PaneState {
     reveal: Option<egui::Rect>,
 }
 
-/// A delete of the Sheet pane that waits on the dialog that asks first, with the form it comes from.
-#[derive(Debug)]
+/// An edit of the Sheet pane that waits on the dialog that asks first.
 struct PendingDelete {
-    /// The dialog's question and the delete.
-    question: DeleteQuestion,
-    /// Form the delete comes from, `None` for a button of a table. The form closes once the delete is kept.
-    form: Option<FormKind>,
+    /// Title, question and action of the dialog.
+    question: Question,
+    /// The edit, with the form it comes from, which closes once the edit is kept.
+    edit: Pending,
+}
+
+/// Prints the dialog's question.
+impl std::fmt::Debug for PendingDelete {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingDelete")
+            .field("question", &self.question)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PaneState {
@@ -528,7 +537,7 @@ impl Pending {
 }
 
 /// Pushes `edit`, a delete of the item named `name` made in the form `form`, to `pending`, or holds it in `waiting`
-/// when it empties formulas that the card cannot write again. The dialog titled `title` then asks first, from the next
+/// when it takes away parts of the sheet besides the item. The dialog titled `title` then asks first, from the next
 /// frame on, past the click that made the delete.
 fn delete_or_ask(
     document: &SheetDocument,
@@ -538,16 +547,58 @@ fn delete_or_ask(
     waiting: &mut Option<PendingDelete>,
     pending: &mut Vec<Pending>,
 ) {
-    if let Some(question) = DeleteQuestion::before(document, &edit, title, name) {
-        *waiting = Some(PendingDelete { question, form });
-    } else {
-        let mut delete = Pending::one(edit);
-        delete.form = form;
-        pending.push(delete);
+    edit_or_ask(document, edit, (title, name, DELETE), form, waiting, pending);
+}
+
+/// Pushes `edit`, made in the form `form`, to `pending`, or holds it in `waiting` when it takes away parts of the sheet
+/// besides the item named `name` that it deletes or sets. The dialog titled `title` with the action `action` then asks
+/// first, from the next frame on.
+fn edit_or_ask(
+    document: &SheetDocument,
+    edit: SheetEdit,
+    (title, name, action): (&'static str, &str, &'static str),
+    form: Option<FormKind>,
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
+    let question = edit_question(document, &edit, title, name, action);
+    let mut edit = Pending::one(edit);
+    edit.form = form;
+    match question {
+        Some(question) => *waiting = Some(PendingDelete { question, edit }),
+        None => pending.push(edit),
     }
 }
 
-/// Draws the dialog that asks before the delete `pane` holds, and pushes the delete to `pending` once Delete is
+/// Pushes the edit `make` returns to `pending`, or holds it in `waiting` when it takes away parts of the sheet. The
+/// dialog titled `title` with the action `action` then asks first, from the next frame on, naming what the edit takes
+/// away from `name`.
+///
+/// `make` runs once on a copy of `document` to find what the edit takes away, and `own` leaves out of that what the
+/// edit sets afresh on purpose. An edit that the copy refuses asks nothing, and shows its refusal when it runs.
+fn run_or_ask(
+    document: &SheetDocument,
+    make: impl Fn() -> Pending,
+    (title, name, action): (&'static str, &str, &'static str),
+    own: impl FnOnce(&mut SheetLosses),
+    waiting: &mut Option<PendingDelete>,
+    pending: &mut Vec<Pending>,
+) {
+    let mut copy = SheetBuilder::new(document.clone()).with_key_seed(0);
+    let question = (make().run)(&mut copy).ok().and_then(|()| {
+        let mut losses = SheetLosses::between(document, copy.document());
+        own(&mut losses);
+        Question::of_losses(document, &losses, title, name, action)
+    });
+    match question {
+        Some(question) => {
+            *waiting = Some(PendingDelete { question, edit: make() });
+        }
+        None => pending.push(make()),
+    }
+}
+
+/// Draws the dialog that asks before the edit `pane` holds, and pushes the edit to `pending` once its action is
 /// pressed. An answer closes the dialog.
 fn delete_question_ui(ui: &Ui, pane: &mut PaneState, pending: &mut Vec<Pending>) {
     let Some(waiting) = &pane.delete_question else {
@@ -559,9 +610,7 @@ fn delete_question_ui(ui: &Ui, pane: &mut PaneState, pending: &mut Vec<Pending>)
     if let Some(waiting) = pane.delete_question.take()
         && answer == DeleteAnswer::Delete
     {
-        let mut delete = Pending::one(waiting.question.edit);
-        delete.form = waiting.form;
-        pending.push(delete);
+        pending.push(waiting.edit);
     }
 }
 
@@ -605,7 +654,7 @@ pub fn sheet_pane(ui: &mut Ui, sheet: &mut SheetEditor, past_start: bool, trials
                     SheetSection::Events => agents::events(ui, document, pane, &mut pending),
                     SheetSection::Parameters => parameters(ui, document, pane, trials, &mut pending),
                     SheetSection::Measures => measures(ui, document, pane, &mut pending),
-                    SheetSection::Colours => colors(ui, document, pane.widgets, &mut pending),
+                    SheetSection::Colours => colors(ui, document, pane, &mut pending),
                     SheetSection::Buttons => buttons(ui, document, report, pane, &mut pending),
                     _ => {}
                 });

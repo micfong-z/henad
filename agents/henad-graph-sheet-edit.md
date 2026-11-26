@@ -9,7 +9,8 @@ Files: `mod.rs` holds `SheetBuilder` and `Draft` with `run`, `finish`, the keys 
 `command.rs` `SheetEdit`, `SheetItem`, `LineField` and `SheetEditError`, `declarations.rs` the
 commands on properties, states, parameters, measures, events, buttons and cards (`rename`,
 `change_id`, `delete`), `line_commands.rs` the commands on lines with `unit_in_text`, the rate
-units and `condition_phrase`, `ids.rs` `IdSpace` and `mint_id`, and `colors.rs` the default colours.
+units and `condition_phrase`, `ids.rs` `IdSpace` and `mint_id`, `colors.rs` the default colours, and
+`losses.rs` `SheetLosses`.
 
 **Edit commands.** `SheetBuilder` holds a `SheetDocument` and a `KeyStream` (`new` seeds it from
 entropy, `with_key_seed` from a seed), and `apply(SheetEdit)` runs one command on a copy (`Draft`),
@@ -112,7 +113,23 @@ summary a `DeleteSummary` removes
 `measures_losing_formulas(document, edit)` returns the ids of the measures whose value holds fewer
 formulas, every formula counting, since the Sheet pane writes none, and a measure the edit takes
 with it left out (`a_delete_names_the_measures_whose_formulas_it_empties`, the ants' Total trail).
-The Editor asks before such a delete.
+The Editor calls neither, and asks through `SheetLosses`, which finds these losses among the others.
+
+Losses (`losses.rs`): `SheetLosses::between(before, after)` lists by id what `after` took from
+`before`: the lines, starts, ground shares kept (`kept`), buttons and measures that lose a value (a
+count of filled fields, formulas, slots with the parts inside them, summary values, rows, branches,
+list items and button steps goes down, or a start differs but for its key), the starts of agents on
+a ground state that `before` paints on single cells and `after` does not (`start_cells`), the lines
+and measures that go, the kinds of thing no longer coloured by a property (`colors`, the Heading of
+agents coloured by heading included), the Number properties that no longer shade a thing
+(`shades`, all of them once the shade state goes) and the painted shapes lost per property (a start
+that loses shapes is not also listed under `starts`). `of_edit(document, edit)` runs `edit` on a
+copy (a refused edit loses nothing) and leaves out what it deletes or sets: the start and share kept
+of `SetStartsAs` and `SetPropertyType` (`leave_out_start`, shapes kept), the rule of `SetColorRule`
+(shades kept), the measure a delete names, the line `DeleteLine` deletes and the value of the
+summary `DeleteSummary` removes. A rename, a recolour or an added item loses nothing. The Editor
+asks before an edit with a loss (`agents/henad-app-sheet-pane.md`), and the words are
+`sentence::lost_question` over `LostParts`.
 
 Lines (`lines.rs`): a slot path is the author format's keys joined by dots (`condition.rate`,
 `whose.right`, `items.2`, `row.0.condition`, `branches.alive`, `summaries.0.value`), each step but
@@ -213,7 +230,9 @@ lines and no error, colours, rate units and marks, Starts as commits, new button
 writes `marks = "add_up"` and lowers to `combine = "sum"`). `src/tests/sheet_edit_random.rs` holds
 `every_edit_leaves_a_document_that_reads_back` (random command sequences on every sheet: the text
 reads back to the same document, the checker never panics, no two lines share a key), and
-`src/tests/sheet_summaries.rs` the summaries of a look:
+`src/tests/sheet_losses.rs` the losses of deletes, new kinds, removed states, new starts, new colours,
+deleted lines, buttons and summaries in the starters, several commands compared as one edit, and
+edits that lose nothing, and `src/tests/sheet_summaries.rs` the summaries of a look:
 `a_summary_follows_its_automatic_name_and_its_new_id_reaches_every_reference`,
 `a_summary_named_by_hand_keeps_its_name_and_a_removed_summary_blanks_its_users`,
 `the_automatic_summary_names_follow_kind_and_value_in_every_sheet` and the tests beside them. The

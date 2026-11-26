@@ -231,6 +231,12 @@ fn the_colours_selects_show_and_offer_none_where_no_property_colours() {
     click(&mut harness, COLOR_GROUND_BY);
     assert!(offers_nothing(&mut harness));
     click_control(&mut harness, COLOR_BY_NOTHING);
+    // The ground's rule shades it by To food and To home, which None drops.
+    crate::tests::panes::press_in_dialog(
+        &mut harness,
+        henad_graph::sheet::sentence::CHANGE_COLORS_HEADING,
+        henad_graph::sheet::sentence::CHANGE,
+    );
     assert_eq!(rule(&harness, "ground"), None);
     assert_eq!(field_value(&mut harness, COLOR_GROUND_BY), COLOR_BY_NOTHING);
 }
@@ -466,11 +472,17 @@ fn a_ground_property_adds_up_its_marks_fades_and_blocks_agents() {
         sheet(&harness).document().colors.get("ground").map(|rule| rule.rule),
         Some(ColorRuleKind::Shaded)
     );
-    for name in ["Trail", "Terrain"] {
-        click(&mut harness, &format!("Edit property {name}"));
-        click(&mut harness, "Delete property");
-        harness.settle();
-    }
+    // The ground's colour rule goes with Trail, so its delete asks first.
+    click(&mut harness, "Edit property Trail");
+    click(&mut harness, "Delete property");
+    crate::tests::panes::press_in_dialog(
+        &mut harness,
+        henad_graph::sheet::sentence::DELETE_PROPERTY_HEADING,
+        henad_graph::sheet::sentence::DELETE,
+    );
+    click(&mut harness, "Edit property Terrain");
+    click(&mut harness, "Delete property");
+    harness.settle();
     assert_eq!(sheet(&harness).document().ground, None);
     assert!(shows_or_notice(&mut harness, GROUND_EMPTY));
 }

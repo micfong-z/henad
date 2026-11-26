@@ -36,18 +36,35 @@ header, running over the columns after it that have none, then a hairline) and t
 column to the right edge (the trying line, a refused field's message). A row ends in a gray 800
 hairline and takes the theme's hover fill under the pointer. `TableRow::message` reads a field's
 refusal. A delete button is `delete_button`, a "×" `text_control`, right-aligned in the last
-column by `TableRow::delete_cell`, which returns the click. The × of a parameter or a property and
-the property form's Delete go through `delete_or_ask`: a delete that `DeleteQuestion::before` finds
-emptying a formula the editor cannot write again (henad-graph's `lines_losing_formulas` and
-`measures_losing_formulas`) waits in `PaneState::delete_question` (a `PendingDelete` with its form),
-and `delete_question_ui` draws the dialog from the next frame on, past the click
-(`delete_question.rs`: `DELETE_PARAMETER_HEADING` or `DELETE_PROPERTY_HEADING`, `sentence::used_by`
-naming each line by its number, or "Clear line 1" on a button's card, and each measure by its name,
-then Cancel and Delete, destructive, which Enter presses). Delete pushes the edit with its form,
-Cancel, Escape and a click outside drop it, and an undo closes it. Any other delete runs at once.
-The deletes of an event, a measure or a button name nothing a formula reads
-(`a_delete_of_an_item_that_formulas_use_asks_first`, which also holds the ants' To food, read by
-the measure Total trail, and Undo after each delete). The tables and their orders:
+column by `TableRow::delete_cell`, which returns the click.
+
+**The dialog that asks first** (`delete_question.rs`). An edit that takes away parts of the sheet
+besides the item it deletes or sets waits in `PaneState::delete_question` (a `PendingDelete`: the
+`Question` and the edit as a `Pending` with its form), and `delete_question_ui` draws the dialog
+from the next frame on, past the click: its title, `sentence::lost_question` over the
+`LostParts` that `lost_parts` names from henad-graph's `SheetLosses` (each line by its card's
+button and its number through `line_place`, each other item by its name), Cancel and the action,
+destructive, which Enter presses. The action pushes the held `Pending` as one step of Undo. Cancel,
+Escape and a click outside drop it, and an undo closes it. An edit that takes nothing else away
+runs at once. Three helpers of `sheet_pane.rs` hold an edit or push it: `edit_or_ask` for one
+command (`SheetLosses::of_edit` leaves out what the command deletes or sets), `delete_or_ask`
+calling it with Delete, and `run_or_ask` for the commands of a form, run once on a copy at draw
+time (`SheetLosses::between`, then `own` leaves out what the form sets afresh). The
+edits that ask: the × of a parameter, a property, an event (`DELETE_EVENT_HEADING`) and a button
+(`DELETE_BUTTON_HEADING`, its card's lines deleted), Delete property, the property form's Done
+(`done_or_ask`: a new kind, `CHANGE_KIND_HEADING` with `CHANGE_KIND` and the property's own start
+and share kept left out, or removed states, `DELETE_STATE_HEADING` or `DELETE_STATES_HEADING`), the
+button form's Done of a button it changes (`CHANGE_BUTTON_HEADING`, a run-once button that starts
+again taking its card's lines, its own steps left out), a Starts as select (`choose_start`,
+`REPLACE_START_HEADING` with Replace, painted shapes and agents left with no painted cell to start
+on) and a Colours select (`CHANGE_COLORS_HEADING` with `CHANGE`, the shades of the rule replaced).
+The × of a measure asks `measure_not_added_again` under `REMOVE_MEASURE_HEADING` while
+`made_on_the_pane` does not hold, a count of a state or an average of a property of the kind of
+thing measured, or in a world of agents a count of one of the sheet's events, being what the Plot
+box and the measure form make, and otherwise runs at once
+(`src/tests/sheet_confirm.rs`, and `a_delete_of_an_item_that_others_use_asks_first` in
+`src/tests/sheet_pane.rs`, each question word for word, Cancel keeping the text, the action and one
+Undo, and a twin that asks nothing). The tables and their orders:
 
 - Properties (`property_table`, of any thing): Starts as takes the room left over. Short of room it
   gives up width down to 150, then Changed by, Kind and Name down to their longest words (Changed by
@@ -105,8 +122,9 @@ changes nothing while the start is painted), All Yes or All No, Anywhere at rand
 a ground States property that `StartsAs::paints_single_cells` accepts, the predicate the lowering's
 `on_ground` uses, A value or, for a Number, A random number. No control paints, so a ground made
 on the pane offers no on-ground start, and choosing a state or By chance replaces a painted start
-until Undo. A Heading shows `HEADING_START`, an Arrow its start through `Sentences::slot`, and a
-painted start `painted_shapes` with no control.
+until Undo, after the dialog that asks first names the shapes lost. A Heading shows
+`HEADING_START`, an Arrow its start through `Sentences::slot`, and a painted start
+`painted_shapes` with no control.
 The Number start's lead is `every_starts_at(thing_word)`. `NumberTarget` (`Start` or `Kept`) is what
 `number_field` (the field of a Starts as number or a share kept, taking a `NumberField` with an
 optional `limit` that also refuses an empty field), `pick_number` and the New parameter dialog
@@ -129,8 +147,9 @@ in 0 to 1 (the checker warns at any other share or parameter range), `KEPT_TAIL`
 `a_share_kept_parameter_widened_past_1_warns`) and per States property `blocked_row`
 (`blocked_lead`, a box per state named `blocked_state_name`, `SetBlocked`). Events:
 `EVENTS_EMPTY`, each name a `commit_field` named `event_name_name` with the two checks, × named
-`delete_event_name`, and `EventForm` (`NEW_EVENT`, `EVENT_NAME_FIELD`, Done or
-Enter). Measures count agents (`COUNT_AGENTS_MEASURE`, `COUNT_AGENTS_LEAD`,
+`delete_event_name` (through the dialog that asks first), and `EventForm` (`NEW_EVENT`,
+`EVENT_NAME_FIELD`, Done or Enter). Measures count agents (`COUNT_AGENTS_MEASURE`,
+`COUNT_AGENTS_LEAD`,
 `count_agents_measure`), average a Number, Integer or Position, and count the times an event
 happened (`an_event_count_is_plotted_from_the_measure_form`). Colours draw `colors_of` for
 the cells (`COLOR_CELLS_BY`), or for the agents (`COLOR_AGENTS_BY`) and the ground
