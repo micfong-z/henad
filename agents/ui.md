@@ -225,9 +225,9 @@ Everything under **Sentences** in `AGENTS.md` applies here too. On top of it:
   `henad_graph::sheet::sentence::FORBIDDEN_WORDS` ("node", "seed", "compile" and the rest), nor one
   with a plural or verb ending (`is_forbidden_word`). The
   Model, Performance and System tabs are outside it, and so are the world tabs' own controls
-  (Seed, Build, Unlimited TPS) and the controls that open or create a node graph: New node
-  graph, Convert to node graph, Edit as node graph, the conversion dialog and the sheet's line
-  "Converted to node graph: X". The tests' `opens_a_node_graph` matches those controls by their
+  (Seed, Build, Unlimited TPS) and the controls that open or create a node graph: the New model
+  dialog's heading Node graph, Convert to node graph, Edit as node graph, the conversion dialog and
+  the sheet's line "Converted to node graph: X". The tests' `opens_a_node_graph` matches those controls by their
   whole names, and a test leaves the dialog out by place with `Harness::accessible_texts_outside`.
   Every word of sheet mode comes from `sheet::sentence`, and every accessible name there holds the
   control's visible words.

@@ -1,5 +1,5 @@
-//! Tests of the ids the Editor gives a new model: New model from Blank or from a starter, New grid rule and New node
-//! graph never take the id of a model compiled into the app, so Apply adds the new model beside it.
+//! Tests of the ids the Editor gives a new model: a sheet from Blank or from a starter, the grid rule and a node graph
+//! from the New model dialog never take the id of a model compiled into the app, so Apply adds the new model beside it.
 
 use henad_compute::entry::{ModelEntry, ModelSet, register_grid_model};
 use henad_core::authoring::model::grid_model::GridModel;

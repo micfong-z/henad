@@ -1,14 +1,13 @@
 //! The menu bar above the docking area.
 
 use crate::icons::material_design_icons::{
-    MDI_BOOK_OPEN_VARIANT, MDI_CODE_BRACES, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_OUTLINE, MDI_FILE_PLUS_OUTLINE,
-    MDI_FOLDER_OPEN_OUTLINE, MDI_GITHUB, MDI_GRAPH_OUTLINE, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART,
-    MDI_TRAY_ARROW_DOWN, MDI_VIEW_DASHBOARD_OUTLINE,
+    MDI_BOOK_OPEN_VARIANT, MDI_CODE_BRACES, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_OUTLINE, MDI_FOLDER_OPEN_OUTLINE,
+    MDI_GITHUB, MDI_INFORMATION_OUTLINE, MDI_OPEN_IN_NEW, MDI_RESTART, MDI_TRAY_ARROW_DOWN, MDI_VIEW_DASHBOARD_OUTLINE,
 };
 use crate::state::AppState;
 use crate::ui::dock::{Layout, Tab, Workspace};
 use crate::ui::editor::sheet::widgets::{show_type_symbols, type_symbols_shown};
-use crate::ui::editor::{self, EMPTY_EDITOR, NEW_MODEL_BUTTON, NEW_NODE_GRAPH};
+use crate::ui::editor::{self, EMPTY_EDITOR, NEW_MODEL_BUTTON};
 
 /// Label of the View menu's checkbox that switches to the Editor layout when a model opens in the Editor.
 const EDITOR_LAYOUT_ON_OPEN: &str = "Open models in the Editor layout";
@@ -28,7 +27,7 @@ pub fn menu_bar_panel(ui: &mut egui::Ui, workspace: &mut Workspace, app: &mut Ap
 }
 
 /// Draws the File menu, whose entries fill the Editor or save its text. Each one that fills the Editor brings it to the
-/// front. New model opens its dialog first.
+/// front. New model opens its dialog first, which also holds the grid rule and node graph starters.
 pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
     ui.menu_button(format!("{MDI_FILE_OUTLINE}  File"), |ui| {
         if ui
@@ -39,22 +38,6 @@ pub(crate) fn file_menu(ui: &mut egui::Ui, app: &mut AppState) {
             editor::replace_model(app, editor::Replacement::NewModel);
             ui.close();
         }
-        if ui
-            .button(format!("{MDI_FILE_PLUS_OUTLINE}  New grid rule"))
-            .on_hover_text("Open Game of Life rule in Editor")
-            .clicked()
-        {
-            editor::replace_model(app, editor::Replacement::NewGridRule);
-            ui.close();
-        }
-        ui.menu_button(format!("{MDI_GRAPH_OUTLINE}  {NEW_NODE_GRAPH}"), |ui| {
-            if let Some(file_name) = editor::starter_menu(ui) {
-                editor::replace_model(app, editor::Replacement::NewGraphModel(file_name));
-                ui.close();
-            }
-        })
-        .response
-        .on_hover_text("Start node graph from example in Editor");
         if ui
             .button(format!("{MDI_FOLDER_OPEN_OUTLINE}  Open model"))
             .on_hover_text("Open TOML model file in Editor")

@@ -53,21 +53,39 @@ One tick is has one, since the lowering gives every sheet with a `[time]` table 
 lines or none (`a_sheet_s_tick_length_reaches_the_counter_in_the_unit_that_fits`). Nothing saves a
 sheet on its own.
 
-**The New model dialog** (`new_model.rs`). `NewModelDialog` sits in
+**The New model dialog** (`new_model.rs`), the one way to a new model: the Editor header, the File
+menu and the Model tab hold New model alone. `NewModelDialog` sits in
 `EditorPanel::new_model` while open: the `StarterChoice`s (`starter_choices`: every sheet starter,
 grid and agent alike, with its file name, the model name read from it, and its
-description from `STARTER_CHOICES` by that name), the chosen index, the Name text, `name_typed` and
-`made_of`. `choose` sets the index and, until the
+description from `STARTER_CHOICES` by that name), the chosen index, the Name text, `name_typed`,
+`made_of`, the open headings (`open`, Sheet or Advanced, and `open_advanced`, Grid rule or Node
+graph, which stays while Advanced is closed), the `GraphChoice`s (`graph_choices`: henad-graph's
+`starters()` then `agent_starters()`, each with the name and the description its file holds), the
+chosen graph and the headings drawn since the dialog opened. `choose` sets the index and, until the
 author types in Name, the name to the starter's. "Untitled model" is the default name of Blank, the
 first choice. `open_new_model` opens it from the Editor header's New model, the File menu's first
 entry and the Model tab's New model. `lib.rs` calls `new_model_modal` every frame beside the other
 modals: an `egui::Modal` (`henad_new_model_modal`, a dialog of `widgets.rs` named "New model"),
-the title `NEW_MODEL`, `START_FROM` as a caption with one `widgets::choice_row` per starter (a
-radio button named by the starter, its description weak under its name, the selection fill and
-a check while chosen) in `widgets::dialog_list`, which scrolls in a short window, the world
-question indented under Blank, a Name `TextEdit` labelled by its label, Cancel and Create (blue
-700). Enter creates, as Create does, and Cancel, Escape or a click on
-the backdrop closes it. `create_model(app, file_name, name)` reads the
+the title `NEW_MODEL`, then egui's stock collapsing headers (`NewModelHeading`, each named by its
+title): `SHEET_STARTERS_HEADING` ("Sheet"), open as the dialog opens, and `ADVANCED_HEADING`,
+closed, which holds `GRID_RULE_HEADING` and `NODE_GRAPH_HEADING`. The dialog's state decides each
+header through `CollapsingHeader::open`, a press runs `NewModelDialog::toggle`, and opening a
+heading closes the other heading of its level. A header drawn the first time since the dialog
+opened whose egui state, kept from an earlier dialog, differs takes the dialog's state at once with
+no animation, and the frame is discarded and drawn again (`heading`). Under Sheet: `START_FROM` as
+a caption with one `widgets::choice_row` per starter (a radio button named by the starter, its
+description weak under its name, the selection fill and a check while chosen) in
+`widgets::dialog_list`, which scrolls in a short window, the world question indented under Blank,
+and a Name `TextEdit` labelled by its label. Under Grid rule: the one row `GRID_RULE_STARTER`,
+chosen. Under Node graph: a row per graph starter in its own `dialog_list`. Each list measures
+the room from the top of the dialog (`starter_list`), so the Name field, the headings and the
+buttons stay in view. Cancel and Create (blue 700) end the dialog. `NewModelDialog::kind` is what
+Create opens, by the open heading (`NewModelKind`): a sheet as below, `new_grid_rule` or
+`new_graph_model` of the chosen graph, none of them asking about unsaved changes again, since New
+model asked before the dialog opened. With no such heading open, Create is disabled with
+`CHOOSE_A_STARTER`. Grid rule and Node graph take no name, as their starters keep their own. Enter
+creates, as Create does, except on the frame a heading was pressed, so Enter on a focused heading
+opens or closes it alone. Cancel, Escape or a click on the backdrop closes it. `create_model(app, file_name, name)` reads the
 starter, runs `SheetEdit::SetSheetName` when the name differs (an empty name is `UNTITLED_MODEL`,
 and a refused one keeps the starter's name with the reason as the file status), loads the sheet
 under the id `new_model_id` gives (`agents/henad-app-editor.md`) with no file name and brings the

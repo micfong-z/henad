@@ -42,12 +42,10 @@ use henad_graph::sheet::sentence::{
     SHEET_EMPTY, STALE_WORLD_NOTICE, UNSAVED_HEADING, WORLD_EMPTY, replace_applied, unsaved_changes,
 };
 use henad_graph::sheet::{KIND_SHEET, ParsedSheet, SHEET_CODE_FORMAT};
-use henad_graph::starters::{Starter, agent_starters, starters};
 use henad_graph::{GraphFile, KIND_GRAPH};
 
 use crate::icons::material_design_icons::{
-    MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_GRAPH_OUTLINE,
-    MDI_TRAY_ARROW_DOWN,
+    MDI_CHECK, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FOLDER_OPEN_OUTLINE, MDI_TRAY_ARROW_DOWN,
 };
 use crate::state::{AppState, PreviewRun};
 use crate::ui::dock::Tab;
@@ -63,14 +61,10 @@ pub const NO_COMPUTE: &str =
     "Grid rules and graph models are unavailable on this device. They need a GPU with compute support.";
 
 /// Reason Apply and Save model are disabled while the Editor holds no model.
-pub const EMPTY_EDITOR: &str =
-    "Editor is empty. Press New model, New node graph, New grid rule or Open model to start.";
+pub const EMPTY_EDITOR: &str = "Editor is empty. Press New model or Open model to start.";
 
 /// Label of the button that opens the New model dialog.
 pub const NEW_MODEL_BUTTON: &str = henad_graph::sheet::sentence::NEW_MODEL;
-
-/// Label of the menu that opens a graph starter on the canvas.
-pub const NEW_NODE_GRAPH: &str = "New node graph";
 
 /// Name of a saved model file whose text does not read as a model file.
 const FALLBACK_FILE_NAME: &str = "model.toml";
@@ -719,12 +713,8 @@ impl EditorPanel {
 /// unsaved edits.
 #[derive(Debug)]
 pub enum Replacement {
-    /// Opens the New model dialog.
+    /// Opens the New model dialog, which also opens the grid rule and the node graph starters.
     NewModel,
-    /// Opens the Life starter as a grid rule.
-    NewGridRule,
-    /// Opens the graph starter with this file name.
-    NewGraphModel(&'static str),
     /// Opens a dialog that picks a model file.
     OpenModel,
     /// Opens a model read from a model's recorded code, as Open in Editor and Edit model do.
@@ -787,9 +777,6 @@ const REPLACE_DIALOG_WIDTH: f32 = 420.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorRequest {
     NewModel,
-    NewGridRule,
-    /// Opens the starter with this file name as a new graph model.
-    NewGraphModel(&'static str),
     OpenModel,
     /// Opens a dialog that picks a model file to import a function from.
     PickImport,
@@ -1067,8 +1054,8 @@ fn name_row(ui: &mut egui::Ui, panel: &mut EditorPanel, shown: &HeaderShown<'_>,
 
 /// Draws the header buttons, each setting `request` when pressed.
 ///
-/// The buttons are New model, New grid rule and New node graph, a hairline, Open model and Save model, then Apply, the
-/// one primary button, at the right end. The first five wrap onto a second row when the tab is too narrow for them.
+/// The buttons are New model, a hairline, Open model and Save model, then Apply, the one primary button, at the right
+/// end. The first three wrap onto a second row when the tab is too narrow for them.
 fn header_buttons(ui: &mut egui::Ui, compute: bool, empty: bool, request: &mut Option<EditorRequest>) {
     let apply_text = format!("{MDI_CHECK} Apply");
     let apply_width = button_width(ui, &apply_text);
@@ -1094,8 +1081,9 @@ fn button_width(ui: &egui::Ui, text: &str) -> f32 {
     galley.size().x + 2.0 * ui.spacing().button_padding.x
 }
 
-/// Draws New model, New grid rule, New node graph, a hairline, Open model and Save model, each setting `request` when
-/// pressed.
+/// Draws New model, a hairline, Open model and Save model, each setting `request` when pressed.
+///
+/// New model opens the New model dialog, which also holds the grid rule and node graph starters.
 fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorRequest>) {
     let model = add_button(
         ui,
@@ -1107,26 +1095,6 @@ fn file_buttons(ui: &mut egui::Ui, empty: bool, request: &mut Option<EditorReque
     if model.clicked() {
         *request = Some(EditorRequest::NewModel);
     }
-    let new = add_button(
-        ui,
-        true,
-        Button::new(format!("{MDI_FILE_PLUS_OUTLINE} New grid rule")),
-        "New grid rule",
-    )
-    .on_hover_or_focus_text("Replace text with Game of Life rule");
-    if new.clicked() {
-        *request = Some(EditorRequest::NewGridRule);
-    }
-    let graph = ui
-        .menu_button(format!("{MDI_GRAPH_OUTLINE} {NEW_NODE_GRAPH}"), |ui| {
-            if let Some(file_name) = starter_menu(ui) {
-                *request = Some(EditorRequest::NewGraphModel(file_name));
-                ui.close();
-            }
-        })
-        .response;
-    graph.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, NEW_NODE_GRAPH));
-    graph.on_hover_or_focus_text("Start node graph from example");
     sheet::widgets::vertical_hairline(ui, ui.spacing().interact_size.y);
     let open = add_button(
         ui,
@@ -1167,24 +1135,6 @@ fn apply_button(ui: &mut egui::Ui, compute: bool, empty: bool, text: String, req
     if apply.clicked() {
         *request = Some(EditorRequest::Apply);
     }
-}
-
-/// Draws one button per starter, grid starters first, labelled with the starter's model name, and returns the file name
-/// of the one pressed.
-pub fn starter_menu(ui: &mut egui::Ui) -> Option<&'static str> {
-    let mut picked = None;
-    for starter in starters().iter().chain(agent_starters()) {
-        let name = starter_name(starter);
-        if ui.button(name).on_hover_text(starter.file_name).clicked() {
-            picked = Some(starter.file_name);
-        }
-    }
-    picked
-}
-
-/// Returns the model name of `starter`, or its file name when it does not read.
-fn starter_name(starter: &Starter) -> String {
-    GraphFile::parse(starter.text).map_or_else(|_| starter.file_name.to_owned(), |file| file.document().name.clone())
 }
 
 /// Draws the status area under the panes, a resizable panel that scrolls: the status of the last open or save, then
@@ -1494,8 +1444,6 @@ pub fn diagnostic_text(diagnostic: &CodeDiagnostic) -> String {
 fn apply_request(ctx: &egui::Context, app: &mut AppState, request: EditorRequest) {
     match request {
         EditorRequest::NewModel => replace_model(app, Replacement::NewModel),
-        EditorRequest::NewGridRule => replace_model(app, Replacement::NewGridRule),
-        EditorRequest::NewGraphModel(file_name) => replace_model(app, Replacement::NewGraphModel(file_name)),
         EditorRequest::OpenModel => replace_model(app, Replacement::OpenModel),
         EditorRequest::PickImport => app.open_file(OpenTarget::Function),
         EditorRequest::SaveModel => {
@@ -1747,8 +1695,6 @@ pub fn replace_model(app: &mut AppState, replacement: Replacement) {
 fn run_replacement(app: &mut AppState, replacement: Replacement) {
     match replacement {
         Replacement::NewModel => sheet::new_model::open_new_model(app),
-        Replacement::NewGridRule => new_grid_rule(app),
-        Replacement::NewGraphModel(file_name) => new_graph_model(app, file_name),
         Replacement::OpenModel => open_model(app),
         Replacement::Open(model) => open_editable(app, model),
         Replacement::Convert => expert::convert_sheet(app),

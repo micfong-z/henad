@@ -6,10 +6,9 @@ view, a graph model on the canvas of `ui/editor/graph/` (below), or a sheet in t
 (`AppState::editor`: the model under edit as `model: EditorModel`, the file name, the `ApplyOutcome`
 of the last Apply, the open and save status, and the `ModelSource` applied last) and `editor_ui`,
 which matches on the model: a header of New model (`NEW_MODEL_BUTTON`, which opens the New model
-dialog of `henad-app-sheet-open.md`), New grid rule, New node graph (`NEW_NODE_GRAPH`, its widget
-name too, a menu of henad-graph's `starters()` then `agent_starters()`, labelled by each starter's
-model name), a vertical hairline, Open model and Save model, wrapping in a narrow tab, then Apply at
-the right end as the one primary button (`filled_button`, blue 700), then the code view, the graph
+dialog of `henad-app-sheet-open.md`, the one way to a new sheet, grid rule or node graph), a
+vertical hairline, Open model and Save model, wrapping in a narrow tab, then Apply at the right end
+as the one primary button (`filled_button`, blue 700), then the code view, the graph
 editor or the sheet editor. Apply is drawn last, so the keyboard path keeps its order. Each of
 these buttons shows its tooltip under the pointer and on keyboard focus
 (`FocusTooltip::on_hover_or_focus_text`, `agents/ui.md`). The header's second row (`name_row`)
@@ -17,11 +16,10 @@ holds the model's name (`model_name`) in the body colour, the dot of `widgets::u
 `is_unsaved` holds, and the file's name in the weak colour when it is not the name. A sheet's row
 is `sheet::name_row`, with the rename button, Undo, Redo and the menu
 of the model's actions (`henad-app-sheet.md`). A graph keeps Undo and Redo in its canvas toolbar.
-The File menu holds New model, New grid rule, New node graph, Open model and Save model, and the
-Model tab New model beside New grid rule and Edit model. Every site that loads a model into the
-Editor sets `focus_request` to `Tab::Editor`, which switches to the Editor layout while the View
-menu's checkbox holds (`henad-app.md`). `EMPTY_EDITOR` names New model, New
-node graph, New grid rule and Open model. `EditorModel` is `Empty` (the
+The File menu holds New model, Open model and Save model, and the Model tab New model beside Edit
+model. Every site that loads a model into the Editor sets `focus_request` to `Tab::Editor`, which
+switches to the Editor layout while the View menu's checkbox holds (`henad-app.md`).
+`EMPTY_EDITOR` names New model and Open model. `EditorModel` is `Empty` (the
 default), `Rule(String)` (a grid rule's text as typed, which may be empty or not read),
 `Graph(Box<GraphEditor>)` or `Sheet(Box<SheetEditor>)`, so two models are never held at once.
 Every site that differs by kind calls a method of the enum: `is_empty` (`Empty`, or a `Rule` whose
@@ -66,7 +64,7 @@ after another selection, or once a sheet's preview loads after Offload. An `Appl
 hash
 of a rule's or a sheet's text, a graph's `revision`) differs from `applied_mark`, the mark Apply
 took. `load` commits the loaded entry when the build starts, and the outcome reads `Applied` from
-then on. New grid rule loads
+then on. `new_grid_rule`, Create under the New model dialog's Grid rule, loads
 `life_starter()`, the canonical text of `GridRule::life()`, and Edit model, shown for a runtime
 entry whose code is in `GridRule::CODE_FORMAT`, its canonical text. Edit model and the Results tab's
 Open in Editor read through `editable_model(author, code)`, which returns an `EditableModel` (the
@@ -134,11 +132,12 @@ shortfall of `Demand::shortfalls` (the submission budget included) is `ApplyOutc
 as for a grid rule. Apply also replaces a running preview at any tick: `runs_source` never holds for
 a preview, and `settle_loaded` leaves a preview alone. `open_text` opens a file whose header reads
 `kind = "graph"` and that `GraphFile::parse` reads on the canvas, and a graph that does not read in
-the code view, where Apply places its problems. `new_graph_model(app, file_name)` opens a starter,
+the code view, where Apply places its problems. `new_graph_model(app, file_name)`, Create under the
+New model dialog's Node graph, opens a starter,
 and Edit model opens a runtime entry whose code is `henad-graph/1` and records no sheet.
 `new_model_id(models, id, prefix)` gives a new model its id: `id` while no compiled entry of the set
 holds it, else `prefix` and `id` (`sheet_` for New model from Blank or a starter, `node_` for
-`new_graph_model`, none for New grid rule), numbered by `mint_id` while compiled code holds that
+`new_graph_model`, none for `new_grid_rule`), numbered by `mint_id` while compiled code holds that
 too. A runtime entry holds no id, and a new model replaces it on Apply. `apply` asks first through
 `replace_question` when the runtime entry was applied from a sheet (author text in
 `SHEET_CODE_FORMAT`) whose name differs from the new entry's and whose source is not the one the

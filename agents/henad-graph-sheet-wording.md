@@ -37,7 +37,8 @@ example, `SheetSection::shown` for a world of cells or of agents, the World and 
 property form and its checks, Starts as with `StartsField` and the `starts_*_place` functions, the
 Parameters, Measures, Colours and Buttons words, `SHEET_EMPTY`, and the Agents, Ground and Events
 words), the New model and New parameter dialogs (`STARTER_CHOICES` with every starter's
-description), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
+description, the dialog's headings `SHEET_STARTERS_HEADING`, `ADVANCED_HEADING`, `GRID_RULE_HEADING`
+and `NODE_GRAPH_HEADING`, the grid rule starter `GRID_RULE_STARTER` and `CHOOSE_A_STARTER`), the Editor's unsaved changes dialog (`UNSAVED_HEADING`, `unsaved_changes`,
 `SAVE_MODEL`, `DISCARD_CHANGES`) and the mark beside the name of a model with unsaved changes
 (`UNSAVED_MARK`, `UNSAVED_MARK_TOOLTIP`), the top bar, the world tabs (the tried-value words,
 `PLOT_EMPTY`, `WORLD_EMPTY`), the Diagram and the conversion. A value's type is named "Boolean" for

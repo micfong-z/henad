@@ -7,9 +7,7 @@ use henad_core::metadata::{LaneSpec, Structure};
 use henad_core::params::ParamDescriptor;
 use henad_core::topology::{NeighborhoodKind, TopologyHint};
 
-use crate::icons::material_design_icons::{
-    MDI_CHECK, MDI_CLOSE, MDI_CODE_BRACES, MDI_FILE_DOCUMENT_PLUS_OUTLINE, MDI_FILE_PLUS_OUTLINE,
-};
+use crate::icons::material_design_icons::{MDI_CHECK, MDI_CLOSE, MDI_CODE_BRACES, MDI_FILE_DOCUMENT_PLUS_OUTLINE};
 use crate::state::{AppState, OpeningRefusal};
 use crate::ui::editor;
 use crate::ui::sweep::layout::add_button;
@@ -171,8 +169,8 @@ pub fn model_ui(ui: &mut egui::Ui, app: &mut AppState) {
     });
 }
 
-/// Draws New model, New grid rule, and Edit model for a selected model whose code the Editor can show. New model opens
-/// its dialog, and the other two open the Editor.
+/// Draws New model, and Edit model for a selected model whose code the Editor can show. New model opens its dialog, and
+/// Edit model opens the Editor.
 fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
     let editable = app.selected_entry().is_some_and(editor::can_edit);
     ui.horizontal_wrapped(|ui| {
@@ -185,16 +183,6 @@ fn editor_buttons(ui: &mut egui::Ui, app: &mut AppState) {
         .on_hover_text("Start new model in Editor");
         if model.clicked() {
             editor::replace_model(app, editor::Replacement::NewModel);
-        }
-        let new = add_button(
-            ui,
-            true,
-            egui::Button::new(format!("{MDI_FILE_PLUS_OUTLINE} New grid rule")),
-            "New grid rule",
-        )
-        .on_hover_text("Open Game of Life rule in Editor");
-        if new.clicked() {
-            editor::replace_model(app, editor::Replacement::NewGridRule);
         }
         if editable {
             let edit = add_button(

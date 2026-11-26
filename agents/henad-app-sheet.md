@@ -315,7 +315,8 @@ comparison"), every name holds its visible words, and a control with no words of
 by what it does. The help's mark, a label with no words, is named by what it explains. Sheet mode
 never shows a word of `FORBIDDEN_WORDS`, in the Editor tab or in what a sheet puts in the world
 tabs (names, measures, buttons, the tick counter). The controls that open or create a node graph
-(New node graph) and the world tabs' own controls (Seed, Build) are exempt.
+(the New model dialog's Node graph heading) and the world tabs' own controls (Seed, Build) are
+exempt.
 
 Opening a sheet, the list under the panes, Apply of a sheet, its preview and the New model
 dialog are in `agents/henad-app-sheet-open.md`.
@@ -350,7 +351,8 @@ list groups, chips, selects and help marks),
 `every_tab_stop_has_a_name` (Tab round Game of Life and Boids, each stop named, Tab from the last
 control onto the first, Shift+Tab over the dividers),
 `the_sheet_editor_never_shows_a_forbidden_word` (every starter, every help's words, a skipped and a
-red line, the New model dialog, the control that opens a node graph exempt),
+red line, the New model dialog with Advanced, Grid rule and Node graph open, the controls that open
+a node graph exempt),
 `every_accessible_name_holds_its_visible_words` (each control of a line, note button and add row in
 the tree and holding its words through `assert_controls_hold_their_words`, selects aside),
 `the_world_tabs_show_no_forbidden_word_from_a_sheet`, and over a `Harness` that draws the File menu,
@@ -358,11 +360,14 @@ the Editor tab, the dialog, the unsaved changes and replace dialogs and the Abou
 AccessKit on: `new_model_opens_a_dialog_and_create_opens_the_chosen_sheet` (the dialog role, the
 starters' radios in order, Name following the starter, a typed name kept, Create, the three lines,
 Cancel and Escape), `the_new_model_dialog_is_modal_and_headed_by_its_title`,
-`enter_in_the_name_field_creates_the_model` and
-`new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu` (a submenu's label
-ends with " ⏵", which the harness strips). `the_empty_editor_names_every_way_in` holds
+`enter_in_the_name_field_creates_the_model`, `the_header_and_the_file_menu_hold_new_model_alone`,
+`the_new_model_dialog_holds_the_grid_rule_and_the_six_graph_starters_under_advanced` (each level's
+headings closing each other, Create disabled with no heading of starters open, the graph and the
+rule created) and
+`the_new_model_dialog_opens_on_sheet_and_enter_on_a_heading_creates_nothing`. `the_empty_editor_names_every_way_in` holds
 `EMPTY_EDITOR`. The `Harness` (`Node` with its `disabled` flag and enclosing `dialog`, `top`,
-`accessible_texts`, `accessible_texts_outside`, `open_sheet`, `window_focused`), `forbidden_words`,
+`accessible_texts`, `accessible_texts_outside`, `open_sheet`, `window_focused`, `click_in`,
+`click_heading`, `create_under`), `forbidden_words`,
 `tick_zero_stat` and `wait_for_snapshot` sit in `src/tests/support.rs` for both files.
 `src/tests/sheet_pane.rs` holds `a_blank_model_builds_the_life_start_by_accessible_names` (New
 model, Blank, Status with Dead and Alive, By chance, "Use a parameter", New parameter Initial

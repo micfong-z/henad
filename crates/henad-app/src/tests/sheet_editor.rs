@@ -24,7 +24,8 @@ use henad_graph::sheet::document::{
     StartsAs,
 };
 use henad_graph::sheet::sentence::{
-    A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, BY_CHANCE, CANCEL, CREATE, NEW_MODEL, STALE_WORLD_NOTICE, STARTER_CHOICES,
+    A_RANDOM_NUMBER, A_VALUE, ADD_BUTTON, ADVANCED_HEADING, BY_CHANCE, CANCEL, CREATE, GRID_RULE_HEADING,
+    GRID_RULE_STARTER, NEW_MODEL, NODE_GRAPH_HEADING, SHEET_STARTERS_HEADING, STALE_WORLD_NOTICE, STARTER_CHOICES,
 };
 use henad_graph::sheet::{ParsedSheet, starters};
 
@@ -40,7 +41,7 @@ use crate::ui::dock::Tab;
 use crate::ui::editor::preview::{PREVIEW_AGENTS, PREVIEW_SIDE, PreviewState};
 use crate::ui::editor::sheet::SheetEditor;
 use crate::ui::editor::sheet::card_pane::{CardLine, LineNote, NoteColor, card_lines};
-use crate::ui::editor::sheet::new_model::starter_choices;
+use crate::ui::editor::sheet::new_model::{NewModelHeading, NewModelKind, starter_choices};
 use crate::ui::editor::sheet::sheet_pane::starts_text;
 use crate::ui::editor::{
     ApplyOutcome, EditorModel, apply, edit_model, new_grid_rule, open_text, preview_running_text, save_name,
@@ -652,11 +653,66 @@ fn enter_in_the_name_field_creates_the_model() {
     );
 }
 
+/// Returns the labels of the radio buttons of a settled frame, from the top down.
+fn radio_labels(harness: &mut Harness) -> Vec<String> {
+    let mut radios: Vec<Node> = harness
+        .settle()
+        .into_iter()
+        .filter(|node| node.role == egui::accesskit::Role::RadioButton && node.bounds.is_some())
+        .collect();
+    radios.sort_by(|a, b| top(a).total_cmp(&top(b)));
+    radios.into_iter().map(|node| node.label).collect()
+}
+
+/// Returns whether Create of the New model dialog is disabled in a settled frame.
+fn create_disabled(harness: &mut Harness) -> bool {
+    harness
+        .settle()
+        .iter()
+        .find(|node| node.dialog == NEW_MODEL && node.label == CREATE)
+        .expect("Create")
+        .disabled
+}
+
+/// The header and the File menu hold New model and no other way to a new model.
 #[test]
-fn new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu() {
+fn the_header_and_the_file_menu_hold_new_model_alone() {
     let Some(mut harness) = Harness::new() else {
         return;
     };
+    let labels = harness.labels();
+    for gone in ["New grid rule", "New node graph"] {
+        assert!(
+            !labels.iter().any(|label| label.ends_with(gone)),
+            "the header holds no {gone}: {labels:?}"
+        );
+    }
+    harness.click("File");
+    let labels = harness.labels();
+    let entries: Vec<&String> = labels
+        .iter()
+        .filter(|label| {
+            ["New model", "New grid rule", "New node graph"]
+                .iter()
+                .any(|name| label.ends_with(name))
+        })
+        .collect();
+    assert_eq!(
+        entries.len(),
+        2,
+        "the File menu and the header each hold New model alone: {entries:?}"
+    );
+}
+
+/// The New model dialog opens on Sheet, with Advanced closed. Opening a heading closes the other heading of its level,
+/// Grid rule offers the Life rule and Node graph the six graph starters, and Create opens the starter under the open
+/// heading. With no such heading open, Create is disabled.
+#[test]
+fn the_new_model_dialog_holds_the_grid_rule_and_the_six_graph_starters_under_advanced() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+
     let graph_names: Vec<String> = henad_graph::starters::starters()
         .iter()
         .chain(henad_graph::starters::agent_starters())
@@ -670,55 +726,128 @@ fn new_node_graph_lists_the_six_graph_starters_from_the_header_and_the_file_menu
         .collect();
     assert_eq!(graph_names.len(), 6);
 
-    harness.click("New node graph");
-    let labels = harness.labels();
+    harness.click(NEW_MODEL);
+    let sheet_names: Vec<String> = STARTER_CHOICES.iter().map(|(name, _)| (*name).to_owned()).collect();
+    let radios = radio_labels(&mut harness);
+    assert!(radios.starts_with(&sheet_names[..1]), "Sheet is open: {radios:?}");
     for name in &graph_names {
-        assert!(labels.contains(name), "the header menu lacks {name}: {labels:?}");
+        assert!(
+            !radios.contains(name) || sheet_names.contains(name),
+            "Node graph is closed: {radios:?}"
+        );
     }
-    harness.press(egui::Key::Escape, egui::Modifiers::NONE);
-    harness.settle();
-
-    harness.click("File");
     let labels = harness.labels();
-    let entries: Vec<&String> = labels
-        .iter()
-        .filter(|label| {
-            label.ends_with("New model") || label.ends_with("New node graph") || label.ends_with("New grid rule")
-        })
-        .collect();
-    assert_eq!(
-        entries.len(),
-        6,
-        "the File menu and the header each hold the three: {entries:?}"
-    );
-    assert!(!labels.iter().any(|label| label.contains("New graph model")));
-    // Two widgets read New node graph now: the header's menu and the File menu's submenu. The submenu is the second.
-    let nodes = harness.settle();
-    let submenu = nodes
-        .iter()
-        .filter(|node| node.label.ends_with("New node graph") && node.bounds.is_some())
-        .max_by(|a, b| top(a).total_cmp(&top(b)))
-        .and_then(|node| node.bounds)
-        .expect("the File menu's New node graph")
-        .center();
-    harness.click_at(submenu);
-    let labels = harness.labels();
-    for name in &graph_names {
-        assert!(labels.contains(name), "the File menu lacks {name}: {labels:?}");
-    }
-    harness.click("Boids Flocking");
-    harness.settle();
+    assert!(labels.iter().any(|label| label == ADVANCED_HEADING));
     assert!(
-        harness.app.editor.model.graph().is_some(),
-        "the File menu opened the graph starter"
+        !labels
+            .iter()
+            .any(|label| label == GRID_RULE_HEADING || label == NODE_GRAPH_HEADING),
+        "Advanced is closed: {labels:?}"
     );
+    assert!(!create_disabled(&mut harness));
+
+    // Advanced closes Sheet, and Create waits for Grid rule or Node graph.
+    harness.click_heading(ADVANCED_HEADING);
+    assert_eq!(radio_labels(&mut harness), Vec::<String>::new(), "Sheet closed");
+    let labels = harness.labels();
+    assert!(labels.iter().any(|label| label == GRID_RULE_HEADING));
+    assert!(labels.iter().any(|label| label == NODE_GRAPH_HEADING));
+    assert!(create_disabled(&mut harness), "no heading with starters is open");
+
+    harness.click_heading(NODE_GRAPH_HEADING);
+    assert_eq!(
+        radio_labels(&mut harness),
+        graph_names,
+        "Node graph lists the graph starters in order"
+    );
+    assert!(!create_disabled(&mut harness));
+    harness.click_heading(GRID_RULE_HEADING);
+    assert_eq!(
+        radio_labels(&mut harness),
+        [GRID_RULE_STARTER.0],
+        "Grid rule closed Node graph"
+    );
+    let dialog = harness.app.editor.new_model.as_ref().expect("the dialog is open");
+    assert_eq!(dialog.kind(), Some(NewModelKind::GridRule));
+
+    // Sheet closes Advanced, and Advanced opened again keeps Grid rule open.
+    harness.click_heading(SHEET_STARTERS_HEADING);
+    let labels = harness.labels();
+    assert!(
+        !labels.iter().any(|label| label == GRID_RULE_HEADING),
+        "Advanced closed"
+    );
+    assert_eq!(radio_labels(&mut harness).first(), Some(&sheet_names[0]));
+    harness.click_heading(ADVANCED_HEADING);
+    assert_eq!(radio_labels(&mut harness), [GRID_RULE_STARTER.0]);
+
+    harness.click_heading(NODE_GRAPH_HEADING);
+    harness.click_in(NEW_MODEL, "Boids Flocking");
+    harness.click_in(NEW_MODEL, CREATE);
+    assert!(harness.app.editor.new_model.is_none(), "Create closes the dialog");
+    let graph = harness
+        .app
+        .editor
+        .model
+        .graph()
+        .expect("Create opened the graph starter");
+    assert_eq!(graph.document().name, "Boids Flocking");
+
+    harness.click(NEW_MODEL);
+    harness.create_under(NewModelHeading::GridRule);
+    assert_eq!(
+        harness.app.editor.model.rule_text(),
+        Some(crate::ui::editor::life_starter().as_str()),
+        "Create under Grid rule opened the Life rule"
+    );
+}
+
+/// A dialog opened after another left Advanced open opens on Sheet again, and Enter on a focused heading opens it and
+/// creates nothing.
+#[test]
+fn the_new_model_dialog_opens_on_sheet_and_enter_on_a_heading_creates_nothing() {
+    let Some(mut harness) = Harness::new() else {
+        return;
+    };
+    harness.click(NEW_MODEL);
+    harness.click_heading(ADVANCED_HEADING);
+    harness.click_heading(NODE_GRAPH_HEADING);
+    harness.click_in(NEW_MODEL, CANCEL);
+    assert!(harness.app.editor.new_model.is_none());
+
+    harness.click(NEW_MODEL);
+    let radios = radio_labels(&mut harness);
+    assert_eq!(
+        radios.first().map(String::as_str),
+        Some("Blank"),
+        "Sheet is open again: {radios:?}"
+    );
+    assert!(!harness.labels().iter().any(|label| label == NODE_GRAPH_HEADING));
+
+    for _ in 0..40 {
+        if harness.focused == ADVANCED_HEADING {
+            break;
+        }
+        harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    }
+    assert_eq!(harness.focused, ADVANCED_HEADING, "Tab reaches Advanced");
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    harness.settle();
+    let dialog = harness
+        .app
+        .editor
+        .new_model
+        .as_ref()
+        .expect("Enter on a heading keeps the dialog open");
+    assert!(dialog.is_open(NewModelHeading::Advanced), "Enter opened Advanced");
+    assert!(harness.app.editor.model.is_empty(), "Enter created nothing");
 }
 
 #[test]
 fn the_empty_editor_names_every_way_in() {
     assert_eq!(
         crate::ui::editor::EMPTY_EDITOR,
-        "Editor is empty. Press New model, New node graph, New grid rule or Open model to start."
+        "Editor is empty. Press New model or Open model to start."
     );
 }
 
@@ -1295,6 +1424,12 @@ fn the_sheet_editor_never_shows_a_forbidden_word() {
     harness.click("New model");
     assert!(shows(&mut harness, "Start from"), "the New model dialog was drawn");
     seen.look(&mut harness);
+    // Advanced, with Grid rule and then Node graph open. The heading Node graph is exempt.
+    for heading in [ADVANCED_HEADING, GRID_RULE_HEADING, NODE_GRAPH_HEADING] {
+        harness.click_heading(heading);
+        seen.look(&mut harness);
+    }
+    assert!(shows(&mut harness, "Boids Flocking"), "Node graph was drawn");
     assert_no_forbidden_word(&seen);
 }
 

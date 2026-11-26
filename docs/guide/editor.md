@@ -24,21 +24,20 @@ Opening a model in it, in any of the ways below, switches to the [Editor layout]
 There the Editor takes most of the window, and the <span class="ui" markdown>:material-cube-outline: Viewport</span>, Playback, Charts and Parameters tabs share a column on the right, so the run stays in view while you edit its model.
 Uncheck **Open models in the Editor layout** in the View menu to open the Editor in the layout that shows instead, in a panel of its own to the right of the Viewport in the default layout.
 
-- Press <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> in the <span class="ui" markdown>:material-cog-outline: Model</span> tab to open the Editor on the Life starter, Conway's Game of Life written as a grid rule.
 - Press <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab to open the Editor on the sheet, node graph or grid rule the selected model was built from.
   The button appears only for a model built from one of these, such as a model applied from the Editor.
-- Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor or the Model tab to start a [sheet](#sheets), from Blank or from a starter such as Game of Life or Forest fire.
-- Press <span class="ui" markdown>:material-graph-outline: New node graph</span> in the Editor and select an example to open it as a node graph: Game of Life, Vote or SIR Epidemic on a grid, or Boids Flocking, Ant Foraging or Random Walk of agents.
-- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, New grid rule, New node graph, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
+- Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor or the <span class="ui" markdown>:material-cog-outline: Model</span> tab to start a [sheet](#sheets), from Blank or from a starter such as Game of Life or Forest fire.
+  Under **Advanced** the same dialog starts a [node graph](#node-graphs) from an example, Game of Life, Vote or SIR Epidemic on a grid or Boids Flocking, Ant Foraging or Random Walk of agents, or a [grid rule](#grid-rules) from the Life starter, Conway's Game of Life written as a grid rule.
+- In the menu bar, <span class="ui" markdown>:material-file-outline: File</span> holds New model, Open model and Save model, and <span class="ui" markdown>:material-view-dashboard-outline: View</span> toggles the Editor like any other tab and switches between the default layout and the Editor layout.
 
-The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, and <span class="ui" markdown>:material-check: Apply</span> at the right end.
+The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, and <span class="ui" markdown>:material-check: Apply</span> at the right end.
 The row under it shows the model's name, a dot while the model holds changes you have not saved, and the name of its file.
 For a sheet, the row also holds <span class="ui" markdown>:material-undo: Undo</span>, <span class="ui" markdown>:material-redo: Redo</span> and the **Model actions** menu, shown as <span class="ui" markdown>:material-dots-horizontal:</span>.
 
 Under the panes, the Editor lists its messages: the state of the preview, the outcome of the last open, save or Apply, and each problem.
 Each message starts with an icon in the colour of its kind, blue for information, orange for a warning and red for an error.
 
-New model, New grid rule, New node graph and Open model replace the Editor's model, and so does Open in Editor in the Results tab.
+New model and Open model replace the Editor's model, and so does Open in Editor in the Results tab.
 Edit model replaces it too, but keeps the model, your edits since the last Apply included, while the selected model runs the code the Editor applied last.
 While the model holds changes you have not saved since you opened or made it, a dialog names it first, such as **Game of Life has unsaved changes.**
 Press <span class="ui">Save model</span> to save it and then replace it, <span class="ui">Discard changes</span> to replace it without saving, or <span class="ui">Cancel</span> to keep it.
@@ -56,12 +55,17 @@ Converting the sheet again replaces the copy held beside it, so the dialog asks 
 
 ## Sheets
 
-<span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the **New model** dialog.
+<span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the **New model** dialog, which holds two headings.
+**Sheet**, open as the dialog opens, starts a sheet.
 Under **Start from** it lists **Blank**, then eight starters, each with a line on what it models: Game of Life, SIR epidemic, Majority vote and Forest fire on a grid of cells, and Random walk, Boids, Bounded confidence and Ant foraging of agents.
 While **Blank** is chosen, **What is the world made of?** under it picks **Cells on a grid** or **Agents in open space**.
 **Name** follows the choice until you type in it, and <span class="ui">Create</span> or <kbd>Enter</kbd> opens the model.
 
-![The New model dialog with Forest fire, the last of the grid starters, chosen under Start from, and its name in the Name field](../assets/app/editor-new-model.png){ width="446" }
+![The New model dialog with Sheet open, Forest fire, the last of the grid starters, chosen under Start from, its name in the Name field, and Advanced closed under it](../assets/app/editor-new-model.png){ width="446" }
+
+**Advanced**, closed under Sheet, is for advanced use.
+It holds **Grid rule**, with the Life starter, and **Node graph**, with the six examples, each of which keeps its own name.
+Opening a heading closes the other heading at its level, and <span class="ui">Create</span> opens the starter chosen under the heading that is open.
 
 A sheet opens in two panes beside each other.
 **Sheet** lists what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.

@@ -1,6 +1,5 @@
-//! Tests of the unsaved edits the Editor tracks per model, and of the dialog that asks before New model, New grid rule,
-//! New node graph, Open model, Open in Editor or Edit model replaces a model with unsaved edits, and before the window
-//! closes.
+//! Tests of the unsaved edits the Editor tracks per model, and of the dialog that asks before New model, Open model,
+//! Open in Editor or Edit model replaces a model with unsaved edits, and before the window closes.
 
 use egui::accesskit::Role;
 use egui::{Key, Modifiers, ViewportCommand, ViewportEvent, ViewportId};
@@ -8,7 +7,7 @@ use henad_graph::document::World;
 use henad_graph::edit::EditCommand;
 use henad_graph::sheet::edit::SheetEdit;
 use henad_graph::sheet::sentence::{
-    CANCEL, CONVERT, CONVERT_HEADING, DISCARD_CHANGES, MODEL_ACTIONS, SAVE_MODEL, unsaved_changes,
+    CANCEL, CONVERT, CONVERT_HEADING, DISCARD_CHANGES, MODEL_ACTIONS, NEW_MODEL, SAVE_MODEL, unsaved_changes,
 };
 
 use crate::native::guard_close;
@@ -16,11 +15,24 @@ use crate::tests::panes::{apply_sheet_edit, sheet_mut};
 use crate::tests::support::{Harness, Node, starter_text};
 use crate::ui::editor::expert::{convert_sheet, swap_counterpart};
 use crate::ui::editor::graph::{GraphEdit, GraphRequest};
+use crate::ui::editor::sheet::new_model::NewModelHeading;
 use crate::ui::editor::{
-    EditorModel, Replacement, apply, edit_model, life_starter, new_graph_model, receive_open, replace_model,
-    save_model, save_name,
+    EditableModel, EditorModel, Replacement, apply, edit_model, life_starter, new_graph_model, receive_open,
+    replace_model, save_model, save_name,
 };
 use crate::ui::files::{DialogFile, OpenResult, SaveResult, SaveTarget};
+
+/// Returns the replacement that opens the Life starter as a grid rule from no file.
+fn life_rule() -> Replacement {
+    Replacement::Open(EditableModel::Rule(life_starter()))
+}
+
+/// Returns the replacement that opens the SIR graph starter from no file.
+fn sir_graph() -> Replacement {
+    let starter = henad_graph::starters::starter("sir.toml").expect("the SIR starter");
+    let file = henad_graph::GraphFile::parse(starter.text).expect("the starter reads");
+    Replacement::Open(EditableModel::Graph(Box::new(file)))
+}
 
 /// Sets the purpose of the sheet the Editor shows, an edit that leaves its code alone.
 fn edit_purpose(harness: &mut Harness, purpose: &str) {
@@ -68,12 +80,11 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
         harness.app.editor.unsaved_names().is_empty(),
         "an opened sheet holds no edit"
     );
-    harness.click("New grid rule");
+    // The New model dialog opens at once, and Create replaces the sheet.
+    harness.click(NEW_MODEL);
     assert_eq!(asking(&mut harness), None);
-    assert!(
-        harness.app.editor.model.rule_text().is_some(),
-        "the rule replaced the sheet at once"
-    );
+    harness.create_under(NewModelHeading::GridRule);
+    assert!(harness.app.editor.model.rule_text().is_some());
 
     // A graph's canvas draws, and places and frames its nodes, without an edit.
     new_graph_model(&mut harness.app, "sir.toml");
@@ -96,7 +107,7 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     let sentence = unsaved_changes(&["Game of Life".to_owned()]);
     assert_eq!(sentence, "Game of Life has unsaved changes.");
 
-    harness.click("New grid rule");
+    harness.click(NEW_MODEL);
     assert_eq!(asking(&mut harness).as_deref(), Some(sentence.as_str()));
     let nodes = harness.settle();
     let mut buttons: Vec<&Node> = nodes
@@ -113,8 +124,9 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
     assert_eq!(asking(&mut harness), None);
     assert!(harness.app.editor.model.sheet().is_some(), "Cancel keeps the sheet");
 
-    // Save model saves the sheet first, and the rule replaces it once the save reports.
-    harness.click("New grid rule");
+    // Save model saves the sheet first, and the New model dialog opens once the save reports. Create of the rule then
+    // asks nothing more.
+    harness.click(NEW_MODEL);
     click_in(&mut harness, &sentence, SAVE_MODEL);
     let requested = harness.app.saves_requested.clone().unwrap_or_default();
     assert!(
@@ -126,24 +138,28 @@ fn the_editor_asks_before_replacing_a_model_with_unsaved_edits() {
         "the sheet waits for its save"
     );
     harness.app.finish_save(SaveResult::Saved("life.toml".to_owned()));
+    harness.create_under(NewModelHeading::GridRule);
+    assert_eq!(asking(&mut harness), None);
     assert_eq!(harness.app.editor.model.rule_text(), Some(life_starter().as_str()));
 
-    // Discard changes replaces an edited rule at once.
+    // Discard changes opens the New model dialog at once, and Create replaces the edited rule without asking again.
     let EditorModel::Rule(text) = &mut harness.app.editor.model else {
         panic!("the Editor holds the rule");
     };
     text.push_str("\n# An edit.\n");
-    harness.click("New grid rule");
+    harness.click(NEW_MODEL);
     let sentence = asking(&mut harness).expect("the dialog asks");
     assert_eq!(sentence, "life_rule.toml has unsaved changes.");
     click_in(&mut harness, &sentence, DISCARD_CHANGES);
+    harness.create_under(NewModelHeading::GridRule);
+    assert_eq!(asking(&mut harness), None, "Create asks no second time");
     assert_eq!(harness.app.editor.model.rule_text(), Some(life_starter().as_str()));
     assert!(harness.app.editor.unsaved_names().is_empty());
 
     // A save canceled in its own dialog keeps the model and its edits, and replaces nothing.
     harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "A second purpose.");
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    replace_model(&mut harness.app, life_rule());
     click_in(&mut harness, &sentence_of("Game of Life"), SAVE_MODEL);
     harness.app.finish_save(SaveResult::Canceled);
     assert!(harness.app.editor.model.sheet().is_some());
@@ -350,7 +366,7 @@ fn the_sheet_beside_its_copy_keeps_its_unsaved_edits_and_saves_in_turn() {
     harness.settle();
     assert!(harness.app.editor.is_unsaved(), "the copy holds the edit");
 
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    replace_model(&mut harness.app, life_rule());
     let sentence = asking(&mut harness).expect("the dialog asks");
     assert_eq!(sentence, unsaved_changes(&[copy, "Game of Life".to_owned()]));
     click_in(&mut harness, &sentence, SAVE_MODEL);
@@ -498,7 +514,7 @@ fn edits_made_while_a_file_dialog_is_open_ask_before_they_are_replaced() {
     // An edit made while the save of the unsaved changes dialog is open asks again.
     harness.open_sheet(starter_text("game_of_life.toml"));
     edit_purpose(&mut harness, "A first edit.");
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    replace_model(&mut harness.app, life_rule());
     click_in(&mut harness, &sentence, SAVE_MODEL);
     edit_purpose(&mut harness, "A second edit made while the save is open.");
     harness.app.finish_save(SaveResult::Saved("life_sheet.toml".to_owned()));
@@ -515,7 +531,7 @@ fn a_late_save_names_the_model_it_saved() {
     };
     harness.open_sheet(starter_text("game_of_life.toml"));
     save_model(&mut harness.app);
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    replace_model(&mut harness.app, life_rule());
     assert!(
         harness.app.editor.model.rule_text().is_some(),
         "the rule replaced the clean sheet"
@@ -556,7 +572,7 @@ fn each_save_names_and_marks_the_model_it_saved() {
     };
     harness.open_sheet(starter_text("game_of_life.toml"));
     save_model(&mut harness.app);
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    replace_model(&mut harness.app, life_rule());
     save_model(&mut harness.app);
     harness.app.finish_save(SaveResult::Saved("my_sheet.toml".to_owned()));
     assert_eq!(
@@ -602,8 +618,8 @@ fn each_save_names_and_marks_the_model_it_saved() {
     );
 
     // The unsaved changes dialog waits for the save it started, and a second Save model carries it no further.
-    edit_purpose(&mut harness, "Edited before New grid rule.");
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    edit_purpose(&mut harness, "Edited before a new rule.");
+    replace_model(&mut harness.app, life_rule());
     let sentence = asking(&mut harness).expect("the dialog asks");
     click_in(&mut harness, &sentence, SAVE_MODEL);
     let (asked, _) = harness
@@ -637,8 +653,8 @@ fn a_replacement_waiting_for_a_save_goes_with_its_model() {
         return;
     };
     harness.open_sheet(starter_text("game_of_life.toml"));
-    edit_purpose(&mut harness, "Edited before New grid rule.");
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    edit_purpose(&mut harness, "Edited before a new rule.");
+    replace_model(&mut harness.app, life_rule());
     let sentence = asking(&mut harness).expect("the dialog asks");
     click_in(&mut harness, &sentence, SAVE_MODEL);
     let (asked, _) = harness
@@ -649,7 +665,7 @@ fn a_replacement_waiting_for_a_save_goes_with_its_model() {
         .expect("the dialog started a save");
 
     // While the save dialog is open, a node graph replaces the sheet and its edits are discarded.
-    replace_model(&mut harness.app, Replacement::NewGraphModel("sir.toml"));
+    replace_model(&mut harness.app, sir_graph());
     let sentence = asking(&mut harness).expect("the dialog asks again");
     click_in(&mut harness, &sentence, DISCARD_CHANGES);
     assert!(harness.app.editor.model.graph().is_some());
@@ -668,8 +684,8 @@ fn a_replacement_waiting_for_a_save_goes_with_its_model() {
 
     // A save that fails keeps the sheet and drops the replacement.
     harness.open_sheet(starter_text("game_of_life.toml"));
-    edit_purpose(&mut harness, "Edited before New grid rule.");
-    replace_model(&mut harness.app, Replacement::NewGridRule);
+    edit_purpose(&mut harness, "Edited before a new rule.");
+    replace_model(&mut harness.app, life_rule());
     let sentence = asking(&mut harness).expect("the dialog asks");
     click_in(&mut harness, &sentence, SAVE_MODEL);
     harness.app.finish_save(SaveResult::Failed("disk full".to_owned()));

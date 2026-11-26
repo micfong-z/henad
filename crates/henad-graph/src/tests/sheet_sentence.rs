@@ -1520,6 +1520,19 @@ fn dialog_and_world_entries() -> Vec<(&'static str, String)> {
         ("Agents in open space", fixed(sentence::AGENTS_IN_OPEN_SPACE)),
         ("Untitled model", fixed(sentence::UNTITLED_MODEL)),
         ("Create", fixed(sentence::CREATE)),
+        ("Sheet", fixed(sentence::SHEET_STARTERS_HEADING)),
+        ("Advanced", fixed(sentence::ADVANCED_HEADING)),
+        ("Grid rule", fixed(sentence::GRID_RULE_HEADING)),
+        ("Node graph", fixed(sentence::NODE_GRAPH_HEADING)),
+        ("Game of Life", fixed(sentence::GRID_RULE_STARTER.0)),
+        (
+            "Conway's Life written as a grid rule, edited as text.",
+            fixed(sentence::GRID_RULE_STARTER.1),
+        ),
+        (
+            "Open a heading and choose a starter.",
+            fixed(sentence::CHOOSE_A_STARTER),
+        ),
         (
             "Game of Life has unsaved changes.",
             sentence::unsaved_changes(&["Game of Life".to_owned()]),
@@ -2037,6 +2050,11 @@ const FIXED_WORDING: &[&str] = &[
     sentence::REMOVE_CHOOSE_ROW,
     sentence::EVENT_COUNT_MEASURE,
     sentence::MEASURE_NEEDS_EVENT,
+    sentence::SHEET_STARTERS_HEADING,
+    sentence::ADVANCED_HEADING,
+    sentence::GRID_RULE_HEADING,
+    sentence::GRID_RULE_STARTER.1,
+    sentence::CHOOSE_A_STARTER,
 ];
 
 #[test]

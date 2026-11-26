@@ -288,7 +288,7 @@ fn the_words_rule_exempts_whole_controls_and_still_reports_a_bare_node() {
     for exempt in [
         CONVERT_HEADING.to_owned(),
         EDIT_AS_NODE_GRAPH.to_owned(),
-        format!("\u{f0420}  {}", crate::ui::editor::NEW_NODE_GRAPH),
+        henad_graph::sheet::sentence::NODE_GRAPH_HEADING.to_owned(),
         converted_link("Game of Life (expert)"),
     ] {
         assert_eq!(found(&exempt), Vec::new(), "{exempt} is exempt");

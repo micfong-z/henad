@@ -105,8 +105,8 @@ into `AppState::layout` before the dock draws for the Sheet pane's stored width
 counterparts and the `Workspace` tests (`a_switch_keeps_the_changes_of_each_layout`,
 `a_request_for_the_editor_switches_layouts_only_while_the_checkbox_is_on`,
 `reset_layout_resets_the_layout_that_shows_alone`), and `menu_bar.rs`
-`the_view_menu_switches_layouts_by_name`. The menu bar's File menu holds New model, New grid rule,
-New node graph, Open model and Save model. `lib.rs` draws the New model, unsaved changes and replace
+`the_view_menu_switches_layouts_by_name`. The menu bar's File menu holds New model, Open model and
+Save model. `lib.rs` draws the New model, unsaved changes and replace
 dialogs beside the fault and Rebuild model modals.
 **Unsaved edits** of the Editor (`ui/editor/mod.rs`). Every load sets `saved_mark` to the model's
 `edit_mark`, a save that reports sets it to the mark `saving` took at its start, and Apply leaves
@@ -119,11 +119,12 @@ mark to the model, shown or beside, that holds the reporting save, and to no mod
 is gone (`a_late_save_names_the_model_it_saved`). Two saves of one model, or of a model and the
 model that replaced it, each name the model they saved, in the order they report
 (`each_save_names_and_marks_the_model_it_saved`, which reports a chosen save through the test-only
-`finish_save_of`). New model, New grid rule,
-New node graph and Open model (header, File
+`finish_save_of`). New model and Open model (header, File
 menu, Model tab), Edit model of code the Editor did not apply, and Open in Editor go through
 `replace_model(app, Replacement)`, which runs the action at once when `unsaved_models` of the
-replacement is empty and otherwise sets `EditorPanel::ask`. Convert in the conversion dialog is
+replacement is empty and otherwise sets `EditorPanel::ask`. New model asks before its dialog opens,
+and Create in the dialog, of a sheet, the grid rule or a graph starter, replaces the model without
+asking again, a model whose changes were discarded included. Convert in the conversion dialog is
 `Replacement::Convert`, which keeps the sheet shown and drops the copy beside it, so its dialog
 names and saves the counterpart alone (`a_second_conversion_asks_before_it_drops_an_edited_copy`).
 `unsaved_modal` (drawn from `lib.rs`) is a `Dialog` named by `sentence::unsaved_changes(names)`,

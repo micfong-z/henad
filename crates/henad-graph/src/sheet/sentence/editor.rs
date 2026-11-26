@@ -55,6 +55,24 @@ pub const UNTITLED_MODEL: &str = "Untitled model";
 /// Primary action of the New model dialog.
 pub const CREATE: &str = "Create";
 
+/// Heading of the New model dialog over the sheet starters, open as the dialog opens.
+pub const SHEET_STARTERS_HEADING: &str = "Sheet";
+
+/// Heading of the New model dialog over [`GRID_RULE_HEADING`] and [`NODE_GRAPH_HEADING`], closed as the dialog opens.
+pub const ADVANCED_HEADING: &str = "Advanced";
+
+/// Heading under [`ADVANCED_HEADING`] over the grid rule starter.
+pub const GRID_RULE_HEADING: &str = "Grid rule";
+
+/// Heading under [`ADVANCED_HEADING`] over the node graph starters.
+pub const NODE_GRAPH_HEADING: &str = "Node graph";
+
+/// Name and description of the grid rule starter under [`GRID_RULE_HEADING`].
+pub const GRID_RULE_STARTER: (&str, &str) = ("Game of Life", "Conway's Life written as a grid rule, edited as text.");
+
+/// Reason Create is disabled while no heading of the New model dialog that holds starters is open.
+pub const CHOOSE_A_STARTER: &str = "Open a heading and choose a starter.";
+
 // The dialog that asks before a model with unsaved changes is replaced
 
 /// Returns the sentence of the dialog that asks before New model or Open model replaces the models `names`, which

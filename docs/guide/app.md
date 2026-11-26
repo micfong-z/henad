@@ -22,7 +22,7 @@ You can resize each panel, collapse or expand them, move them around, and even d
 In the menu bar, <span class="ui" markdown>:material-view-dashboard-outline: View</span> lists all 13 tabs and highlights the open ones, and is the only way to reopen a tab you closed.
 Under the tabs it switches between two [layouts](#layouts).
 
-<span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its model.
+<span class="ui" markdown>:material-file-outline: File</span> holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, which fill the [Editor](#editor-tab) or save its model.
 
 <span class="ui" markdown>:material-information-outline: About</span> links to the source code and this documentation.
 Select <span class="ui" markdown>:material-information-outline: About Henad</span> to open a window with the app's version, commit, source hash, build type and licence, and the version of the crate that provides the models with its commit or the hash of its sources.
@@ -100,7 +100,7 @@ The <span class="ui" markdown>:material-flask-outline: Sweep</span> and <span cl
 
 See the [models reference](../reference/models.md) for more details on each model.
 
-Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the New model dialog, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> opens the [Editor](#editor-tab) on a new grid rule, and <span class="ui" markdown>:material-code-braces: Edit model</span> opens it on the sheet, node graph or grid rule the selected model was built from.
+Under the dropdown, <span class="ui" markdown>:material-file-document-plus-outline: New model</span> opens the New model dialog, which starts a sheet, a grid rule or a node graph in the [Editor](#editor-tab), and <span class="ui" markdown>:material-code-braces: Edit model</span> opens the Editor on the sheet, node graph or grid rule the selected model was built from.
 
 ### Metadata
 
@@ -1075,10 +1075,10 @@ A banner at the top appears when there are potential compatibility issues with t
 
 The <span class="ui" markdown>:material-code-braces: Editor</span> tab holds one model file and runs its model without a restart: a sheet, a grid rule written as text, or a node graph.
 It is closed in the default layout.
-When a model opens in it, from <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, Henad switches to the [Editor layout](#layouts) with the Editor in front.
+When a model opens in it, from <span class="ui" markdown>:material-file-document-plus-outline: New model</span> or <span class="ui" markdown>:material-code-braces: Edit model</span> in the Model tab or <span class="ui" markdown>:material-pencil-outline: Open in Editor</span> in the Results tab, Henad switches to the [Editor layout](#layouts) with the Editor in front.
 Select it in the View menu to open it in the layout that shows, to the right of the <span class="ui" markdown>:material-cube-outline: Viewport</span> in the default layout.
 
-The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-graph-outline: New node graph</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, with <span class="ui" markdown>:material-check: Apply</span> at the right end, over a row that names the model.
+The Editor's header holds <span class="ui" markdown>:material-file-document-plus-outline: New model</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span>, with <span class="ui" markdown>:material-check: Apply</span> at the right end, over a row that names the model.
 Under the panes, the Editor lists its messages, each with an icon in the colour of its kind: blue for information, orange for a warning and red for an error.
 
 ### Sheets
@@ -1086,6 +1086,7 @@ Under the panes, the Editor lists its messages, each with an icon in the colour 
 A *sheet* describes a model in sentences.
 Press <span class="ui" markdown>:material-file-document-plus-outline: New model</span> in the Editor, the Model tab or the File menu, choose **Blank** or one of the eight starters under **Start from**, such as Game of Life, Forest fire or Boids, type a name, and press **Create**.
 The **Name** field follows the choice until you type in it.
+**Sheet** is open as the dialog opens, and **Advanced**, closed under it, holds the grid rule and the node graph starters, for advanced use.
 
 The sheet opens in two panes.
 **Sheet** lists what every cell has and what the model holds: its purpose, the world, the cells' properties, the parameters, the measures, the colours and the buttons.
@@ -1107,7 +1108,8 @@ A sheet that holds a problem still opens, with the problem under its line on the
 ### Grid rules
 
 The code fills the tab, with its line numbers in a gutter beside it, and long lines scroll sideways rather than wrap.
-Above it, <span class="ui" markdown>:material-file-plus-outline: New grid rule</span>, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> in the header replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.
+Open **Advanced**, then **Grid rule**, in the New model dialog and press **Create** to start one from the Life starter.
+Above it, <span class="ui" markdown>:material-folder-open-outline: Open model</span> and <span class="ui" markdown>:material-tray-arrow-down: Save model</span> in the header replace or save the text, and <span class="ui" markdown>:material-check: Apply</span> checks it and installs the rule.
 Below it, the Editor lists the outcome of the last Apply and each problem at its line and column.
 Press a problem to move the cursor to it.
 

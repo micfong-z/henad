@@ -40,7 +40,7 @@ use crate::ui::about::about_modal;
 use crate::ui::editor::graph::canvas::pin_key;
 use crate::ui::editor::graph::{GraphEditor, GraphRequest, graph_ui};
 use crate::ui::editor::preview::{DEBOUNCE, poll_at};
-use crate::ui::editor::sheet::new_model::new_model_modal;
+use crate::ui::editor::sheet::new_model::{NewModelHeading, new_model_modal};
 use crate::ui::editor::{editor_ui, open_text, replace_question_modal, unsaved_modal};
 use crate::ui::menu_bar::file_menu;
 
@@ -869,6 +869,37 @@ impl Harness {
         texts_of(self.settle().into_iter().filter(|node| node.dialog != dialog))
     }
 
+    /// Clicks the button named `label`, exactly, inside the dialog named `dialog`.
+    pub fn click_in(&mut self, dialog: &str, label: &str) {
+        let nodes = self.settle();
+        let found: Vec<&Node> = nodes
+            .iter()
+            .filter(|node| node.dialog == dialog && node.label == label && node.bounds.is_some())
+            .collect();
+        assert_eq!(found.len(), 1, "one {label} in {dialog}: {found:?}");
+        let position = found[0].bounds.expect("bounds").center();
+        self.click_at(position);
+        self.settle();
+    }
+
+    /// Clicks the heading named `title` in the open New model dialog, and runs frames until the headings it opens and
+    /// closes have finished their animation.
+    pub fn click_heading(&mut self, title: &str) {
+        self.click_in(henad_graph::sheet::sentence::NEW_MODEL, title);
+        for _ in 0..3 {
+            self.settle();
+        }
+    }
+
+    /// Opens Advanced and `heading` under it in the open New model dialog, then presses Create, which opens the
+    /// starter chosen under `heading`: the grid rule, or the first graph starter.
+    pub fn create_under(&mut self, heading: NewModelHeading) {
+        use henad_graph::sheet::sentence::{CREATE, NEW_MODEL};
+        self.click_heading(NewModelHeading::Advanced.title());
+        self.click_heading(heading.title());
+        self.click_in(NEW_MODEL, CREATE);
+    }
+
     /// Opens the sheet `text` in the Editor and draws it.
     pub fn open_sheet(&mut self, text: &str) {
         open_text(&mut self.app.editor, text.to_owned(), Some("opened.toml".to_owned()));
@@ -892,22 +923,16 @@ pub fn words(text: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Returns whether `text` is the whole name of a control that opens or creates a node graph, which the words rule
-/// exempts: New node graph, Convert to node graph, Edit as node graph and the sheet's line that opens its copy. The
-/// empty Editor's text, which names New node graph and shows no sheet, is exempt too.
+/// exempts: the New model dialog's heading Node graph, Convert to node graph, Edit as node graph and the sheet's line
+/// that opens its copy.
 ///
 /// An icon before the name is left out of the match. The conversion dialog is exempt by place instead, through
 /// [`Harness::accessible_texts_outside`].
 pub fn opens_a_node_graph(text: &str) -> bool {
-    use henad_graph::sheet::sentence::{CONVERT_HEADING, EDIT_AS_NODE_GRAPH, converted_link};
+    use henad_graph::sheet::sentence::{CONVERT_HEADING, EDIT_AS_NODE_GRAPH, NODE_GRAPH_HEADING, converted_link};
 
     let name = text.trim_start_matches(|c: char| !c.is_alphanumeric());
-    [
-        crate::ui::editor::NEW_NODE_GRAPH,
-        crate::ui::editor::EMPTY_EDITOR,
-        CONVERT_HEADING,
-        EDIT_AS_NODE_GRAPH,
-    ]
-    .contains(&name)
+    [NODE_GRAPH_HEADING, CONVERT_HEADING, EDIT_AS_NODE_GRAPH].contains(&name)
         || name.starts_with(converted_link("").as_str())
 }
 
